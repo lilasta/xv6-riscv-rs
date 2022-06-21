@@ -9,7 +9,7 @@
 				"qemu-gdb"
 			],
 			"options": {
-				"cwd": "${workspaceFolder}/xv6-riscv"
+				"cwd": "${workspaceFolder}/xv6"
 			}
 		}
 	]
