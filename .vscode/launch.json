@@ -6,7 +6,7 @@
 			"type": "lldb",
 			"request": "custom",
 			"targetCreateCommands": [
-				"target create ${workspaceFolder}/xv6-riscv/kernel"
+				"target create ${workspaceFolder}/xv6/kernel"
 			],
 			"processCreateCommands": [
 				"gdb-remote localhost:26000"
