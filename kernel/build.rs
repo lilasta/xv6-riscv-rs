@@ -57,8 +57,11 @@ const CFLAGS: &[&'static str] = &[
 const LDFLAGS: &[&'static str] = &["-z", "max-page-size=4096"];
 
 fn main() {
-    let out_path = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    build_initcode(&out_path);
+    std::env::set_var("CFLAGS", "");
+
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let out_dir = PathBuf::from(out_dir);
+    build_initcode(&out_dir);
     build_c();
 }
 
