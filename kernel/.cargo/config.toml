@@ -1,0 +1,6 @@
+[unstable]
+build-std = ["core"]
+
+[build]
+target = "riscv64gc-unknown-none-elf"
+rustflags = ["-C", "link-args=linker.ld"]
