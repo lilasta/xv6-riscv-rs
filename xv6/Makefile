@@ -44,6 +44,8 @@ endif
 
 LDFLAGS = -z max-page-size=4096
 
+.PHONY: $K/kernel
+
 $K/kernel:
 	cd ../kernel && cargo build --release
 	cp ../kernel/target/riscv64gc-unknown-none-elf/release/kernel $K/kernel
