@@ -3,9 +3,18 @@
 //! `qemu -kernel`によってカーネルは0x80000000番地にロードされ、各CPUはそこにジャンプする。
 //! linker.ldによって、この処理のコードは0x80000000番地に配置される。
 //!
-//! `sp = stack0 + (hartid * 4096)`
-//!
 //! この処理は、各CPUにそれぞれ4096バイトのスタック領域を割り当て、start関数を呼び出す。
+//!
+//! 擬似的な関数として記述すると以下のようになる。
+//!
+//! ```rust
+//! fn _entry() {
+//!     a0 = 4096 * (mhartid + 1);
+//!     sp = stack0 + a0;
+//!     start();
+//!     loop {}
+//! }
+//! ```
 
 use core::arch::global_asm;
 
@@ -30,7 +39,7 @@ _entry:
 
     # start()
     call start
-spin:
-    j spin
+_spin:
+    j _spin
 "#
 );

@@ -7,7 +7,6 @@ const OBJCOPY: &'static str = "riscv64-elf-objcopy";
 
 const SRCS: &[&str] = &[
     "swtch.S",
-    "trampoline.S",
     "start.c",
     "console.c",
     "printf.c",
