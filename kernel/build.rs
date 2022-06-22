@@ -28,7 +28,6 @@ const SRCS: &[&str] = &[
     "pipe.c",
     "exec.c",
     "sysfile.c",
-    "kernelvec.S",
     "plic.c",
     "virtio_disk.c",
 ];
