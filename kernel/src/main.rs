@@ -4,6 +4,7 @@
 #![feature(asm_const)]
 #![feature(decl_macro)]
 
+mod config;
 mod context;
 mod entry;
 mod kernelvec;
