@@ -54,11 +54,19 @@ const LDFLAGS: &[&'static str] = &["-z", "max-page-size=4096"];
 
 fn main() {
     std::env::set_var("CFLAGS", "");
+    print_rerun();
 
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let out_dir = PathBuf::from(out_dir);
     build_initcode(&out_dir);
     build_c();
+}
+
+fn print_rerun() {
+    let paths = std::fs::read_dir("c").unwrap();
+    for path in paths {
+        println!("cargo:rerun-if-changed=c/{:?}", path.unwrap().file_name());
+    }
 }
 
 fn build_initcode(out_path: &PathBuf) {
@@ -109,6 +117,5 @@ fn build_c() {
             .file(&format!("c/{}", file))
             .compile(&format!("lib{}.a", name));
         println!("cargo:rustc-link-lib=static={}", name);
-        println!("cargo:rerun-if-changed=c/{}", file);
     }
 }
