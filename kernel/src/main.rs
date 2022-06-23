@@ -3,9 +3,9 @@
 #![allow(dead_code)]
 #![feature(asm_const)]
 
+mod context;
 mod entry;
 mod kernelvec;
-mod swtch;
 mod syscall;
 mod trampoline;
 
