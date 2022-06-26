@@ -3,13 +3,15 @@ pub mod spin;
 
 use core::ops::{Deref, DerefMut};
 
-pub trait Lock<T> {
-    unsafe fn get(&self) -> &T;
-    unsafe fn get_mut(&self) -> &mut T;
+pub trait Lock {
+    type Target;
+
+    unsafe fn get(&self) -> &Self::Target;
+    unsafe fn get_mut(&self) -> &mut Self::Target;
     unsafe fn raw_lock(&self);
     unsafe fn raw_unlock(&self);
 
-    fn lock(&self) -> LockGuard<T>
+    fn lock(&self) -> LockGuard<Self>
     where
         Self: Sized,
     {
@@ -17,39 +19,46 @@ pub trait Lock<T> {
         LockGuard { lock: self }
     }
 
-    fn unlock(guard: LockGuard<T>)
+    fn unlock(guard: LockGuard<Self>)
     where
         Self: Sized,
     {
         drop(guard);
     }
+
+    fn get_lock_ref<'a>(guard: &LockGuard<'a, Self>) -> &'a Self
+    where
+        Self: Sized,
+    {
+        guard.lock
+    }
 }
 
-pub struct LockGuard<'a, T> {
-    lock: &'a dyn Lock<T>,
+pub struct LockGuard<'a, L: Lock> {
+    lock: &'a L,
 }
 
-impl<'a, T> LockGuard<'a, T> {
-    const fn new(lock: &'a dyn Lock<T>) -> Self {
+impl<'a, L: Lock> LockGuard<'a, L> {
+    const fn new(lock: &'a L) -> Self {
         Self { lock }
     }
 }
 
-impl<'a, T> Deref for LockGuard<'a, T> {
-    type Target = T;
+impl<'a, L: Lock> Deref for LockGuard<'a, L> {
+    type Target = L::Target;
 
     fn deref(&self) -> &Self::Target {
         unsafe { self.lock.get() }
     }
 }
 
-impl<'a, T> DerefMut for LockGuard<'a, T> {
+impl<'a, L: Lock> DerefMut for LockGuard<'a, L> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { self.lock.get_mut() }
     }
 }
 
-impl<'a, T> Drop for LockGuard<'a, T> {
+impl<'a, L: Lock> Drop for LockGuard<'a, L> {
     fn drop(&mut self) {
         unsafe { self.lock.raw_unlock() }
     }

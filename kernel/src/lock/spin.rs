@@ -33,7 +33,9 @@ impl<T> SpinLock<T> {
     }
 }
 
-impl<T> Lock<T> for SpinLock<T> {
+impl<T> Lock for SpinLock<T> {
+    type Target = T;
+
     unsafe fn get(&self) -> &T {
         &*self.value.get()
     }

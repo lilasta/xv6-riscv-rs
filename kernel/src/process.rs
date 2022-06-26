@@ -2,7 +2,7 @@ use core::ffi::c_void;
 
 use crate::{
     context::Context,
-    lock::LockGuard,
+    lock::{Lock, LockGuard},
     riscv::{disable_interrupt, enable_interrupt, is_interrupt_enabled},
 };
 
@@ -63,7 +63,10 @@ impl CPU {
         }
     }
 
-    pub fn sleep<T>(&self, _wakeup_token: usize, _guard: LockGuard<T>) {
+    pub fn sleep<L: Lock>(&self, _wakeup_token: usize, guard: &mut LockGuard<L>) {
+        let lock = L::get_lock_ref(guard);
+        unsafe { core::ptr::drop_in_place(guard) };
+        unsafe { core::ptr::write(guard, lock.lock()) };
         todo!();
     }
 
