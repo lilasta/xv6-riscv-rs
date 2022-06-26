@@ -8,6 +8,8 @@ mod config;
 mod context;
 mod entry;
 mod kernelvec;
+mod lock;
+mod process;
 mod riscv;
 mod syscall;
 mod trampoline;
