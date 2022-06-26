@@ -18,7 +18,9 @@ impl<T> SleepLock<T> {
     }
 }
 
-impl<T> Lock<T> for SleepLock<T> {
+impl<T> Lock for SleepLock<T> {
+    type Target = T;
+
     unsafe fn get(&self) -> &T {
         &self.inner.get().value
     }
@@ -28,16 +30,11 @@ impl<T> Lock<T> for SleepLock<T> {
     }
 
     unsafe fn raw_lock(&self) {
-        loop {
-            let inner = self.inner.lock();
-            match inner.locked {
-                true => {
-                    let cpu = CPU::get_current();
-                    let token = self.wakeup_token();
-                    cpu.sleep(token, inner);
-                }
-                false => break,
-            }
+        let mut inner = self.inner.lock();
+        while inner.locked {
+            let cpu = CPU::get_current();
+            let token = self.wakeup_token();
+            cpu.sleep(token, &mut inner);
         }
 
         let mut inner = self.inner.lock();
