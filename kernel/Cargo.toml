@@ -10,10 +10,12 @@ cc = "1.0"
 
 [profile.dev]
 panic = "abort"
-opt-level = 3
+opt-level = 0
+debug = true
 lto = true
 
 [profile.release]
 panic = "abort"
-opt-level = 3
+opt-level = 0
+debug = true
 lto = true

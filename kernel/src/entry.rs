@@ -24,7 +24,7 @@ global_asm!(
 # https://github.com/rust-lang/rust/issues/80608
 .attribute arch, "rv64gc"
 
-.section .text
+.section .text.entry
 .global _entry
 _entry:
     # a0 = 4096 * (mhartid + 1)
