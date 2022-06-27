@@ -69,7 +69,7 @@ impl<T> Lock for SpinLock<T> {
         // references happen strictly after the lock is acquired.
         // On RISC-V, this emits a fence instruction.
         // TODO: Orderingは正しいのか?
-        core::sync::atomic::fence(SeqCst);
+        core::sync::atomic::compiler_fence(SeqCst);
 
         // Record info about lock acquisition for holding() and debugging.
         // TODO: Orderingは正しいのか?
@@ -89,7 +89,7 @@ impl<T> Lock for SpinLock<T> {
         // the lock is released.
         // On RISC-V, this emits a fence instruction.
         // TODO: Orderingは正しいのか?
-        core::sync::atomic::fence(SeqCst);
+        core::sync::atomic::compiler_fence(SeqCst);
 
         // Release the lock, equivalent to lk->locked = 0.
         // This code doesn't use a C assignment, since the C standard

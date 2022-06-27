@@ -10,6 +10,7 @@
 #![feature(nonzero_ops)]
 #![feature(strict_provenance)]
 
+mod alloc;
 mod config;
 mod context;
 mod entry;
