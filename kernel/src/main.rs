@@ -8,6 +8,7 @@
 #![feature(decl_macro)]
 #![feature(generic_arg_infer)]
 #![feature(nonzero_ops)]
+#![feature(ptr_to_from_bits)]
 #![feature(strict_provenance)]
 
 mod alloc;
@@ -17,6 +18,7 @@ mod entry;
 mod kernelvec;
 mod lock;
 mod memory_layout;
+mod plic;
 mod process;
 mod riscv;
 mod syscall;
