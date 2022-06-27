@@ -26,7 +26,7 @@ impl<T> SpinLock<T> {
         self.locked.load(SeqCst)
     }
 
-    fn is_held_by_current_cpu(&self) -> bool {
+    pub fn is_held_by_current_cpu(&self) -> bool {
         // TODO: Orderingは正しいのか?
         let cpu = self.cpu.load(SeqCst);
         self.is_locked() && cpu == CPU::get_current()
