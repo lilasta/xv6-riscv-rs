@@ -40,23 +40,23 @@ pub const CLINT_MTIME: usize = CLINT + 0xBFF8; // cycles since boot.
 pub const PLIC: usize = 0x0c000000;
 pub const PLIC_PRIORITY: usize = PLIC + 0x0;
 pub const PLIC_PENDING: usize = PLIC + 0x1000;
-pub const fn plic_menable(hart: usize) -> usize {
-    PLIC + 0x2000 + hart * 0x100
+pub const fn plic_menable(hart: u64) -> usize {
+    PLIC + 0x2000 + hart as usize * 0x100
 }
-pub const fn plic_senable(hart: usize) -> usize {
-    PLIC + 0x2080 + hart * 0x100
+pub const fn plic_senable(hart: u64) -> usize {
+    PLIC + 0x2080 + hart as usize * 0x100
 }
-pub const fn plic_mpriority(hart: usize) -> usize {
-    PLIC + 0x200000 + hart * 0x2000
+pub const fn plic_mpriority(hart: u64) -> usize {
+    PLIC + 0x200000 + hart as usize * 0x2000
 }
-pub const fn plic_spriority(hart: usize) -> usize {
-    PLIC + 0x201000 + hart * 0x2000
+pub const fn plic_spriority(hart: u64) -> usize {
+    PLIC + 0x201000 + hart as usize * 0x2000
 }
-pub const fn plic_mclaim(hart: usize) -> usize {
-    PLIC + 0x200004 + hart * 0x2000
+pub const fn plic_mclaim(hart: u64) -> usize {
+    PLIC + 0x200004 + hart as usize * 0x2000
 }
-pub const fn plic_sclaim(hart: usize) -> usize {
-    PLIC + 0x201004 + hart * 0x2000
+pub const fn plic_sclaim(hart: u64) -> usize {
+    PLIC + 0x201004 + hart as usize * 0x2000
 }
 
 // the kernel expects there to be RAM
