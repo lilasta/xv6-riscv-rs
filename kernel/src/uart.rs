@@ -249,7 +249,6 @@ mod binding {
     #[allow(non_upper_case_globals)]
     static mut uart: Option<UART> = None;
 
-    /*
     #[no_mangle]
     unsafe extern "C" fn uartinit() {
         uart = Some(UART::init());
@@ -269,5 +268,4 @@ mod binding {
     unsafe extern "C" fn uartintr() {
         uart.as_ref().unwrap().handle_interrupt();
     }
-     */
 }
