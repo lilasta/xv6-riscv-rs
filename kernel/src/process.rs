@@ -29,6 +29,13 @@ impl CPU {
         unsafe { &mut *mycpu() }
     }
 
+    pub fn without_interrupt<R>(&mut self, f: impl FnOnce() -> R) -> R {
+        self.push_disabling_interrupt();
+        let ret = f();
+        self.pop_disabling_interrupt();
+        ret
+    }
+
     pub fn push_disabling_interrupt(&mut self) {
         // TODO: おそらく順序が大事?
         let is_enabled = unsafe { is_interrupt_enabled() };
@@ -63,15 +70,22 @@ impl CPU {
         }
     }
 
-    pub fn sleep<L: Lock>(&self, _wakeup_token: usize, guard: &mut LockGuard<L>) {
+    pub fn sleep<L: Lock>(&self, wakeup_token: usize, guard: &mut LockGuard<L>) {
         let lock = L::get_lock_ref(guard);
         unsafe { core::ptr::drop_in_place(guard) };
+        extern "C" {
+            fn sleep_binding(chan: *const c_void);
+        }
+        unsafe { sleep_binding(wakeup_token as *const _) };
         unsafe { core::ptr::write(guard, lock.lock()) };
-        todo!();
     }
 
-    pub fn wakeup(&self, _token: usize) {
-        todo!();
+    pub fn wakeup(&self, token: usize) {
+        extern "C" {
+            fn wakeup(chan: *const c_void);
+        }
+
+        unsafe { wakeup(token as *const _) };
     }
 }
 

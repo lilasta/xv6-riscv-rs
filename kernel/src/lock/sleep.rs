@@ -16,6 +16,10 @@ impl<T> SleepLock<T> {
     fn wakeup_token(&self) -> usize {
         self as *const _ as usize
     }
+
+    pub fn is_held_by_current_process(&self) -> bool {
+        todo!()
+    }
 }
 
 impl<T> Lock for SleepLock<T> {

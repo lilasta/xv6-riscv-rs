@@ -137,7 +137,7 @@ pub mod paging {
     // MAXVA is actually one bit less than the max allowed by
     // Sv39, to avoid having to sign-extend virtual addresses
     // that have the high bit set.
-    pub const MAXVA: u64 = 1u64 << (9 + 9 + 9 + 12 - 1);
+    pub const MAXVA: usize = 1usize << (9 + 9 + 9 + 12 - 1);
 
     pub mod pte {
         // valid
