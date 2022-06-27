@@ -9,7 +9,6 @@ const SRCS: &[&str] = &[
     "start.c",
     "console.c",
     "printf.c",
-    "uart.c",
     "spinlock.c",
     "string.c",
     "main.c",
