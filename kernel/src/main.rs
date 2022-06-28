@@ -24,6 +24,7 @@ mod riscv;
 mod syscall;
 mod trampoline;
 mod uart;
+mod virtio;
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
