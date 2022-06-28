@@ -85,3 +85,11 @@ pub const fn kstack(p: usize) -> usize {
 //   TRAPFRAME (p->trapframe, used by the trampoline)
 //   TRAMPOLINE (the same page as in the kernel)
 pub const TRAPFRAME: usize = TRAMPOLINE - PGSIZE;
+
+pub macro symbol_addr($sym:ident) {{
+    extern "C" {
+        static $sym: core::ffi::c_void;
+    }
+
+    unsafe { core::ptr::addr_of!($sym) as *const _ }
+}}
