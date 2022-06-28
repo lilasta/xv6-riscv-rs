@@ -90,69 +90,7 @@ pub mod satp {
     }
 }
 
-pub mod paging {
-    pub type PTE = u64;
-
-    // 512 PTEs
-    pub type PageTable = *mut u64;
-
-    // bytes per page
-    pub const PGSIZE: usize = 4096;
-
-    // bits of offset within a page
-    pub const PGSHIFT: usize = 12;
-
-    pub const fn pg_roundup(sz: usize) -> usize {
-        (sz + PGSIZE - 1) & !(PGSIZE - 1)
-    }
-
-    pub const fn pg_rounddown(a: usize) -> usize {
-        a & !(PGSIZE - 1)
-    }
-
-    pub const fn pa_to_pte(pa: u64) -> u64 {
-        (pa >> 12) << 10
-    }
-
-    pub const fn pte_to_pa(pte: u64) -> u64 {
-        (pte >> 10) << 12
-    }
-
-    pub const fn pte_flags(pte: u64) -> u64 {
-        pte & 0x3ff
-    }
-
-    // extract the three 9-bit page table indices from a virtual address.
-    pub const PXMASK: u64 = 0x1FF;
-
-    pub const fn pxshift(level: usize) -> usize {
-        PGSHIFT + 9 * level
-    }
-
-    pub const fn px(level: usize, va: u64) -> u64 {
-        (va >> pxshift(level)) & PXMASK
-    }
-
-    // one beyond the highest possible virtual address.
-    // MAXVA is actually one bit less than the max allowed by
-    // Sv39, to avoid having to sign-extend virtual addresses
-    // that have the high bit set.
-    pub const MAXVA: usize = 1usize << (9 + 9 + 9 + 12 - 1);
-
-    pub mod pte {
-        // valid
-        pub const V: u64 = 1u64 << 0;
-
-        pub const R: u64 = 1u64 << 1;
-
-        pub const W: u64 = 1u64 << 2;
-
-        pub const X: u64 = 1u64 << 3;
-
-        // 1 -> user can access
-        pub const U: u64 = 1u64 << 4;
-    }
-}
+pub mod paging;
 
 // enable device interrupts
 pub unsafe fn enable_interrupt() {

@@ -12,7 +12,8 @@
 			"valuesFormatting": "parseText",
 			"gdbpath": "riscv64-elf-gdb",
 			"debugger_args": [
-				"--init-eval-command=set riscv use-compressed-breakpoints yes"
+				"--init-eval-command=set riscv use-compressed-breakpoints yes",
+				"--init-eval-command=set mi-async yes"
 			]
 		}
 	]
