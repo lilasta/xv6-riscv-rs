@@ -106,9 +106,3 @@ pub unsafe fn disable_interrupt() {
 pub unsafe fn is_interrupt_enabled() -> bool {
     read_csr!(sstatus) & sstatus::SIE != 0
 }
-
-// flush the TLB.
-pub unsafe fn sfence_vma() {
-    // the zero, zero means flush all TLB entries.
-    asm!("sfence.vma zero, zero");
-}

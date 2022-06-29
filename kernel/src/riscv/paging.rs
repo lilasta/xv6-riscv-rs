@@ -84,24 +84,14 @@ impl PTE {
         (self.0 as usize) >> 10 << 12
     }
 
-    pub const fn set_permission(&mut self, perm: u64) {
-        assert!(perm & 0xff == perm);
-        self.0 &= !0xff;
-        self.0 |= perm as u64;
+    pub const fn set_flags(&mut self, flags: u64) {
+        assert!(flags & 0x3ff == flags);
+        self.0 &= !0x3ff;
+        self.0 |= flags as u64;
     }
 
-    pub const fn get_permission(&self) -> u64 {
-        self.0 & 0xff
-    }
-
-    pub const fn set_rsw(&mut self, rsw: u64) {
-        assert!(rsw & 0x3 == rsw);
-        self.0 &= !0x300;
-        self.0 |= (rsw as u64) << 8;
-    }
-
-    pub const fn get_rsw(&self) -> u64 {
-        self.0 & 0x300 >> 8
+    pub const fn get_flags(&self) -> u64 {
+        self.0 & 0x3ff
     }
 }
 
@@ -113,10 +103,6 @@ impl PageTable {
     // 512 PTEs
     pub const LEN: usize = 512;
 
-    pub const fn from_ptr(ptr: NonNull<PTE>) -> Self {
-        Self(ptr)
-    }
-
     pub fn allocate() -> Option<Self> {
         let ptr: NonNull<PTE> = KernelAllocator::get().lock().allocate()?;
         let this = Self::from_ptr(ptr);
@@ -124,11 +110,46 @@ impl PageTable {
         Some(this)
     }
 
+    pub fn deallocate(&mut self) {
+        for i in 0..Self::LEN {
+            let pte = self.get(i);
+            if pte.is_valid() {
+                assert!(!pte.is_readable());
+                assert!(!pte.is_writable());
+                assert!(!pte.is_executable());
+
+                let child = pte.get_physical_addr();
+                let child = child as *mut PTE;
+                let child = NonNull::new(child).unwrap();
+
+                Self::from_ptr(child).deallocate();
+            }
+        }
+        KernelAllocator::get().lock().deallocate_page(self.0.cast());
+    }
+
+    pub const fn invalid() -> Self {
+        Self(NonNull::dangling())
+    }
+
+    pub const fn from_ptr(ptr: NonNull<PTE>) -> Self {
+        Self(ptr)
+    }
+
     pub const fn as_ptr(&self) -> *mut PTE {
         self.0.as_ptr()
     }
 
-    pub const fn get(&mut self, index: usize) -> &'static mut PTE {
+    pub fn as_u64(&self) -> u64 {
+        self.0.as_ptr() as u64
+    }
+
+    pub const fn get(&self, index: usize) -> &'static PTE {
+        assert!(index < Self::LEN);
+        unsafe { self.0.as_ptr().add(index).as_ref().unwrap() }
+    }
+
+    pub const fn get_mut(&mut self, index: usize) -> &'static mut PTE {
         assert!(index < Self::LEN);
         unsafe { self.0.as_ptr().add(index).as_mut().unwrap() }
     }
@@ -141,7 +162,7 @@ impl PageTable {
     // physical addresses starting at pa. va and size might not
     // be page-aligned. Returns 0 on success, -1 if walk() couldn't
     // allocate a needed page-table page.
-    pub fn map(&mut self, va: usize, pa: usize, size: usize, perm: u64) -> Result<(), ()> {
+    pub fn map(&mut self, va: usize, pa: usize, size: usize, flags: u64) -> Result<(), ()> {
         assert!(size > 0);
 
         let mut pa = pa;
@@ -155,7 +176,7 @@ impl PageTable {
 
             pte.clear();
             pte.set_physical_addr(pa);
-            pte.set_permission(perm);
+            pte.set_flags(flags);
             pte.set_valid(true);
 
             if va == last {
@@ -181,12 +202,12 @@ impl PageTable {
     //   21..29 -- 9 bits of level-1 index.
     //   12..20 -- 9 bits of level-0 index.
     //    0..11 -- 12 bits of byte offset within the page.
-    fn walk(mut table: PageTable, va: usize, alloc: bool) -> Result<&'static mut PTE, ()> {
+    pub fn walk(mut table: PageTable, va: usize, alloc: bool) -> Result<&'static mut PTE, ()> {
         assert!(va < MAXVA);
 
         for level in [2, 1] {
             let index = PTE::index(level, va);
-            let pte = table.get(index);
+            let pte = table.get_mut(index);
 
             if pte.is_valid() {
                 let nested_table_ptr = pte.get_physical_addr();
@@ -207,7 +228,7 @@ impl PageTable {
             }
         }
 
-        Ok(table.get(PTE::index(0, va)))
+        Ok(table.get_mut(PTE::index(0, va)))
     }
 }
 
