@@ -70,7 +70,7 @@ mod binding {
     use crate::{
         allocator::KernelAllocator,
         lock::Lock,
-        riscv::{satp::make_satp, write_csr},
+        riscv::{paging::pg_roundup, satp::make_satp, write_csr},
     };
 
     use super::*;
@@ -128,9 +128,47 @@ mod binding {
         }
     }
 
+    // Look up a virtual address, return the physical address,
+    // or 0 if not mapped.
+    // Can only be used to look up user pages.
+    #[no_mangle]
+    unsafe extern "C" fn walkaddr(pagetable: PageTable, va: usize) -> usize {
+        pagetable.virtual_to_physical(va).unwrap_or(0)
+    }
+
     #[no_mangle]
     unsafe extern "C" fn freewalk(mut pagetable: PageTable) {
         pagetable.deallocate();
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn uvmunmap(mut pagetable: PageTable, va: usize, npages: usize, free: i32) {
+        pagetable.unmap(va, npages, if free != 0 { true } else { false })
+    }
+
+    // create an empty user page table.
+    // returns 0 if out of memory.
+    #[no_mangle]
+    unsafe extern "C" fn uvmcreate() -> PageTable {
+        PageTable::allocate().unwrap_or(PageTable::invalid())
+    }
+
+    // Free user memory pages,
+    // then free page-table pages.
+    #[no_mangle]
+    unsafe extern "C" fn uvmfree(mut pagetable: PageTable, size: usize) {
+        if size > 0 {
+            pagetable.unmap(0, pg_roundup(size) / PGSIZE, true);
+        }
+        pagetable.deallocate();
+    }
+
+    // mark a PTE invalid for user access.
+    // used by exec for the user stack guard page.
+    #[no_mangle]
+    unsafe extern "C" fn uvmclear(pagetable: PageTable, va: usize) {
+        let pte = PageTable::walk(pagetable, va, false).unwrap();
+        pte.set_user_access(false);
     }
 
     // Load the user initcode into address 0 of pagetable,

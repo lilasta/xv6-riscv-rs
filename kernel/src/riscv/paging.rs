@@ -190,6 +190,28 @@ impl PageTable {
         Ok(())
     }
 
+    // Remove npages of mappings starting from va. va must be
+    // page-aligned. The mappings must exist.
+    // Optionally free the physical memory.
+    pub fn unmap(&mut self, va: usize, npages: usize, free: bool) {
+        assert!(va % PGSIZE == 0);
+
+        for va in (va..).step_by(PGSIZE).take(npages) {
+            let pte = Self::walk(self.clone(), va, false).unwrap();
+            assert!(pte.is_valid());
+            assert!(pte.get_flags() != PTE::V);
+
+            if free {
+                let ptr = pte.get_physical_addr();
+                let ptr = <*mut _>::from_bits(ptr);
+                let ptr = NonNull::new(ptr).unwrap();
+                KernelAllocator::get().lock().deallocate_page(ptr);
+            }
+
+            pte.clear();
+        }
+    }
+
     // Return the address of the PTE in page table pagetable
     // that corresponds to virtual address va.  If alloc!=0,
     // create any required page-table pages.
@@ -229,6 +251,25 @@ impl PageTable {
         }
 
         Ok(table.get_mut(PTE::index(0, va)))
+    }
+
+    pub fn virtual_to_physical(&self, va: usize) -> Option<usize> {
+        if va >= MAXVA {
+            return None;
+        }
+
+        let pte = Self::walk(self.clone(), va, false).ok()?;
+
+        if !pte.is_valid() {
+            return None;
+        }
+
+        // TODO: Ring selection
+        if !pte.can_user_access() {
+            return None;
+        }
+
+        Some(pte.get_physical_addr())
     }
 }
 
