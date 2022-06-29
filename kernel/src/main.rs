@@ -18,6 +18,7 @@
 #![feature(nonzero_ops)]
 #![feature(ptr_to_from_bits)]
 #![feature(slice_ptr_get)]
+#![feature(stdsimd)]
 #![feature(strict_provenance)]
 
 mod allocator;
@@ -36,7 +37,37 @@ mod uart;
 mod virtio;
 mod vm;
 
+pub struct Print;
+
+impl core::fmt::Write for Print {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        extern "C" {
+            fn consputc(c: i32);
+        }
+
+        for ch in s.chars() {
+            unsafe { consputc(ch as i32) };
+        }
+
+        core::fmt::Result::Ok(())
+    }
+}
+
+#[macro_export]
+macro print($($arg:tt)*) {{
+    use core::fmt::Write;
+    let _ = writeln!(crate::Print, "{}", format_args!($($arg)*));
+}}
+
+#[macro_export]
+macro_rules! println {
+    ($fmt:expr) => (crate::print!(concat!($fmt, "\n")));
+    ($fmt:expr, $($arg:tt)*) => (crate::print!(concat!($fmt, "\n"), $($arg)*));
+}
+
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    use core::fmt::Write;
+    let _ = writeln!(Print, "{:?}", info);
     loop {}
 }

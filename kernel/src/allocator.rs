@@ -39,17 +39,17 @@ impl KernelAllocator {
         let phy_start = symbol_addr!(end) as usize;
         let phy_end = PHYSTOP;
 
-        self.free_range(phy_start, phy_end);
+        self.register_blocks(phy_start, phy_end);
     }
 
-    fn free_range(&mut self, phy_start: usize, phy_end: usize) {
+    fn register_blocks(&mut self, phy_start: usize, phy_end: usize) {
         let phy_start = pg_roundup(phy_start);
         let range = phy_start..=(phy_end - PGSIZE);
 
         for page in range.step_by(PGSIZE) {
             let page = page as *mut u8;
             let page = NonNull::new(page).unwrap();
-            self.free_page(page);
+            self.deallocate_page(page);
         }
     }
 
@@ -57,7 +57,7 @@ impl KernelAllocator {
     // which normally should have been returned by a
     // call to kalloc().  (The exception is when
     // initializing the allocator; see kinit above.)
-    pub fn free_page(&mut self, pa: NonNull<u8>) {
+    pub fn deallocate_page(&mut self, pa: NonNull<u8>) {
         assert!(pa.addr().get() % PGSIZE == 0);
         assert!(pa.addr().get() >= symbol_addr!(end) as usize);
         assert!(pa.addr().get() < PHYSTOP);
@@ -94,6 +94,11 @@ impl KernelAllocator {
         assert!(core::mem::size_of::<T>() <= PGSIZE);
         self.allocate_page().map(NonNull::cast::<T>)
     }
+
+    pub fn deallocate<T>(&mut self, pa: NonNull<T>) {
+        assert!(core::mem::size_of::<T>() <= PGSIZE);
+        self.deallocate_page(pa.cast());
+    }
 }
 
 mod binding {
@@ -108,7 +113,7 @@ mod binding {
 
     #[no_mangle]
     unsafe extern "C" fn kfree(pa: NonNull<u8>) {
-        KernelAllocator::get().lock().free_page(pa);
+        KernelAllocator::get().lock().deallocate_page(pa);
     }
 
     #[no_mangle]
