@@ -57,9 +57,9 @@ fn make_pagetable_for_kernel() -> PageTable {
 
     // map kernel stacks
     extern "C" {
-        fn proc_mapstacks(kpgtbl: PageTable);
+        fn proc_mapstacks(kpgtbl: *const PageTable);
     }
-    unsafe { proc_mapstacks(pagetable) };
+    unsafe { proc_mapstacks(&pagetable) };
 
     pagetable
 }
@@ -70,7 +70,11 @@ mod binding {
     use crate::{
         allocator::KernelAllocator,
         lock::Lock,
-        riscv::{paging::pg_roundup, satp::make_satp, write_csr},
+        riscv::{
+            paging::{pg_rounddown, pg_roundup},
+            satp::make_satp,
+            write_csr,
+        },
     };
 
     use super::*;
@@ -111,21 +115,20 @@ mod binding {
         }
     }
 
+    #[no_mangle]
+    unsafe extern "C" fn uvmcopy(pagetable: PageTable, to: PageTable, size: usize) -> i32 {
+        match pagetable.copy(to, size) {
+            Ok(_) => 0,
+            Err(_) => -1,
+        }
+    }
+
     // Switch h/w page table register to the kernel's page table,
     // and enable paging.
     #[no_mangle]
     unsafe extern "C" fn kvminithart() {
         write_csr!(satp, make_satp(KERNEL_PAGETABLE.as_u64()));
         sfence_vma(0, 0);
-    }
-
-    // TODO: make private PageTable::walk
-    #[no_mangle]
-    unsafe extern "C" fn walk(pagetable: PageTable, va: usize, alloc: i32) -> *mut PTE {
-        match PageTable::walk(pagetable, va, if alloc != 0 { true } else { false }) {
-            Ok(mut_ref) => mut_ref,
-            Err(_) => core::ptr::null_mut(),
-        }
     }
 
     // Look up a virtual address, return the physical address,
@@ -137,13 +140,26 @@ mod binding {
     }
 
     #[no_mangle]
-    unsafe extern "C" fn freewalk(mut pagetable: PageTable) {
-        pagetable.deallocate();
+    unsafe extern "C" fn uvmunmap(mut pagetable: PageTable, va: usize, npages: usize, free: i32) {
+        pagetable.unmap(va, npages, if free != 0 { true } else { false })
     }
 
     #[no_mangle]
-    unsafe extern "C" fn uvmunmap(mut pagetable: PageTable, va: usize, npages: usize, free: i32) {
-        pagetable.unmap(va, npages, if free != 0 { true } else { false })
+    unsafe extern "C" fn uvmalloc(
+        mut pagetable: PageTable,
+        old_size: usize,
+        new_size: usize,
+    ) -> usize {
+        pagetable.grow(old_size, new_size)
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn uvmdealloc(
+        mut pagetable: PageTable,
+        old_size: usize,
+        new_size: usize,
+    ) -> usize {
+        pagetable.shrink(old_size, new_size)
     }
 
     // create an empty user page table.
@@ -167,7 +183,7 @@ mod binding {
     // used by exec for the user stack guard page.
     #[no_mangle]
     unsafe extern "C" fn uvmclear(pagetable: PageTable, va: usize) {
-        let pte = PageTable::walk(pagetable, va, false).unwrap();
+        let pte = pagetable.search_entry(va, false).unwrap();
         pte.set_user_access(false);
     }
 
@@ -177,11 +193,9 @@ mod binding {
     #[no_mangle]
     unsafe extern "C" fn uvminit(mut pagetable: PageTable, src: *mut u8, size: usize) {
         assert!(size < PGSIZE);
+
         let mem: NonNull<u8> = KernelAllocator::get().lock().allocate().unwrap();
         core::ptr::write_bytes(mem.as_ptr(), 0, PGSIZE);
-        extern "C" {
-            fn glue(pagetable: PageTable, src: *mut u8, size: u32, mem: *const u8);
-        }
 
         pagetable
             .map(
@@ -193,5 +207,83 @@ mod binding {
             .unwrap();
 
         core::ptr::copy_nonoverlapping(src, mem.as_ptr(), size);
+    }
+
+    // Copy from kernel to user.
+    // Copy len bytes from src to virtual address dstva in a given page table.
+    // Return 0 on success, -1 on error.
+    #[no_mangle]
+    unsafe extern "C" fn copyout(
+        pagetable: PageTable,
+        mut dst_va: usize,
+        mut src: usize,
+        mut len: usize,
+    ) -> i32 {
+        while len > 0 {
+            let va0 = pg_rounddown(dst_va);
+            let Some(pa0) = pagetable.virtual_to_physical(va0) else {
+                return -1;
+            };
+
+            let offset = dst_va - va0;
+            let n = (PGSIZE - offset).min(len);
+
+            core::ptr::copy(
+                <*const u8>::from_bits(src),
+                <*mut u8>::from_bits(pa0 + offset),
+                n,
+            );
+
+            len -= n;
+            src += n;
+            dst_va = va0 + PGSIZE;
+        }
+        0
+    }
+
+    // Copy from user to kernel.
+    // Copy len bytes to dst from virtual address srcva in a given page table.
+    // Return 0 on success, -1 on error.
+    #[no_mangle]
+    unsafe extern "C" fn copyin(
+        pagetable: PageTable,
+        mut dst: usize,
+        mut src_va: usize,
+        mut len: usize,
+    ) -> i32 {
+        while len > 0 {
+            let va0 = pg_rounddown(src_va);
+            let Some(pa0) = pagetable.virtual_to_physical(va0) else {
+                return -1;
+            };
+
+            let offset = src_va - va0;
+            let n = (PGSIZE - offset).min(len);
+
+            core::ptr::copy(
+                <*const u8>::from_bits(pa0 + offset),
+                <*mut u8>::from_bits(dst),
+                n,
+            );
+
+            len -= n;
+            dst += n;
+            src_va = va0 + PGSIZE;
+        }
+        0
+    }
+
+    // Copy a null-terminated string from user to kernel.
+    // Copy bytes to dst from virtual address srcva in a given page table,
+    // until a '\0', or max.
+    // Return 0 on success, -1 on error.
+    #[no_mangle]
+    unsafe extern "C" fn _copyinstr(
+        pagetable: PageTable,
+        dst: *mut u8,
+        src_va: usize,
+        max: usize,
+    ) -> i32 {
+        todo!()
     }
 }

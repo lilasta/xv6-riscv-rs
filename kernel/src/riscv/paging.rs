@@ -2,6 +2,26 @@ use core::ptr::NonNull;
 
 use crate::{allocator::KernelAllocator, lock::Lock};
 
+// bytes per page
+pub const PGSIZE: usize = 4096;
+
+// bits of offset within a page
+pub const PGSHIFT: usize = 12;
+
+pub const fn pg_roundup(sz: usize) -> usize {
+    (sz + PGSIZE - 1) & !(PGSIZE - 1)
+}
+
+pub const fn pg_rounddown(a: usize) -> usize {
+    a & !(PGSIZE - 1)
+}
+
+// one beyond the highest possible virtual address.
+// MAXVA is actually one bit less than the max allowed by
+// Sv39, to avoid having to sign-extend virtual addresses
+// that have the high bit set.
+pub const MAXVA: usize = 1usize << (9 + 9 + 9 + 12 - 1);
+
 #[repr(transparent)]
 pub struct PTE(u64);
 
@@ -20,7 +40,7 @@ impl PTE {
         }
     }
 
-    pub const fn index(level: usize, va: usize) -> usize {
+    const fn index(level: usize, va: usize) -> usize {
         // extract the three 9-bit page table indices from a virtual address.
         let mask = 0x1FF;
         let shift = PGSHIFT + 9 * level;
@@ -96,23 +116,21 @@ impl PTE {
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy)]
 pub struct PageTable(NonNull<PTE>);
 
 impl PageTable {
-    // 512 PTEs
     pub const LEN: usize = 512;
 
-    pub fn allocate() -> Option<Self> {
-        let ptr: NonNull<PTE> = KernelAllocator::get().lock().allocate()?;
+    pub fn allocate() -> Result<Self, ()> {
+        let ptr: NonNull<PTE> = KernelAllocator::get().lock().allocate().ok_or(())?;
         let this = Self::from_ptr(ptr);
         this.clear();
-        Some(this)
+        Ok(this)
     }
 
     pub fn deallocate(&mut self) {
         for i in 0..Self::LEN {
-            let pte = self.get(i);
+            let pte = self.get_mut(i);
             if pte.is_valid() {
                 assert!(!pte.is_readable());
                 assert!(!pte.is_writable());
@@ -123,9 +141,39 @@ impl PageTable {
                 let child = NonNull::new(child).unwrap();
 
                 Self::from_ptr(child).deallocate();
+
+                pte.clear();
             }
         }
         KernelAllocator::get().lock().deallocate_page(self.0.cast());
+    }
+
+    pub fn copy(&self, mut to: Self, size: usize) -> Result<(), ()> {
+        for i in (0..size).step_by(PGSIZE) {
+            let pte = self.search_entry(i, false).unwrap();
+            assert!(pte.is_valid());
+
+            let mem = match KernelAllocator::get().lock().allocate_page() {
+                Some(mem) => mem,
+                None => {
+                    to.unmap(0, i / PGSIZE, true);
+                    return Err(());
+                }
+            };
+
+            let pa = pte.get_physical_addr();
+            let flags = pte.get_flags();
+
+            unsafe { core::ptr::copy(<*const u8>::from_bits(pa), mem.as_ptr(), PGSIZE) };
+
+            if let Err(_) = to.map(i, mem.addr().get(), PGSIZE, flags) {
+                KernelAllocator::get().lock().deallocate_page(mem);
+                to.unmap(0, i / PGSIZE, true);
+                return Err(());
+            }
+        }
+
+        Ok(())
     }
 
     pub const fn invalid() -> Self {
@@ -170,7 +218,7 @@ impl PageTable {
         let last = pg_rounddown(va + size - 1);
 
         loop {
-            let pte = Self::walk(self.clone(), va, true)?;
+            let pte = self.search_entry(va, true)?;
 
             assert!(!pte.is_valid());
 
@@ -197,7 +245,7 @@ impl PageTable {
         assert!(va % PGSIZE == 0);
 
         for va in (va..).step_by(PGSIZE).take(npages) {
-            let pte = Self::walk(self.clone(), va, false).unwrap();
+            let pte = self.search_entry(va, false).unwrap();
             assert!(pte.is_valid());
             assert!(pte.get_flags() != PTE::V);
 
@@ -212,6 +260,65 @@ impl PageTable {
         }
     }
 
+    // Allocate PTEs and physical memory to grow process from oldsz to
+    // newsz, which need not be page aligned.  Returns new size or 0 on error.
+    pub fn grow(&mut self, old_size: usize, new_size: usize) -> usize {
+        if new_size < old_size {
+            return old_size;
+        }
+
+        let grow_start = pg_roundup(old_size);
+        let grow_end = new_size;
+        for a in (grow_start..grow_end).step_by(PGSIZE) {
+            // TODO: Rustの修正待ち
+            // https://github.com/rust-lang/rust/issues/87335#issuecomment-1169479987
+            let mem = if let Some(mem) = KernelAllocator::get().lock().allocate_page() {
+                mem
+            } else {
+                self.shrink(a, old_size);
+                return 0;
+            };
+
+            unsafe {
+                core::ptr::write_bytes(mem.as_ptr(), 0, PGSIZE);
+            }
+
+            let result = self.map(
+                a,
+                mem.addr().get(),
+                PGSIZE,
+                PTE::W | PTE::X | PTE::R | PTE::U,
+            );
+
+            if result.is_err() {
+                KernelAllocator::get().lock().deallocate_page(mem);
+                self.shrink(a, old_size);
+                return 0;
+            }
+        }
+
+        new_size
+    }
+
+    // Deallocate user pages to bring the process size from oldsz to
+    // newsz.  oldsz and newsz need not be page-aligned, nor does newsz
+    // need to be less than oldsz.  oldsz can be larger than the actual
+    // process size.  Returns the new process size.
+    pub fn shrink(&mut self, old_size: usize, new_size: usize) -> usize {
+        if new_size >= old_size {
+            return old_size;
+        }
+
+        let shrink_start = pg_roundup(new_size);
+        let shrink_end = pg_roundup(old_size);
+        if shrink_start != shrink_end {
+            let npages = (shrink_end - shrink_start) / PGSIZE;
+            self.unmap(shrink_start, npages, true);
+        }
+
+        new_size
+    }
+
     // Return the address of the PTE in page table pagetable
     // that corresponds to virtual address va.  If alloc!=0,
     // create any required page-table pages.
@@ -224,8 +331,10 @@ impl PageTable {
     //   21..29 -- 9 bits of level-1 index.
     //   12..20 -- 9 bits of level-0 index.
     //    0..11 -- 12 bits of byte offset within the page.
-    pub fn walk(mut table: PageTable, va: usize, alloc: bool) -> Result<&'static mut PTE, ()> {
+    pub fn search_entry(&self, va: usize, alloc: bool) -> Result<&'static mut PTE, ()> {
         assert!(va < MAXVA);
+
+        let mut table = Self(self.0);
 
         for level in [2, 1] {
             let index = PTE::index(level, va);
@@ -241,7 +350,7 @@ impl PageTable {
                     return Err(());
                 }
 
-                table = Self::allocate().ok_or(())?;
+                table = Self::allocate()?;
                 table.clear();
 
                 pte.clear();
@@ -258,7 +367,7 @@ impl PageTable {
             return None;
         }
 
-        let pte = Self::walk(self.clone(), va, false).ok()?;
+        let pte = Self::search_entry(self.clone(), va, false).ok()?;
 
         if !pte.is_valid() {
             return None;
@@ -272,23 +381,3 @@ impl PageTable {
         Some(pte.get_physical_addr())
     }
 }
-
-// bytes per page
-pub const PGSIZE: usize = 4096;
-
-// bits of offset within a page
-pub const PGSHIFT: usize = 12;
-
-pub const fn pg_roundup(sz: usize) -> usize {
-    (sz + PGSIZE - 1) & !(PGSIZE - 1)
-}
-
-pub const fn pg_rounddown(a: usize) -> usize {
-    a & !(PGSIZE - 1)
-}
-
-// one beyond the highest possible virtual address.
-// MAXVA is actually one bit less than the max allowed by
-// Sv39, to avoid having to sign-extend virtual addresses
-// that have the high bit set.
-pub const MAXVA: usize = 1usize << (9 + 9 + 9 + 12 - 1);

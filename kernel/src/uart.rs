@@ -83,6 +83,11 @@ pub struct UART {
 }
 
 impl UART {
+    pub fn get() -> &'static Self {
+        static THIS: UART = UART::new();
+        &THIS
+    }
+
     // the UART control registers are memory-mapped
     // at address UART0. this macro returns the
     // address of one of the registers.
@@ -131,37 +136,37 @@ impl UART {
         }
     }
 
-    pub fn init() -> Self {
-        use reg::*;
-
-        let this = Self {
+    pub const fn new() -> Self {
+        Self {
             tx: SpinLock::new(TransmitBuffer::new()),
             panicked: AtomicBool::new(false),
-        };
+        }
+    }
+
+    pub fn init(&self) {
+        use reg::*;
 
         // disable interrupts.
-        this.write_reg(IER, 0x00);
+        self.write_reg(IER, 0x00);
 
         // special mode to set baud rate.
-        this.write_reg(LCR, LCR_BAUD_LATCH);
+        self.write_reg(LCR, LCR_BAUD_LATCH);
 
         // LSB for baud rate of 38.4K.
-        this.write_reg(0, 0x03);
+        self.write_reg(0, 0x03);
 
         // MSB for baud rate of 38.4K.
-        this.write_reg(1, 0x00);
+        self.write_reg(1, 0x00);
 
         // leave set-baud mode,
         // and set word length to 8 bits, no parity.
-        this.write_reg(LCR, LCR_EIGHT_BITS);
+        self.write_reg(LCR, LCR_EIGHT_BITS);
 
         // reset and enable FIFOs.
-        this.write_reg(FCR, FCR_FIFO_ENABLE | FCR_FIFO_CLEAR);
+        self.write_reg(FCR, FCR_FIFO_ENABLE | FCR_FIFO_CLEAR);
 
         // enable transmit and receive interrupts.
-        this.write_reg(IER, IER_TX_ENABLE | IER_RX_ENABLE);
-
-        this
+        self.write_reg(IER, IER_TX_ENABLE | IER_RX_ENABLE);
     }
 
     // add a character to the output buffer and tell the
@@ -246,26 +251,23 @@ extern "C" {
 mod binding {
     use super::*;
 
-    #[allow(non_upper_case_globals)]
-    static mut uart: Option<UART> = None;
-
     #[no_mangle]
     unsafe extern "C" fn uartinit() {
-        uart = Some(UART::init());
+        UART::get().init();
     }
 
     #[no_mangle]
     unsafe extern "C" fn uartputc(c: i32) {
-        uart.as_ref().unwrap().putc(c as u8);
+        UART::get().putc(c as u8);
     }
 
     #[no_mangle]
     unsafe extern "C" fn uartputc_sync(c: i32) {
-        uart.as_ref().unwrap().putc_blocking(c as u8);
+        UART::get().putc_blocking(c as u8);
     }
 
     #[no_mangle]
     unsafe extern "C" fn uartintr() {
-        uart.as_ref().unwrap().handle_interrupt();
+        UART::get().handle_interrupt();
     }
 }

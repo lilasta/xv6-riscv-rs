@@ -103,3 +103,5 @@ impl<T> Lock for SpinLock<T> {
         CPU::get_current().pop_disabling_interrupt();
     }
 }
+
+unsafe impl<T> Sync for SpinLock<T> {}
