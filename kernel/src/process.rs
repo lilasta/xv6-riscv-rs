@@ -24,19 +24,24 @@ pub struct CPU {
 }
 
 impl CPU {
-    // TODO: safeな理由を書く
+    // TODO: めっちゃ危ない
     pub fn get_current() -> &'static mut Self {
+        extern "C" {
+            fn mycpu() -> *mut CPU;
+        }
+
+        assert!(unsafe { !is_interrupt_enabled() });
         unsafe { &mut *mycpu() }
     }
 
-    pub fn without_interrupt<R>(&mut self, f: impl FnOnce() -> R) -> R {
-        self.push_disabling_interrupt();
+    pub fn without_interrupt<R>(f: impl FnOnce() -> R) -> R {
+        Self::push_disabling_interrupt();
         let ret = f();
-        self.pop_disabling_interrupt();
+        Self::pop_disabling_interrupt();
         ret
     }
 
-    pub fn push_disabling_interrupt(&mut self) {
+    pub fn push_disabling_interrupt() {
         // TODO: おそらく順序が大事?
         let is_enabled = unsafe { is_interrupt_enabled() };
 
@@ -44,27 +49,32 @@ impl CPU {
             disable_interrupt();
         }
 
-        if self.disable_interrupt_depth == 0 {
-            self.is_interrupt_enabled_before = is_enabled as u32;
+        let cpu = Self::get_current();
+
+        if cpu.disable_interrupt_depth == 0 {
+            cpu.is_interrupt_enabled_before = is_enabled as u32;
         }
 
-        self.disable_interrupt_depth += 1;
+        cpu.disable_interrupt_depth += 1;
     }
 
-    pub fn pop_disabling_interrupt(&mut self) {
+    pub fn pop_disabling_interrupt() {
         assert!(
             unsafe { !is_interrupt_enabled() },
             "pop_disabling_interrupt: interruptible"
         );
+
+        let cpu = CPU::get_current();
+
         assert!(
-            self.disable_interrupt_depth > 0,
+            cpu.disable_interrupt_depth > 0,
             "pop_disabling_interrupt: not pushed before"
         );
 
-        self.disable_interrupt_depth -= 1;
+        cpu.disable_interrupt_depth -= 1;
 
-        if self.disable_interrupt_depth == 0 {
-            if self.is_interrupt_enabled_before == 1 {
+        if cpu.disable_interrupt_depth == 0 {
+            if cpu.is_interrupt_enabled_before == 1 {
                 unsafe { enable_interrupt() }
             }
         }
@@ -93,6 +103,5 @@ impl CPU {
     }
 }
 
-extern "C" {
-    fn mycpu() -> *mut CPU;
-}
+impl !Sync for CPU {}
+impl !Send for CPU {}

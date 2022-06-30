@@ -12,7 +12,6 @@ const SRCS: &[&str] = &[
     "spinlock.c",
     "string.c",
     "main.c",
-    "vm.c",
     "proc.c",
     "trap.c",
     "syscall.c",
