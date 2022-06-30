@@ -86,6 +86,30 @@ mod binding {
         KERNEL_PAGETABLE = make_pagetable_for_kernel();
     }
 
+    // Switch h/w page table register to the kernel's page table,
+    // and enable paging.
+    #[no_mangle]
+    unsafe extern "C" fn kvminithart() {
+        write_csr!(satp, make_satp(KERNEL_PAGETABLE.as_u64()));
+        sfence_vma(0, 0);
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn walk(pagetable: PageTable, va: usize, alloc: i32) -> *mut PTE {
+        match pagetable.search_entry(va, if alloc != 0 { true } else { false }) {
+            Ok(pte) => pte,
+            Err(_) => core::ptr::null_mut(),
+        }
+    }
+
+    // Look up a virtual address, return the physical address,
+    // or 0 if not mapped.
+    // Can only be used to look up user pages.
+    #[no_mangle]
+    unsafe extern "C" fn walkaddr(pagetable: PageTable, va: usize) -> usize {
+        pagetable.virtual_to_physical(va).unwrap_or(0)
+    }
+
     #[no_mangle]
     unsafe extern "C" fn kvmmap(
         mut kpgtbl: PageTable,
@@ -116,75 +140,15 @@ mod binding {
     }
 
     #[no_mangle]
-    unsafe extern "C" fn uvmcopy(pagetable: PageTable, to: PageTable, size: usize) -> i32 {
-        match pagetable.copy(to, size) {
-            Ok(_) => 0,
-            Err(_) => -1,
-        }
-    }
-
-    // Switch h/w page table register to the kernel's page table,
-    // and enable paging.
-    #[no_mangle]
-    unsafe extern "C" fn kvminithart() {
-        write_csr!(satp, make_satp(KERNEL_PAGETABLE.as_u64()));
-        sfence_vma(0, 0);
-    }
-
-    // Look up a virtual address, return the physical address,
-    // or 0 if not mapped.
-    // Can only be used to look up user pages.
-    #[no_mangle]
-    unsafe extern "C" fn walkaddr(pagetable: PageTable, va: usize) -> usize {
-        pagetable.virtual_to_physical(va).unwrap_or(0)
-    }
-
-    #[no_mangle]
     unsafe extern "C" fn uvmunmap(mut pagetable: PageTable, va: usize, npages: usize, free: i32) {
         pagetable.unmap(va, npages, if free != 0 { true } else { false })
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn uvmalloc(
-        mut pagetable: PageTable,
-        old_size: usize,
-        new_size: usize,
-    ) -> usize {
-        pagetable.grow(old_size, new_size)
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn uvmdealloc(
-        mut pagetable: PageTable,
-        old_size: usize,
-        new_size: usize,
-    ) -> usize {
-        pagetable.shrink(old_size, new_size)
     }
 
     // create an empty user page table.
     // returns 0 if out of memory.
     #[no_mangle]
-    unsafe extern "C" fn uvmcreate() -> PageTable {
-        PageTable::allocate().unwrap_or(PageTable::invalid())
-    }
-
-    // Free user memory pages,
-    // then free page-table pages.
-    #[no_mangle]
-    unsafe extern "C" fn uvmfree(mut pagetable: PageTable, size: usize) {
-        if size > 0 {
-            pagetable.unmap(0, pg_roundup(size) / PGSIZE, true);
-        }
-        pagetable.deallocate();
-    }
-
-    // mark a PTE invalid for user access.
-    // used by exec for the user stack guard page.
-    #[no_mangle]
-    unsafe extern "C" fn uvmclear(pagetable: PageTable, va: usize) {
-        let pte = pagetable.search_entry(va, false).unwrap();
-        pte.set_user_access(false);
+    unsafe extern "C" fn uvmcreate() -> u64 {
+        PageTable::allocate().map(|t| t.as_u64()).unwrap_or(0)
     }
 
     // Load the user initcode into address 0 of pagetable,
@@ -207,6 +171,50 @@ mod binding {
             .unwrap();
 
         core::ptr::copy_nonoverlapping(src, mem.as_ptr(), size);
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn uvmcopy(pagetable: PageTable, to: PageTable, size: usize) -> i32 {
+        match pagetable.copy(to, size) {
+            Ok(_) => 0,
+            Err(_) => -1,
+        }
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn uvmalloc(
+        mut pagetable: PageTable,
+        old_size: usize,
+        new_size: usize,
+    ) -> usize {
+        pagetable.grow(old_size, new_size)
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn uvmdealloc(
+        mut pagetable: PageTable,
+        old_size: usize,
+        new_size: usize,
+    ) -> usize {
+        pagetable.shrink(old_size, new_size)
+    }
+
+    // Free user memory pages,
+    // then free page-table pages.
+    #[no_mangle]
+    unsafe extern "C" fn uvmfree(mut pagetable: PageTable, size: usize) {
+        if size > 0 {
+            pagetable.unmap(0, pg_roundup(size) / PGSIZE, true);
+        }
+        pagetable.deallocate();
+    }
+
+    // mark a PTE invalid for user access.
+    // used by exec for the user stack guard page.
+    #[no_mangle]
+    unsafe extern "C" fn uvmclear(pagetable: PageTable, va: usize) {
+        let pte = pagetable.search_entry(va, false).unwrap();
+        pte.set_user_access(false);
     }
 
     // Copy from kernel to user.
@@ -278,12 +286,46 @@ mod binding {
     // until a '\0', or max.
     // Return 0 on success, -1 on error.
     #[no_mangle]
-    unsafe extern "C" fn _copyinstr(
+    unsafe extern "C" fn copyinstr(
         pagetable: PageTable,
-        dst: *mut u8,
-        src_va: usize,
-        max: usize,
+        mut dst: usize,
+        mut src_va: usize,
+        mut len: usize,
     ) -> i32 {
-        todo!()
+        unsafe fn strcpy(src: *const u8, dst: *mut u8, len: usize) -> bool {
+            for i in 0..len {
+                *dst.add(i) = *src.add(i);
+
+                if *src.add(i) == ('\0' as u8) {
+                    return true;
+                }
+            }
+            false
+        }
+
+        while len > 0 {
+            let va0 = pg_rounddown(src_va);
+            let Some(pa0) = pagetable.virtual_to_physical(va0) else {
+                return -1;
+            };
+
+            let offset = src_va - va0;
+            let n = (PGSIZE - offset).min(len);
+
+            let got_null = strcpy(
+                <*const u8>::from_bits(pa0 + offset),
+                <*mut u8>::from_bits(dst),
+                n,
+            );
+
+            if got_null {
+                return 0;
+            }
+
+            len -= n;
+            dst += n;
+            src_va = va0 + PGSIZE;
+        }
+        -1
     }
 }

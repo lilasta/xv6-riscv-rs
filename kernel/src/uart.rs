@@ -204,7 +204,7 @@ impl UART {
     pub fn putc_blocking(&self, c: u8) {
         use reg::*;
 
-        CPU::get_current().without_interrupt(|| {
+        CPU::without_interrupt(|| {
             if self.is_panicked() {
                 loop {}
             }
