@@ -72,11 +72,15 @@ impl CPU {
 
     pub fn sleep<L: Lock>(&self, wakeup_token: usize, guard: &mut LockGuard<L>) {
         let lock = L::get_lock_ref(guard);
-        unsafe { core::ptr::drop_in_place(guard) };
         extern "C" {
-            fn sleep_binding(chan: *const c_void);
+            fn sleep_binding1();
+            fn sleep_binding2(chan: *const c_void);
         }
-        unsafe { sleep_binding(wakeup_token as *const _) };
+        unsafe {
+            sleep_binding1();
+            core::ptr::drop_in_place(guard);
+            sleep_binding2(wakeup_token as *const _);
+        }
         unsafe { core::ptr::write(guard, lock.lock()) };
     }
 

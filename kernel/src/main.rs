@@ -53,16 +53,13 @@ impl core::fmt::Write for Print {
     }
 }
 
-#[macro_export]
-macro print($($arg:tt)*) {{
+pub macro print($($arg:tt)*) {{
     use core::fmt::Write;
     let _ = writeln!(crate::Print, "{}", format_args!($($arg)*));
 }}
 
-#[macro_export]
-macro_rules! println {
-    ($fmt:expr) => (crate::print!(concat!($fmt, "\n")));
-    ($fmt:expr, $($arg:tt)*) => (crate::print!(concat!($fmt, "\n"), $($arg)*));
+pub macro println($fmt:expr, $($arg:tt)*) {
+    crate::print!(concat!($fmt, "\n"), $($arg)*)
 }
 
 #[panic_handler]

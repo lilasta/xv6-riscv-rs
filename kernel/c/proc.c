@@ -30,7 +30,7 @@ struct spinlock wait_lock;
 // Map it high in memory, followed by an invalid
 // guard page.
 void
-proc_mapstacks(pagetable_t kpgtbl) {
+proc_mapstacks(pagetable_t * kpgtbl) {
   struct proc *p;
   
   for(p = proc; p < &proc[NPROC]; p++) {
@@ -38,7 +38,7 @@ proc_mapstacks(pagetable_t kpgtbl) {
     if(pa == 0)
       panic("kalloc");
     uint64 va = KSTACK((int) (p - proc));
-    kvmmap(kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+    kvmmap(*kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
   }
 }
 
@@ -555,10 +555,10 @@ sleep(void *chan, struct spinlock *lk)
 }
 
 void
-sleep_binding(void *chan)
+sleep_binding1(void)
 {
   struct proc *p = myproc();
-  
+
   // Must acquire p->lock in order to
   // change p->state and then call sched.
   // Once we hold p->lock, we can be
@@ -567,6 +567,12 @@ sleep_binding(void *chan)
   // so it's okay to release lk.
 
   acquire(&p->lock);  //DOC: sleeplock1
+}
+
+void
+sleep_binding2(void *chan)
+{
+  struct proc *p = myproc();
 
   // Go to sleep.
   p->chan = chan;
