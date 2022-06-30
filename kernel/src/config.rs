@@ -36,3 +36,5 @@ pub const FSSIZE: usize = 1000;
 
 // maximum file path name
 pub const MAXPATH: usize = 128;
+
+pub const ENTRY_STACKSIZE: usize = 4096;

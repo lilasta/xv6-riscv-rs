@@ -34,6 +34,7 @@ mod memory_layout;
 mod plic;
 mod process;
 mod riscv;
+mod start;
 mod syscall;
 mod trampoline;
 mod uart;
