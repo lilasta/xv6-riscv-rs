@@ -16,10 +16,6 @@ impl<T> SleepLock<T> {
     fn wakeup_token(&self) -> usize {
         self as *const _ as usize
     }
-
-    pub fn is_held_by_current_process(&self) -> bool {
-        todo!()
-    }
 }
 
 impl<T> Lock for SleepLock<T> {
@@ -41,9 +37,13 @@ impl<T> Lock for SleepLock<T> {
             cpu.sleep(token, &mut inner);
         }
 
+        extern "C" {
+            fn pid() -> u64;
+        }
+
         let mut inner = self.inner.lock();
         inner.locked = true;
-        inner.pid = todo!();
+        inner.pid = pid();
         SpinLock::unlock(inner);
     }
 

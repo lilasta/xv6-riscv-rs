@@ -6,7 +6,6 @@ const LD: &'static str = "riscv64-elf-ld";
 const OBJCOPY: &'static str = "riscv64-elf-objcopy";
 
 const SRCS: &[&str] = &[
-    "console.c",
     "printf.c",
     "spinlock.c",
     "string.c",
