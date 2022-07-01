@@ -15,6 +15,7 @@
 #![feature(core_ffi_c)]
 #![feature(decl_macro)]
 #![feature(generic_arg_infer)]
+#![feature(inline_const_pat)]
 #![feature(let_else)]
 #![feature(negative_impls)]
 #![feature(nonnull_slice_from_raw_parts)]
@@ -26,8 +27,10 @@
 
 mod allocator;
 mod config;
+mod console;
 mod context;
 mod entry;
+mod file;
 mod kernelvec;
 mod lock;
 mod memory_layout;

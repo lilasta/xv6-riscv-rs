@@ -66,6 +66,12 @@ cpuid()
   return id;
 }
 
+uint64
+pid()
+{
+  return myproc()->pid;
+}
+
 // Return this CPU's cpu struct.
 // Interrupts must be disabled.
 struct cpu*
@@ -83,6 +89,10 @@ myproc(void) {
   struct proc *p = c->proc;
   pop_off();
   return p;
+}
+
+int is_myproc_killed_glue(void) {
+  return myproc()->killed;
 }
 
 int

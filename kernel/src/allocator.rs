@@ -10,7 +10,7 @@ use crate::{
     riscv::paging::{pg_roundup, PGSIZE},
 };
 
-pub struct Block {
+struct Block {
     next: Option<NonNull<Block>>,
 }
 
