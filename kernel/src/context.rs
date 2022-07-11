@@ -4,23 +4,45 @@ use core::arch::global_asm;
 
 /// カーネルのコンテキストスイッチの際に保存するレジスタの値
 #[repr(C)]
+#[derive(Debug)]
 pub struct Context {
-    ra: u64,
-    sp: u64,
+    pub ra: u64,
+    pub sp: u64,
 
     // callee-saved
-    s0: u64,
-    s1: u64,
-    s2: u64,
-    s3: u64,
-    s4: u64,
-    s5: u64,
-    s6: u64,
-    s7: u64,
-    s8: u64,
-    s9: u64,
-    s10: u64,
-    s11: u64,
+    pub s0: u64,
+    pub s1: u64,
+    pub s2: u64,
+    pub s3: u64,
+    pub s4: u64,
+    pub s5: u64,
+    pub s6: u64,
+    pub s7: u64,
+    pub s8: u64,
+    pub s9: u64,
+    pub s10: u64,
+    pub s11: u64,
+}
+
+impl Context {
+    pub const fn zeroed() -> Self {
+        Self {
+            ra: 0,
+            sp: 0,
+            s0: 0,
+            s1: 0,
+            s2: 0,
+            s3: 0,
+            s4: 0,
+            s5: 0,
+            s6: 0,
+            s7: 0,
+            s8: 0,
+            s9: 0,
+            s10: 0,
+            s11: 0,
+        }
+    }
 }
 
 global_asm!(

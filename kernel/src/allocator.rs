@@ -10,6 +10,7 @@ use crate::{
     riscv::paging::{pg_roundup, PGSIZE},
 };
 
+// TODO: union
 struct Block {
     next: Option<NonNull<Block>>,
 }

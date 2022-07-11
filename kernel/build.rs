@@ -7,17 +7,16 @@ const OBJCOPY: &'static str = "riscv64-elf-objcopy";
 
 const SRCS: &[&str] = &[
     "printf.c",
+    "sleeplock.c",
     "spinlock.c",
     "string.c",
     "main.c",
-    "proc.c",
     "trap.c",
     "syscall.c",
     "sysproc.c",
     "bio.c",
     "fs.c",
     "log.c",
-    "sleeplock.c",
     "file.c",
     "pipe.c",
     "exec.c",

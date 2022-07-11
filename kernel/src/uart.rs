@@ -8,7 +8,7 @@ use core::{
 use crate::{
     lock::{spin::SpinLock, Lock, LockGuard},
     memory_layout::UART0,
-    process::CPU,
+    process::{ProcessTable, CPU},
 };
 
 mod reg {
@@ -112,8 +112,6 @@ impl UART {
     fn send<L: Lock<Target = TransmitBuffer>>(&self, mut tx: LockGuard<L>) {
         use reg::*;
 
-        let cpu = CPU::get_current();
-
         loop {
             if tx.w == tx.r {
                 // transmit buffer is empty.
@@ -130,7 +128,7 @@ impl UART {
             let c = tx.dequeue();
 
             // maybe uartputc() is waiting for space in the buffer.
-            cpu.wakeup(self as *const _ as usize);
+            ProcessTable::get().wakeup(self as *const _ as usize);
 
             self.write_reg(THR, c);
         }

@@ -12,18 +12,23 @@
 #![feature(const_slice_index)]
 #![feature(const_trait_impl)]
 #![feature(const_try)]
+#![feature(core_c_str)]
 #![feature(core_ffi_c)]
 #![feature(decl_macro)]
 #![feature(generic_arg_infer)]
+#![feature(inline_const)]
 #![feature(inline_const_pat)]
 #![feature(let_else)]
 #![feature(negative_impls)]
 #![feature(nonnull_slice_from_raw_parts)]
 #![feature(nonzero_ops)]
+#![feature(mixed_integer_ops)]
+#![feature(once_cell)]
 #![feature(ptr_to_from_bits)]
 #![feature(slice_ptr_get)]
 #![feature(stdsimd)]
 #![feature(strict_provenance)]
+#![feature(type_alias_impl_trait)]
 
 mod allocator;
 mod config;
@@ -65,8 +70,21 @@ pub macro print($($arg:tt)*) {{
     let _ = writeln!(crate::Print, "{}", format_args!($($arg)*));
 }}
 
-pub macro println($fmt:expr, $($arg:tt)*) {
-    crate::print!(concat!($fmt, "\n"), $($arg)*)
+pub macro println($($arg:tt)*) {
+    use core::fmt::Write;
+    let _ = writeln!(crate::Print, "{}\n", format_args!($($arg)*));
+}
+
+pub macro cstr($s:literal) {
+    core::ffi::CStr::from_bytes_with_nul_unchecked(concat!($s, '\0').as_bytes())
+}
+
+#[test]
+fn test() {
+    const TEST_STRING: &'static str = "It's a\ntest string\tyay";
+    const TEST_STRING_C: &'static CStr = cstr!("It's a\ntest string\tyay");
+
+    assert!(TEST_STRING == TEST_STRING_C.to_str().unwrap());
 }
 
 #[panic_handler]

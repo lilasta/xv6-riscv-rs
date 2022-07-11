@@ -1,4 +1,4 @@
-use crate::process::CPU;
+use crate::process::{ProcessTable, CPU};
 
 use super::{spin::SpinLock, Lock};
 
@@ -52,9 +52,8 @@ impl<T> Lock for SleepLock<T> {
         inner.locked = false;
         inner.pid = 0;
 
-        let cpu = CPU::get_current();
         let token = self.wakeup_token();
-        cpu.wakeup(token);
+        ProcessTable::get().wakeup(token);
 
         SpinLock::unlock(inner);
     }

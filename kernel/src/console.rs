@@ -11,7 +11,7 @@
 
 use crate::{
     lock::{Lock, LockGuard},
-    process::CPU,
+    process::{ProcessTable, CPU},
     uart::UART,
 };
 
@@ -128,7 +128,7 @@ impl Console {
                     // wake up consoleread() if a whole line (or end-of-file)
                     // has arrived.
                     self.write_index = self.edit_index;
-                    CPU::get_current().wakeup(&self.read_index as *const _ as usize);
+                    ProcessTable::get().wakeup(&self.read_index as *const _ as usize);
                 }
             }
         }

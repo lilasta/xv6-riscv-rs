@@ -116,6 +116,7 @@ impl PTE {
 }
 
 #[repr(transparent)]
+#[derive(Debug, Clone, Copy)] // TODO: Remove Clone, Copy
 pub struct PageTable(NonNull<PTE>);
 
 impl PageTable {
@@ -148,7 +149,7 @@ impl PageTable {
         KernelAllocator::get().lock().deallocate_page(self.0.cast());
     }
 
-    pub fn copy(&self, mut to: Self, size: usize) -> Result<(), ()> {
+    pub fn copy(&self, to: &mut Self, size: usize) -> Result<(), ()> {
         for i in (0..size).step_by(PGSIZE) {
             let pte = self.search_entry(i, false).unwrap();
             assert!(pte.is_valid());
@@ -262,9 +263,9 @@ impl PageTable {
 
     // Allocate PTEs and physical memory to grow process from oldsz to
     // newsz, which need not be page aligned.  Returns new size or 0 on error.
-    pub fn grow(&mut self, old_size: usize, new_size: usize) -> usize {
+    pub fn grow(&mut self, old_size: usize, new_size: usize) -> Result<usize, ()> {
         if new_size < old_size {
-            return old_size;
+            return Ok(old_size);
         }
 
         let grow_start = pg_roundup(old_size);
@@ -276,7 +277,7 @@ impl PageTable {
             let mem = KernelAllocator::get().lock().allocate_page();
             let Some(mem) = mem else {
                 self.shrink(a, old_size);
-                return 0;
+                return Err(());
             };
 
             unsafe {
@@ -292,21 +293,21 @@ impl PageTable {
 
             if result.is_err() {
                 KernelAllocator::get().lock().deallocate_page(mem);
-                self.shrink(a, old_size);
-                return 0;
+                self.shrink(a, old_size).unwrap();
+                return Err(());
             }
         }
 
-        new_size
+        Ok(new_size)
     }
 
     // Deallocate user pages to bring the process size from oldsz to
     // newsz.  oldsz and newsz need not be page-aligned, nor does newsz
     // need to be less than oldsz.  oldsz can be larger than the actual
     // process size.  Returns the new process size.
-    pub fn shrink(&mut self, old_size: usize, new_size: usize) -> usize {
+    pub fn shrink(&mut self, old_size: usize, new_size: usize) -> Result<usize, ()> {
         if new_size >= old_size {
-            return old_size;
+            return Ok(old_size);
         }
 
         let shrink_start = pg_roundup(new_size);
@@ -316,7 +317,7 @@ impl PageTable {
             self.unmap(shrink_start, npages, true);
         }
 
-        new_size
+        Ok(new_size)
     }
 
     // Return the address of the PTE in page table pagetable

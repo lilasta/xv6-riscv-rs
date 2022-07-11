@@ -1,12 +1,8 @@
 pub mod sleep;
 pub mod spin;
 
-use core::{
-    marker::Destruct,
-    ops::{Deref, DerefMut},
-};
+use core::ops::{Deref, DerefMut};
 
-#[const_trait]
 pub trait Lock {
     type Target;
 
@@ -26,12 +22,31 @@ pub trait Lock {
     fn unlock<'a>(_guard: LockGuard<'a, Self>)
     where
         Self: Sized,
-        LockGuard<'a, Self>: ~const Destruct,
     {
-        // drop(_guard)
+        drop(_guard)
     }
 
-    fn get_lock_ref<'a>(guard: &LockGuard<'a, Self>) -> &'a Self
+    fn with<R>(&self, f: impl FnOnce(&mut Self::Target) -> R) -> R
+    where
+        Self: Sized,
+    {
+        let mut guard = self.lock();
+        f(guard.deref_mut())
+    }
+
+    fn unlock_temporarily<R>(guard: &mut LockGuard<Self>, f: impl FnOnce() -> R) -> R
+    where
+        Self: Sized,
+    {
+        let lock = guard.lock;
+
+        unsafe { core::ptr::drop_in_place(guard) };
+        let ret = f();
+        unsafe { core::ptr::write(guard, lock.lock()) };
+        ret
+    }
+
+    fn ref_from_guard<'a>(guard: &LockGuard<'a, Self>) -> &'a Self
     where
         Self: Sized,
     {

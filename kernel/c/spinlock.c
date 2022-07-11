@@ -12,7 +12,7 @@ void initlock(struct spinlock *lk, char *name)
 {
   lk->name = name;
   lk->locked = 0;
-  lk->cpu = 0;
+  lk->cpuid = -1;
 }
 
 // Acquire the lock.
@@ -37,7 +37,7 @@ void acquire(struct spinlock *lk)
   __sync_synchronize();
 
   // Record info about lock acquisition for holding() and debugging.
-  lk->cpu = mycpu();
+  lk->cpuid = cpuid();
 }
 
 // Release the lock.
@@ -46,7 +46,7 @@ void release(struct spinlock *lk)
   if (!holding(lk))
     panic("release");
 
-  lk->cpu = 0;
+  lk->cpuid = -1;
 
   // Tell the C compiler and the CPU to not move loads or stores
   // past this point, to ensure that all the stores in the critical
@@ -73,32 +73,6 @@ void release(struct spinlock *lk)
 int holding(struct spinlock *lk)
 {
   int r;
-  r = (lk->locked && lk->cpu == mycpu());
+  r = (lk->locked && lk->cpuid == cpuid());
   return r;
-}
-
-// push_off/pop_off are like intr_off()/intr_on() except that they are matched:
-// it takes two pop_off()s to undo two push_off()s.  Also, if interrupts
-// are initially off, then push_off, pop_off leaves them off.
-
-void push_off(void)
-{
-  int old = intr_get();
-
-  intr_off();
-  if (mycpu()->noff == 0)
-    mycpu()->intena = old;
-  mycpu()->noff += 1;
-}
-
-void pop_off(void)
-{
-  struct cpu *c = mycpu();
-  if (intr_get())
-    panic("pop_off - interruptible");
-  if (c->noff < 1)
-    panic("pop_off");
-  c->noff -= 1;
-  if (c->noff == 0 && c->intena)
-    intr_on();
 }

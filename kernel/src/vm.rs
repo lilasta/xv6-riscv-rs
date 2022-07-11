@@ -55,16 +55,10 @@ fn make_pagetable_for_kernel() -> PageTable {
         .map(TRAMPOLINE, trampoline(), PGSIZE, PTE::R | PTE::X)
         .unwrap();
 
-    // map kernel stacks
-    extern "C" {
-        fn proc_mapstacks(kpgtbl: *const PageTable);
-    }
-    unsafe { proc_mapstacks(&pagetable) };
-
     pagetable
 }
 
-mod binding {
+pub mod binding {
     use core::{arch::riscv64::sfence_vma, ptr::NonNull};
 
     use crate::{
@@ -79,7 +73,7 @@ mod binding {
 
     use super::*;
 
-    static mut KERNEL_PAGETABLE: PageTable = PageTable::invalid();
+    pub static mut KERNEL_PAGETABLE: PageTable = PageTable::invalid();
 
     #[no_mangle]
     unsafe extern "C" fn kvminit() {
@@ -155,7 +149,7 @@ mod binding {
     // for the very first process.
     // sz must be less than a page.
     #[no_mangle]
-    unsafe extern "C" fn uvminit(mut pagetable: PageTable, src: *mut u8, size: usize) {
+    pub unsafe extern "C" fn uvminit(mut pagetable: PageTable, src: *const u8, size: usize) {
         assert!(size < PGSIZE);
 
         let mem: NonNull<u8> = KernelAllocator::get().lock().allocate().unwrap();
@@ -174,8 +168,8 @@ mod binding {
     }
 
     #[no_mangle]
-    unsafe extern "C" fn uvmcopy(pagetable: PageTable, to: PageTable, size: usize) -> i32 {
-        match pagetable.copy(to, size) {
+    unsafe extern "C" fn uvmcopy(pagetable: PageTable, mut to: PageTable, size: usize) -> i32 {
+        match pagetable.copy(&mut to, size) {
             Ok(_) => 0,
             Err(_) => -1,
         }
@@ -187,7 +181,7 @@ mod binding {
         old_size: usize,
         new_size: usize,
     ) -> usize {
-        pagetable.grow(old_size, new_size)
+        pagetable.grow(old_size, new_size).unwrap_or(0)
     }
 
     #[no_mangle]
@@ -196,7 +190,7 @@ mod binding {
         old_size: usize,
         new_size: usize,
     ) -> usize {
-        pagetable.shrink(old_size, new_size)
+        pagetable.shrink(old_size, new_size).unwrap_or(0)
     }
 
     // Free user memory pages,
@@ -221,7 +215,7 @@ mod binding {
     // Copy len bytes from src to virtual address dstva in a given page table.
     // Return 0 on success, -1 on error.
     #[no_mangle]
-    unsafe extern "C" fn copyout(
+    pub unsafe extern "C" fn copyout(
         pagetable: PageTable,
         mut dst_va: usize,
         mut src: usize,
@@ -253,7 +247,7 @@ mod binding {
     // Copy len bytes to dst from virtual address srcva in a given page table.
     // Return 0 on success, -1 on error.
     #[no_mangle]
-    unsafe extern "C" fn copyin(
+    pub unsafe extern "C" fn copyin(
         pagetable: PageTable,
         mut dst: usize,
         mut src_va: usize,
