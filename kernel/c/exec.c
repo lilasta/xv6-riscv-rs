@@ -35,7 +35,7 @@ exec(char *path, char **argv)
   if(elf.magic != ELF_MAGIC)
     goto bad;
 
-  if((pagetable = proc_pagetable(p)) == 0)
+  if((pagetable = proc_pagetable(p->trapframe)) == 0)
     goto bad;
 
   // Load program into memory.
@@ -109,7 +109,7 @@ exec(char *path, char **argv)
   safestrcpy(p->name, last, sizeof(p->name));
     
   // Commit to the user image.
-  oldpagetable = p->pagetable;
+  oldpagetable = glue_pagetable();
   p->pagetable = pagetable;
   p->sz = sz;
   p->trapframe->epc = elf.entry;  // initial program counter = main

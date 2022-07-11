@@ -34,7 +34,9 @@ mod allocator;
 mod config;
 mod console;
 mod context;
+mod elf;
 mod entry;
+mod exec;
 mod file;
 mod kernelvec;
 mod lock;
@@ -45,6 +47,7 @@ mod riscv;
 mod start;
 mod syscall;
 mod trampoline;
+mod trap;
 mod uart;
 mod virtio;
 mod vm;
@@ -77,14 +80,6 @@ pub macro println($($arg:tt)*) {
 
 pub macro cstr($s:literal) {
     core::ffi::CStr::from_bytes_with_nul_unchecked(concat!($s, '\0').as_bytes())
-}
-
-#[test]
-fn test() {
-    const TEST_STRING: &'static str = "It's a\ntest string\tyay";
-    const TEST_STRING_C: &'static CStr = cstr!("It's a\ntest string\tyay");
-
-    assert!(TEST_STRING == TEST_STRING_C.to_str().unwrap());
 }
 
 #[panic_handler]

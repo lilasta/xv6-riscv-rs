@@ -1,5 +1,6 @@
 pub mod sleep;
 pub mod spin;
+pub mod spin_c;
 
 use core::ops::{Deref, DerefMut};
 
@@ -56,6 +57,14 @@ pub trait Lock {
 
 pub struct LockGuard<'a, L: Lock> {
     lock: &'a L,
+}
+
+impl<'a, L: Lock> LockGuard<'a, L> {
+    // TODO: REMOVE
+    #[deprecated]
+    pub const fn new(lock: &'a L) -> Self {
+        Self { lock }
+    }
 }
 
 impl<'a, L: ~const Lock> const Deref for LockGuard<'a, L> {

@@ -281,7 +281,7 @@ impl ProcessContext {
         return Ok(());
     }
 
-    fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
+    pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
         let mut pagetable = PageTable::allocate()?;
         extern "C" {
             fn uvmfree(pt: PageTable, size: usize);
@@ -315,7 +315,7 @@ impl ProcessContext {
         Ok(pagetable)
     }
 
-    fn free_pagetable(mut pagetable: PageTable, size: usize) {
+    pub fn free_pagetable(mut pagetable: PageTable, size: usize) {
         extern "C" {
             fn uvmfree(pt: PageTable, size: usize);
         }

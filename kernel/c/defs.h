@@ -8,9 +8,12 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
+struct trapframe;
 
 // glue
 int glue_pid(void);
+pagetable_t glue_pagetable(void);
+void glue_pagetable_write(pagetable_t);
 
 // bio.c
 void binit(void);
@@ -90,7 +93,7 @@ void exit(int);
 int fork(void);
 int growproc(int);
 void proc_mapstacks(pagetable_t *);
-pagetable_t proc_pagetable(struct proc *);
+pagetable_t proc_pagetable(struct trapframe *);
 void proc_freepagetable(pagetable_t, uint64);
 int kill(int);
 struct cpu *mycpu(void);

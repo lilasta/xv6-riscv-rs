@@ -188,6 +188,44 @@ impl CPU {
         unsafe { &mut CPUS[cpuid] }
     }
 
+    pub fn push_disabling_interrupt() {
+        // TODO: おそらく順序が大事?
+        let is_enabled = unsafe { is_interrupt_enabled() };
+
+        unsafe { disable_interrupt() };
+
+        let cpu = Self::get_current();
+
+        if cpu.disable_interrupt_depth == 0 {
+            cpu.is_interrupt_enabled_before = is_enabled;
+        }
+
+        cpu.disable_interrupt_depth += 1;
+    }
+
+    pub fn pop_disabling_interrupt() {
+        assert!(unsafe { !is_interrupt_enabled() },);
+
+        let cpu = CPU::get_current();
+
+        assert!(cpu.disable_interrupt_depth > 0,);
+
+        cpu.disable_interrupt_depth -= 1;
+
+        if cpu.disable_interrupt_depth == 0 {
+            if cpu.is_interrupt_enabled_before {
+                unsafe { enable_interrupt() }
+            }
+        }
+    }
+
+    pub fn without_interrupt<R>(f: impl FnOnce() -> R) -> R {
+        Self::push_disabling_interrupt();
+        let ret = f();
+        Self::pop_disabling_interrupt();
+        ret
+    }
+
     pub fn process(&self) -> Option<&SpinLock<Process>> {
         match self.state {
             CPUState::Running(proc, _) => Some(proc),
@@ -200,13 +238,6 @@ impl CPU {
             CPUState::Running(_, ref mut proc_context) => Some(proc_context),
             _ => None,
         }
-    }
-
-    pub fn without_interrupt<R>(f: impl FnOnce() -> R) -> R {
-        Self::push_disabling_interrupt();
-        let ret = f();
-        Self::pop_disabling_interrupt();
-        ret
     }
 
     // Give up the CPU for one scheduling round.
@@ -233,45 +264,6 @@ impl CPU {
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         self.state = CPUState::Ready;
-    }
-
-    pub fn push_disabling_interrupt() {
-        // TODO: おそらく順序が大事?
-        let is_enabled = unsafe { is_interrupt_enabled() };
-
-        unsafe {
-            disable_interrupt();
-        }
-
-        let cpu = Self::get_current();
-
-        if cpu.disable_interrupt_depth == 0 {
-            cpu.is_interrupt_enabled_before = is_enabled;
-        }
-
-        cpu.disable_interrupt_depth += 1;
-    }
-
-    pub fn pop_disabling_interrupt() {
-        assert!(
-            unsafe { !is_interrupt_enabled() },
-            "pop_disabling_interrupt: interruptible"
-        );
-
-        let cpu = CPU::get_current();
-
-        assert!(
-            cpu.disable_interrupt_depth > 0,
-            "pop_disabling_interrupt: not pushed before"
-        );
-
-        cpu.disable_interrupt_depth -= 1;
-
-        if cpu.disable_interrupt_depth == 0 {
-            if cpu.is_interrupt_enabled_before {
-                unsafe { enable_interrupt() }
-            }
-        }
     }
 
     pub fn sleep<L: Lock>(&mut self, token: usize, guard: &mut LockGuard<L>) {
@@ -422,7 +414,6 @@ impl ProcessTable {
         let proc = CPU::get_current().process().unwrap();
         let context = CPU::get_current().process_context().unwrap();
 
-        // TODO: Make this safe
         let pid = proc.lock().metadata().unwrap().pid;
 
         let mut parents = self.parent_maps.lock();
@@ -526,7 +517,9 @@ impl ProcessTable {
 }
 
 mod binding {
-    use super::*;
+    use crate::{lock::spin_c::SpinLockC, riscv::paging::PageTable};
+
+    use super::{trapframe::TrapFrame, *};
 
     #[no_mangle]
     extern "C" fn push_off() {
@@ -599,12 +592,12 @@ mod binding {
     #[no_mangle]
     extern "C" fn userinit() {}
 
-    /*
     #[no_mangle]
-    extern "C" fn sleep(chan: usize, lock: SpinLockC) {
-        CPU::get_current().sleep(wakeup_token, guard)
+    extern "C" fn sleep(chan: usize, lock: *mut SpinLockC) {
+        let mut guard = LockGuard::new(unsafe { &mut *lock });
+        CPU::get_current().sleep(chan, &mut guard);
+        core::mem::forget(guard);
     }
-    */
 
     #[no_mangle]
     extern "C" fn kill(pid: i32) -> i32 {
@@ -663,5 +656,32 @@ mod binding {
             .metadata()
             .unwrap()
             .pid as i32
+    }
+
+    #[no_mangle]
+    extern "C" fn glue_pagetable() -> PageTable {
+        CPU::get_current()
+            .process_context()
+            .unwrap()
+            .pagetable
+            .clone()
+    }
+
+    #[no_mangle]
+    extern "C" fn glue_pagetable_write(pt: PageTable) {
+        CPU::get_current().process_context().unwrap().pagetable = pt;
+    }
+
+    #[no_mangle]
+    extern "C" fn proc_pagetable(trapframe: usize) -> u64 {
+        match ProcessContext::allocate_pagetable(trapframe) {
+            Ok(pt) => pt.as_u64(),
+            Err(_) => 0,
+        }
+    }
+
+    #[no_mangle]
+    extern "C" fn proc_freepagetable(pagetable: PageTable, size: usize) {
+        ProcessContext::free_pagetable(pagetable, size);
     }
 }
