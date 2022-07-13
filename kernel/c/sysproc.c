@@ -46,7 +46,7 @@ sys_sbrk(void)
 
   if (argint(0, &n) < 0)
     return -1;
-  addr = myproc()->sz;
+  addr = glue_size();
   if (growproc(n) < 0)
     return -1;
   return addr;
@@ -64,7 +64,7 @@ sys_sleep(void)
   ticks0 = ticks;
   while (ticks - ticks0 < n)
   {
-    if (myproc()->killed)
+    if (glue_killed())
     {
       release(&tickslock);
       return -1;

@@ -382,3 +382,10 @@ impl PageTable {
         Some(pte.get_physical_addr())
     }
 }
+
+// TODO: dealloc;
+/*
+impl Drop for PageTable {
+    fn drop(&mut self) {}
+}
+*/

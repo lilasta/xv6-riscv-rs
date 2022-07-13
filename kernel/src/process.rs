@@ -291,9 +291,9 @@ pub struct ProcessTable {
 }
 
 impl ProcessTable {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
-            procs: [0; _].map(|_| SpinLock::new(Process::Unused)),
+            procs: [const { SpinLock::new(Process::Unused) }; _],
             parent_maps: SpinLock::new(ArrayVec::new_const()),
             next_pid: AtomicUsize::new(1),
         }
@@ -308,40 +308,9 @@ impl ProcessTable {
         self.procs.iter().find(|proc| proc.lock().is_unused())
     }
 
-    fn initialize() -> Self {
-        extern "C" {
-            fn namei(path: *const c_char) -> *mut c_void;
-        }
-
-        let table = ProcessTable::new();
-
-        // TODO: name = "initproc"
-        let metadata = ProcessMetadata::new(table.allocate_pid(), ['\0'; 16]);
-        let context = unsafe {
-            let mut context = ProcessContext::allocate().unwrap();
-
-            // allocate one user page and copy init's instructions
-            // and data into it.
-            uvminit(context.pagetable, INITCODE.as_ptr(), INITCODE.len());
-            context.size = PGSIZE;
-
-            // prepare for the very first "return" from kernel to user.
-            context.trapframe.as_mut().epc = 0; // user program counter
-            context.trapframe.as_mut().sp = PGSIZE as u64; // user stack pointer
-            context.cwd = namei(cstr!("/").as_ptr());
-            context
-        };
-
-        table.get_unused_proc().unwrap().with(|proc| {
-            proc.setup(metadata, context).unwrap();
-        });
-
-        table
-    }
-
     pub fn get() -> &'static Self {
-        static mut TABLE: OnceCell<ProcessTable> = OnceCell::new();
-        unsafe { TABLE.get_or_init(|| Self::initialize()) }
+        static mut TABLE: ProcessTable = ProcessTable::new();
+        unsafe { &TABLE }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &SpinLock<Process>> {
@@ -457,7 +426,12 @@ impl ProcessTable {
 
     pub fn wakeup(&self, token: usize) {
         for proc in self.iter() {
-            if core::ptr::eq(proc, CPU::get_current().process().unwrap()) {
+            let current_process = match CPU::get_current().process() {
+                Some(proc) => proc,
+                None => core::ptr::null(),
+            };
+
+            if core::ptr::eq(proc, current_process) {
                 continue;
             }
 
@@ -514,6 +488,36 @@ impl ProcessTable {
 
         Some(new_pid)
     }
+}
+
+fn launch_init() {
+    extern "C" {
+        fn namei(path: *const c_char) -> *mut c_void;
+    }
+
+    let table = ProcessTable::get();
+
+    // TODO: name = "initproc"
+    let metadata = ProcessMetadata::new(table.allocate_pid(), ['\0'; 16]);
+
+    let context = unsafe {
+        let mut context = ProcessContext::allocate().unwrap();
+
+        // allocate one user page and copy init's instructions
+        // and data into it.
+        uvminit(context.pagetable, INITCODE.as_ptr(), INITCODE.len());
+        context.size = PGSIZE;
+
+        // prepare for the very first "return" from kernel to user.
+        context.trapframe.as_mut().epc = 0; // user program counter
+        context.trapframe.as_mut().sp = PGSIZE as u64; // user stack pointer
+        context.cwd = namei(cstr!("/").as_ptr());
+        context
+    };
+
+    table.get_unused_proc().unwrap().with(|proc| {
+        proc.setup(metadata, context).unwrap();
+    });
 }
 
 mod binding {
@@ -590,7 +594,9 @@ mod binding {
     extern "C" fn procinit() {}
 
     #[no_mangle]
-    extern "C" fn userinit() {}
+    extern "C" fn userinit() {
+        launch_init();
+    }
 
     #[no_mangle]
     extern "C" fn sleep(chan: usize, lock: *mut SpinLockC) {
@@ -656,6 +662,72 @@ mod binding {
             .metadata()
             .unwrap()
             .pid as i32
+    }
+
+    #[no_mangle]
+    extern "C" fn glue_trapframe() -> *mut TrapFrame {
+        CPU::get_current()
+            .process_context()
+            .unwrap()
+            .trapframe
+            .as_ptr()
+    }
+
+    #[no_mangle]
+    extern "C" fn glue_size() -> u64 {
+        CPU::get_current().process_context().unwrap().size as _
+    }
+
+    #[no_mangle]
+    extern "C" fn glue_cwd() -> *mut c_void {
+        CPU::get_current().process_context().unwrap().cwd
+    }
+
+    #[no_mangle]
+    extern "C" fn glue_cwd_write(c: *mut c_void) {
+        CPU::get_current().process_context().unwrap().cwd = c;
+    }
+
+    #[no_mangle]
+    extern "C" fn glue_ofile(index: usize) -> *mut c_void {
+        CPU::get_current().process_context().unwrap().ofile[index]
+    }
+
+    #[no_mangle]
+    extern "C" fn glue_ofile_write(index: usize, p: *mut c_void) {
+        CPU::get_current().process_context().unwrap().ofile[index] = p;
+    }
+
+    #[no_mangle]
+    extern "C" fn glue_is_proc_running() -> i32 {
+        CPU::get_current().process().is_some() as i32
+    }
+
+    #[no_mangle]
+    extern "C" fn glue_kstack() -> u64 {
+        CPU::get_current().process_context().unwrap().kstack as u64
+    }
+
+    #[no_mangle]
+    extern "C" fn glue_killed() -> i32 {
+        CPU::get_current()
+            .process()
+            .unwrap()
+            .lock()
+            .metadata()
+            .unwrap()
+            .killed as i32
+    }
+
+    #[no_mangle]
+    extern "C" fn glue_killed_on() {
+        CPU::get_current()
+            .process()
+            .unwrap()
+            .lock()
+            .metadata_mut()
+            .unwrap()
+            .killed = true;
     }
 
     #[no_mangle]

@@ -3,34 +3,40 @@
 // File header
 #[repr(C)]
 pub struct ELFHeader {
-    magic: u32,
-    elf: [u8; 12],
-    kind: u16,
-    machine: u16,
-    version: u32,
-    entry: usize,
-    phoff: usize,
-    shoff: usize,
-    flags: u32,
-    ehsize: u16,
-    phentsize: u16,
-    phnum: u16,
-    shentsize: u16,
-    shnum: u16,
-    shstrndx: u16,
+    pub magic: u32,
+    pub elf: [u8; 12],
+    pub kind: u16,
+    pub machine: u16,
+    pub version: u32,
+    pub entry: usize,
+    pub phoff: usize,
+    pub shoff: usize,
+    pub flags: u32,
+    pub ehsize: u16,
+    pub phentsize: u16,
+    pub phnum: u16,
+    pub shentsize: u16,
+    pub shnum: u16,
+    pub shstrndx: u16,
+}
+
+impl ELFHeader {
+    pub const fn validate_magic(&self) -> bool {
+        self.magic == 0x464C457F
+    }
 }
 
 // Program section header
 #[repr(C)]
 pub struct ProgramHeader {
-    kind: u32,
-    flags: u32,
-    off: usize,
-    vaddr: usize,
-    paddr: usize,
-    filesz: usize,
-    memsz: usize,
-    align: usize,
+    pub kind: u32,
+    pub flags: u32,
+    pub off: usize,
+    pub vaddr: usize,
+    pub paddr: usize,
+    pub filesz: usize,
+    pub memsz: usize,
+    pub align: usize,
 }
 
 impl ProgramHeader {

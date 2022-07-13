@@ -25,6 +25,7 @@
 #![feature(mixed_integer_ops)]
 #![feature(once_cell)]
 #![feature(ptr_to_from_bits)]
+#![feature(slice_from_ptr_range)]
 #![feature(slice_ptr_get)]
 #![feature(stdsimd)]
 #![feature(strict_provenance)]
@@ -40,6 +41,7 @@ mod exec;
 mod file;
 mod kernelvec;
 mod lock;
+mod log;
 mod memory_layout;
 mod plic;
 mod process;

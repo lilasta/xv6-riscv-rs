@@ -12,8 +12,18 @@ struct trapframe;
 
 // glue
 int glue_pid(void);
+struct trapframe *glue_trapframe(void);
+int glue_killed(void);
+void glue_killed_on();
 pagetable_t glue_pagetable(void);
+uint64 glue_kstack(void);
+uint64 glue_size(void);
+struct file *glue_ofile(uint64);
+void glue_ofile_write(uint64, struct file *);
+struct inode *glue_cwd(void);
+void glue_cwd_write(struct inode *);
 void glue_pagetable_write(pagetable_t);
+int glue_is_proc_running();
 
 // bio.c
 void binit(void);
@@ -98,7 +108,6 @@ void proc_freepagetable(pagetable_t, uint64);
 int kill(int);
 struct cpu *mycpu(void);
 struct cpu *getmycpu(void);
-struct proc *myproc();
 void procinit(void);
 void scheduler(void) __attribute__((noreturn));
 void sched(void);

@@ -11,10 +11,11 @@
 int
 fetchaddr(uint64 addr, uint64 *ip)
 {
-  struct proc *p = myproc();
-  if(addr >= p->sz || addr+sizeof(uint64) > p->sz)
+  int size = glue_size();
+  pagetable_t pt = glue_pagetable();
+  if(addr >= size || addr+sizeof(uint64) > size)
     return -1;
-  if(copyin(p->pagetable, (char *)ip, addr, sizeof(*ip)) != 0)
+  if(copyin(pt, (char *)ip, addr, sizeof(*ip)) != 0)
     return -1;
   return 0;
 }
@@ -24,8 +25,8 @@ fetchaddr(uint64 addr, uint64 *ip)
 int
 fetchstr(uint64 addr, char *buf, int max)
 {
-  struct proc *p = myproc();
-  int err = copyinstr(p->pagetable, buf, addr, max);
+  pagetable_t pt = glue_pagetable();
+  int err = copyinstr(pt, buf, addr, max);
   if(err < 0)
     return err;
   return strlen(buf);
@@ -34,20 +35,20 @@ fetchstr(uint64 addr, char *buf, int max)
 static uint64
 argraw(int n)
 {
-  struct proc *p = myproc();
+  struct trapframe* tf = glue_trapframe();
   switch (n) {
   case 0:
-    return p->trapframe->a0;
+    return tf->a0;
   case 1:
-    return p->trapframe->a1;
+    return tf->a1;
   case 2:
-    return p->trapframe->a2;
+    return tf->a2;
   case 3:
-    return p->trapframe->a3;
+    return tf->a3;
   case 4:
-    return p->trapframe->a4;
+    return tf->a4;
   case 5:
-    return p->trapframe->a5;
+    return tf->a5;
   }
   panic("argraw");
   return -1;
@@ -133,14 +134,15 @@ void
 syscall(void)
 {
   int num;
-  struct proc *p = myproc();
+  struct trapframe* tf = glue_trapframe();
+  int pid = glue_pid();
 
-  num = p->trapframe->a7;
+  num = tf->a7;
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
-    p->trapframe->a0 = syscalls[num]();
+    tf->a0 = syscalls[num]();
   } else {
     printf("%d %s: unknown sys call %d\n",
-            p->pid, p->name, num);
-    p->trapframe->a0 = -1;
+           pid, "dummy-name", num);
+    tf->a0 = -1;
   }
 }

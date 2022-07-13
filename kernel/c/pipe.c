@@ -77,11 +77,10 @@ int
 pipewrite(struct pipe *pi, uint64 addr, int n)
 {
   int i = 0;
-  struct proc *pr = myproc();
 
   acquire(&pi->lock);
   while(i < n){
-    if(pi->readopen == 0 || pr->killed){
+    if(pi->readopen == 0 || glue_killed()){
       release(&pi->lock);
       return -1;
     }
@@ -106,12 +105,11 @@ int
 piperead(struct pipe *pi, uint64 addr, int n)
 {
   int i;
-  struct proc *pr = myproc();
   char ch;
 
   acquire(&pi->lock);
   while(pi->nread == pi->nwrite && pi->writeopen){  //DOC: pipe-empty
-    if(pr->killed){
+    if(glue_killed()){
       release(&pi->lock);
       return -1;
     }
