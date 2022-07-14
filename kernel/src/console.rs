@@ -11,7 +11,7 @@
 
 use crate::{
     lock::{Lock, LockGuard},
-    process::{ProcessTable, CPU},
+    process::{cpu, ProcessTable},
     uart::UART,
 };
 
@@ -156,7 +156,7 @@ impl<'a, L: Lock<Target = Console>> LockGuard<'a, L> {
                         return -1;
                     }
                 }
-                CPU::get_current().sleep(&self.read_index as *const _ as usize, self)
+                cpu::current().sleep(&self.read_index as *const _ as usize, self)
             }
 
             let c = self.buf[self.read_index % Console::INPUT_BUF_LEN];

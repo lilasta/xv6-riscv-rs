@@ -55,6 +55,7 @@ pub trait Lock {
     }
 }
 
+#[derive(Debug)]
 pub struct LockGuard<'a, L: Lock> {
     lock: &'a L,
 }

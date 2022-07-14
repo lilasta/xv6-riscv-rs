@@ -2,16 +2,16 @@ use core::{ffi::c_void, ptr::NonNull};
 
 use crate::{
     allocator::KernelAllocator,
-    config::{NOFILE, ROOTDEV},
-    context::Context,
+    config::NOFILE,
     lock::Lock,
     memory_layout::{TRAMPOLINE, TRAPFRAME},
-    process::CPU,
     riscv::paging::{PageTable, PGSIZE, PTE},
     trampoline::trampoline,
 };
 
-use super::{kernel_stack::KernelStackAllocator, trapframe::TrapFrame};
+use super::{
+    context::CPUContext, cpu::forkret, kernel_stack::KernelStackAllocator, trapframe::TrapFrame,
+};
 
 #[derive(Debug)]
 pub enum Process {
@@ -190,7 +190,7 @@ pub struct ProcessContext {
     pub size: usize,
     pub pagetable: PageTable,
     pub trapframe: NonNull<TrapFrame>,
-    pub context: Context,
+    pub context: CPUContext,
     pub ofile: [*mut c_void; NOFILE],
     pub cwd: *mut c_void,
 }
@@ -208,7 +208,7 @@ impl ProcessContext {
 
         let kstack = KernelStackAllocator::get().allocate();
 
-        let mut context = Context::zeroed();
+        let mut context = CPUContext::zeroed();
         context.ra = forkret as u64;
         context.sp = (kstack + PGSIZE) as u64;
 
@@ -260,7 +260,7 @@ impl ProcessContext {
             size: self.size,
             pagetable,
             trapframe,
-            context: Context::zeroed(),
+            context: CPUContext::zeroed(),
             ofile,
             cwd,
         })
@@ -361,31 +361,4 @@ impl Drop for ProcessContext {
             self.cwd = core::ptr::null_mut();
         }
     }
-}
-
-// A fork child's very first scheduling by scheduler()
-// will swtch to forkret.
-extern "C" fn forkret() {
-    static mut FIRST: bool = true;
-
-    let cpu = CPU::get_current();
-    cpu.state.complete_switch();
-
-    if unsafe { FIRST } {
-        // File system initialization must be run in the context of a
-        // regular process (e.g., because it calls sleep), and thus cannot
-        // be run from main().
-        unsafe { FIRST = false };
-
-        extern "C" {
-            fn fsinit(rootdev: usize);
-        }
-        unsafe { fsinit(ROOTDEV) };
-    }
-
-    extern "C" {
-        fn usertrapret();
-    }
-
-    unsafe { usertrapret() }
 }

@@ -7,10 +7,7 @@ use crate::{
     config::MAXARG,
     elf::{ELFHeader, ProgramHeader},
     log::LogGuard,
-    process::{
-        process::{Process, ProcessContext},
-        CPU,
-    },
+    process::{cpu, process::ProcessContext},
     riscv::paging::{pg_roundup, PageTable, PGSIZE},
     vm::binding::copyout,
 };
@@ -49,7 +46,7 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
         todo!(); // bad;
     }
 
-    let current_context = CPU::get_current().process_context().unwrap();
+    let current_context = cpu::current().process_context().unwrap();
     let Ok(mut pagetable) = ProcessContext::allocate_pagetable(current_context.trapframe.addr().get()) else {
         todo!(); // bad;
     };

@@ -4,7 +4,7 @@ use core::{
 };
 
 use crate::{
-    process::CPU,
+    process::cpu,
     riscv::{is_interrupt_enabled, read_reg},
 };
 
@@ -50,7 +50,7 @@ impl Lock for SpinLockC {
 
     unsafe fn raw_lock(&self) {
         // disable interrupts to avoid deadlock.
-        CPU::push_disabling_interrupt();
+        cpu::push_disabling_interrupt();
 
         // 1つのCPUが2度ロックすることはできない
         assert!(!self.is_held_by_current_cpu());
@@ -100,7 +100,7 @@ impl Lock for SpinLockC {
         //   amoswap.w zero, zero, (s1)
         self.locked.store(0, Release);
 
-        CPU::pop_disabling_interrupt();
+        cpu::pop_disabling_interrupt();
     }
 }
 
