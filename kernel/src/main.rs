@@ -72,6 +72,6 @@ pub macro println($fmt:expr, $($arg:tt)*) {
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     use core::fmt::Write;
-    let _ = writeln!(Print, "{:?}", info);
+    let _ = writeln!(Print, "{}", info);
     loop {}
 }

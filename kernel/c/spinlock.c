@@ -12,7 +12,7 @@ void initlock(struct spinlock *lk, char *name)
 {
   lk->name = name;
   lk->locked = 0;
-  lk->cpu = 0;
+  lk->cpuid = 0;
 }
 
 // Acquire the lock.
@@ -37,7 +37,7 @@ void acquire(struct spinlock *lk)
   __sync_synchronize();
 
   // Record info about lock acquisition for holding() and debugging.
-  lk->cpu = mycpu();
+  lk->cpuid = cpuid();
 }
 
 // Release the lock.
@@ -46,7 +46,7 @@ void release(struct spinlock *lk)
   if (!holding(lk))
     panic("release");
 
-  lk->cpu = 0;
+  lk->cpuid = -1;
 
   // Tell the C compiler and the CPU to not move loads or stores
   // past this point, to ensure that all the stores in the critical
@@ -73,7 +73,7 @@ void release(struct spinlock *lk)
 int holding(struct spinlock *lk)
 {
   int r;
-  r = (lk->locked && lk->cpu == mycpu());
+  r = (lk->locked && lk->cpuid == cpuid());
   return r;
 }
 
