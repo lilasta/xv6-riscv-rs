@@ -1,5 +1,6 @@
 pub mod sleep;
 pub mod spin;
+pub mod spin_c;
 
 use core::{
     marker::Destruct,

@@ -105,3 +105,11 @@ impl CPU {
 
 impl !Sync for CPU {}
 impl !Send for CPU {}
+
+pub mod cpu {
+    use crate::riscv::read_reg;
+
+    pub fn id() -> usize {
+        unsafe { read_reg!(tp) as usize }
+    }
+}
