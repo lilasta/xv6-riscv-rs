@@ -51,7 +51,7 @@ impl Console {
     // but not from write().
     //
     pub fn putc(c: u8) {
-        UART::get().putc(c);
+        UART::get().putc_blocking(c);
     }
 
     //
