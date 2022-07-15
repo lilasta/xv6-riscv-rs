@@ -40,7 +40,7 @@ static INITCODE: &[u8] = &[
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
 pub fn scheduler() {
-    let cpu = cpu::current();
+    let mut cpu = cpu::current();
     loop {
         unsafe { enable_interrupt() };
 
@@ -79,11 +79,13 @@ unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> b
     }
 }
 
+#[derive(Debug)]
 pub struct Parent {
     parent_pid: usize,
     child_pid: usize,
 }
 
+#[derive(Debug)]
 pub struct ProcessTable {
     procs: [SpinLock<Process>; NPROC],
     parent_maps: SpinLock<ArrayVec<Parent, NPROC>>,
@@ -236,7 +238,7 @@ impl ProcessTable {
     // Create a new process, copying the parent.
     // Sets up child kernel stack to return as if from fork() system call.
     fn fork(&self) -> Option<usize> {
-        let cpu = cpu::current();
+        let mut cpu = cpu::current();
         let proc = cpu.process().unwrap();
 
         let (pid, name) = {
@@ -261,7 +263,7 @@ impl ProcessTable {
     }
 }
 
-fn launch_init() {
+fn setup_init() {
     extern "C" {
         fn namei(path: *const c_char) -> *mut c_void;
     }
@@ -321,12 +323,18 @@ mod binding {
 
     #[no_mangle]
     unsafe extern "C" fn either_copyout(user_dst: i32, dst: usize, src: usize, len: usize) -> i32 {
-        copyout_either(user_dst != 0, dst, src, len) as i32
+        match copyout_either(user_dst != 0, dst, src, len) {
+            true => 0,
+            false => -1,
+        }
     }
 
     #[no_mangle]
     unsafe extern "C" fn either_copyin(dst: usize, user_src: i32, src: usize, len: usize) -> i32 {
-        copyin_either(dst, user_src != 0, src, len) as i32
+        match copyin_either(dst, user_src != 0, src, len) {
+            true => 0,
+            false => -1,
+        }
     }
 
     // Print a process listing to console.  For debugging.
@@ -353,7 +361,7 @@ mod binding {
 
     #[no_mangle]
     extern "C" fn cpuid() -> i32 {
-        unsafe { read_reg!(tp) as i32 }
+        cpu::id() as _
     }
 
     #[no_mangle]
@@ -366,7 +374,7 @@ mod binding {
 
     #[no_mangle]
     extern "C" fn userinit() {
-        launch_init();
+        setup_init();
     }
 
     #[no_mangle]
@@ -426,85 +434,89 @@ mod binding {
 
     #[no_mangle]
     extern "C" fn glue_pid() -> i32 {
-        cpu::current()
-            .process()
-            .unwrap()
-            .lock()
-            .metadata()
-            .unwrap()
-            .pid as i32
+        unsafe {
+            cpu::without_interrupt(|| cpu::current().process().unwrap())
+                .get()
+                .metadata()
+                .unwrap()
+                .pid as i32
+        }
     }
 
     #[no_mangle]
     extern "C" fn glue_trapframe() -> *mut TrapFrame {
-        cpu::current().process_context().unwrap().trapframe.as_ptr()
+        cpu::without_interrupt(|| cpu::current().process_context().unwrap())
+            .trapframe
+            .as_ptr()
     }
 
     #[no_mangle]
     extern "C" fn glue_size() -> u64 {
-        cpu::current().process_context().unwrap().size as _
+        cpu::without_interrupt(|| cpu::current().process_context().unwrap()).size as _
     }
 
     #[no_mangle]
     extern "C" fn glue_cwd() -> *mut c_void {
-        cpu::current().process_context().unwrap().cwd
+        cpu::without_interrupt(|| cpu::current().process_context().unwrap()).cwd
     }
 
     #[no_mangle]
     extern "C" fn glue_cwd_write(c: *mut c_void) {
-        cpu::current().process_context().unwrap().cwd = c;
+        cpu::without_interrupt(|| cpu::current().process_context().unwrap()).cwd = c;
     }
 
     #[no_mangle]
     extern "C" fn glue_ofile(index: usize) -> *mut c_void {
-        cpu::current().process_context().unwrap().ofile[index]
+        cpu::without_interrupt(|| cpu::current().process_context().unwrap()).ofile[index]
     }
 
     #[no_mangle]
     extern "C" fn glue_ofile_write(index: usize, p: *mut c_void) {
-        cpu::current().process_context().unwrap().ofile[index] = p;
+        cpu::without_interrupt(|| cpu::current().process_context().unwrap()).ofile[index] = p;
     }
 
     #[no_mangle]
     extern "C" fn glue_is_proc_running() -> i32 {
-        cpu::current().process().is_some() as i32
+        cpu::without_interrupt(|| cpu::current().process_context().is_some()) as i32
     }
 
     #[no_mangle]
     extern "C" fn glue_kstack() -> u64 {
-        cpu::current().process_context().unwrap().kstack as u64
+        cpu::without_interrupt(|| cpu::current().process_context().unwrap()).kstack as u64
     }
 
     #[no_mangle]
     extern "C" fn glue_killed() -> i32 {
-        cpu::current()
-            .process()
-            .unwrap()
-            .lock()
-            .metadata()
-            .unwrap()
-            .killed as i32
+        unsafe {
+            cpu::without_interrupt(|| cpu::current().process().unwrap())
+                .get()
+                .metadata()
+                .unwrap()
+                .killed as i32
+        }
     }
 
     #[no_mangle]
     extern "C" fn glue_killed_on() {
-        cpu::current()
-            .process()
-            .unwrap()
-            .lock()
-            .metadata_mut()
-            .unwrap()
-            .killed = true;
+        unsafe {
+            cpu::without_interrupt(|| cpu::current().process().unwrap())
+                .get_mut()
+                .metadata_mut()
+                .unwrap()
+                .killed = true;
+        }
     }
 
     #[no_mangle]
     extern "C" fn glue_pagetable() -> PageTable {
-        cpu::current().process_context().unwrap().pagetable.clone()
+        cpu::without_interrupt(|| cpu::current().process_context().unwrap())
+            .pagetable
+            .clone()
     }
 
     #[no_mangle]
     extern "C" fn glue_pagetable_write(pt: PageTable) {
-        cpu::current().process_context().unwrap().pagetable = pt;
+        cpu::without_interrupt(|| cpu::current().process_context().unwrap()).pagetable = pt;
     }
 
     #[no_mangle]

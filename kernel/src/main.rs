@@ -31,6 +31,8 @@
 #![feature(strict_provenance)]
 #![feature(type_alias_impl_trait)]
 
+use core::ffi::CStr;
+
 mod allocator;
 mod config;
 mod console;
@@ -84,8 +86,22 @@ pub macro cstr($s:literal) {
 }
 
 #[panic_handler]
-unsafe fn panic(info: &core::panic::PanicInfo) -> ! {
+unsafe fn panic_handler(info: &core::panic::PanicInfo) -> ! {
+    extern "C" {
+        fn printf_on_panic();
+    }
+
     use core::fmt::Write;
-    let _ = writeln!(Print, "{:?}", info);
+
+    printf_on_panic();
+    let _ = writeln!(Print, "{}", info);
+    uart::UART::get().set_panicked(true);
+
     loop {}
+}
+
+#[no_mangle]
+unsafe extern "C" fn panic(s: *const i8) {
+    let s = CStr::from_ptr(s);
+    panic!("panic: {}", s.to_str().unwrap_or("C"));
 }

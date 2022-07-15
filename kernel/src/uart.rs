@@ -77,8 +77,6 @@ impl TransmitBuffer {
 
 pub struct UART {
     tx: SpinLock<TransmitBuffer>,
-
-    // from printf.c
     panicked: AtomicBool,
 }
 
@@ -107,6 +105,10 @@ impl UART {
 
     fn is_panicked(&self) -> bool {
         self.panicked.load(Relaxed)
+    }
+
+    pub fn set_panicked(&self, value: bool) {
+        self.panicked.store(value, Release);
     }
 
     fn send<L: Lock<Target = TransmitBuffer>>(&self, mut tx: LockGuard<L>) {

@@ -34,7 +34,7 @@ impl<T> Lock for SleepLock<T> {
     unsafe fn raw_lock(&self) {
         let mut inner = self.inner.lock();
         while inner.locked {
-            let cpu = cpu::current();
+            let mut cpu = cpu::current();
             let token = self.wakeup_token();
             cpu.sleep(token, &mut inner);
         }

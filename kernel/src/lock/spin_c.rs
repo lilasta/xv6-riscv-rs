@@ -33,7 +33,7 @@ impl SpinLockC {
     pub fn is_held_by_current_cpu(&self) -> bool {
         assert!(unsafe { !is_interrupt_enabled() });
 
-        self.is_locked() && self.cpuid.load(Relaxed) == unsafe { read_reg!(tp) as i32 }
+        self.is_locked() && self.cpuid.load(Relaxed) == cpu::id() as _
     }
 }
 
@@ -73,14 +73,14 @@ impl Lock for SpinLockC {
         core::sync::atomic::fence(Acquire);
 
         // Record info about lock acquisition for holding() and debugging.
-        self.cpuid.store(read_reg!(tp) as i32, Release);
+        self.cpuid.store(cpu::id() as i32, Release);
     }
 
     unsafe fn raw_unlock(&self) {
         // 同じCPUによってロックされているかチェック
         assert!(self.is_held_by_current_cpu());
 
-        self.cpuid.store(0, Release);
+        self.cpuid.store(-1, Release);
 
         // Tell the C compiler and the CPU to not move loads or stores
         // past this point, to ensure that all the stores in the critical

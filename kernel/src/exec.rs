@@ -33,7 +33,7 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
     let read = readi(
         ip,
         0,
-        elf.as_ptr() as usize,
+        elf.as_mut_ptr() as usize,
         0,
         core::mem::size_of::<ELFHeader>() as _,
     );
@@ -54,12 +54,12 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
     // Load program into memory.
     let mut sz = 0;
     let mut off = elf.phoff;
-    for i in 0..elf.phnum {
+    for _ in 0..elf.phnum {
         let mut ph: MaybeUninit<ProgramHeader> = MaybeUninit::uninit();
         let read = readi(
             ip,
             0,
-            ph.as_ptr() as usize,
+            ph.as_mut_ptr() as usize,
             off as _,
             core::mem::size_of::<ProgramHeader>() as _,
         );
@@ -82,6 +82,7 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
         let Ok(sz1) = pagetable.grow(sz, ph.vaddr + ph.memsz) else {
             todo!(); // bad;
         };
+        sz = sz1;
 
         if ph.vaddr % PGSIZE != 0 {
             todo!(); // bad;
@@ -175,18 +176,6 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
     // this ends up in a0, the first argument to main(argc, argv)
     argv.len() as i32
 
-    /*
-
-         // Commit to the user image.
-         oldpagetable = glue_pagetable();
-         p->pagetable = pagetable;
-         p->sz = sz;
-         p->trapframe->epc = elf.entry;  // initial program counter = main
-         p->trapframe->sp = sp; // initial stack pointer
-         proc_freepagetable(oldpagetable, oldsz);
-
-         return argc; // this ends up in a0, the first argument to main(argc, argv)
-    */
     /*
     bad:
      if(pagetable)

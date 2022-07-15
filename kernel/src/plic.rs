@@ -2,6 +2,7 @@
 
 use crate::{
     memory_layout::{plic_sclaim, plic_senable, plic_spriority, PLIC, UART0_IRQ, VIRTIO0_IRQ},
+    process::cpu,
     riscv::read_reg,
 };
 
@@ -14,7 +15,7 @@ unsafe extern "C" fn plicinit() {
 
 #[no_mangle]
 unsafe extern "C" fn plicinithart() {
-    let hart = read_reg!(tp);
+    let hart = cpu::id() as u64;
 
     // set uart's enable bit for this hart's S-mode.
     <*mut u32>::from_bits(plic_senable(hart)).write((1 << UART0_IRQ) | (1 << VIRTIO0_IRQ));
@@ -26,14 +27,14 @@ unsafe extern "C" fn plicinithart() {
 // ask the PLIC what interrupt we should serve.
 #[no_mangle]
 unsafe extern "C" fn plic_claim() -> u32 {
-    let hart = read_reg!(tp);
-    let irq = <*mut u32>::from_bits(plic_sclaim(hart)).read();
+    let hart = cpu::id();
+    let irq = <*mut u32>::from_bits(plic_sclaim(hart as u64)).read();
     irq
 }
 
 // tell the PLIC we've served this IRQ.
 #[no_mangle]
 unsafe extern "C" fn plic_complete(irq: u32) {
-    let hart = read_reg!(tp);
-    <*mut u32>::from_bits(plic_sclaim(hart)).write(irq);
+    let hart = cpu::id();
+    <*mut u32>::from_bits(plic_sclaim(hart as u64)).write(irq);
 }
