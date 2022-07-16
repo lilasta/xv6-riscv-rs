@@ -147,3 +147,7 @@ kernel_to_user:
     sret
 "#
 );
+
+extern "C" {
+    pub fn trampoline();
+}

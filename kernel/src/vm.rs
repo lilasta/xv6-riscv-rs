@@ -64,7 +64,7 @@ fn make_pagetable_for_kernel() -> PageTable {
     pagetable
 }
 
-mod binding {
+pub mod binding {
     use core::{arch::riscv64::sfence_vma, ptr::NonNull};
 
     use crate::{
@@ -187,7 +187,10 @@ mod binding {
         old_size: usize,
         new_size: usize,
     ) -> usize {
-        pagetable.grow(old_size, new_size)
+        match pagetable.grow(old_size, new_size) {
+            Ok(sz) => sz,
+            Err(_) => 0,
+        }
     }
 
     #[no_mangle]
@@ -196,7 +199,10 @@ mod binding {
         old_size: usize,
         new_size: usize,
     ) -> usize {
-        pagetable.shrink(old_size, new_size)
+        match pagetable.shrink(old_size, new_size) {
+            Ok(sz) => sz,
+            Err(_) => 0,
+        }
     }
 
     // Free user memory pages,
@@ -221,7 +227,7 @@ mod binding {
     // Copy len bytes from src to virtual address dstva in a given page table.
     // Return 0 on success, -1 on error.
     #[no_mangle]
-    unsafe extern "C" fn copyout(
+    pub unsafe extern "C" fn copyout(
         pagetable: PageTable,
         mut dst_va: usize,
         mut src: usize,

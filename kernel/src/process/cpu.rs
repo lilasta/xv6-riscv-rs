@@ -75,6 +75,10 @@ pub fn current() -> &'static mut CPU {
     unsafe { &mut CPUS[id()] }
 }
 
+pub unsafe fn process() -> &'static mut Process {
+    without_interrupt(|| &mut *current().process)
+}
+
 pub fn push_disabling_interrupt() {
     // TODO: おそらく順序が大事?
     let is_enabled = unsafe { is_interrupt_enabled() };
@@ -122,7 +126,18 @@ pub fn without_interrupt<R>(f: impl FnOnce() -> R) -> R {
 }
 
 mod binding {
+    use crate::{lock::spin_c::SpinLockC, process::ProcessState};
+
     use super::*;
+
+    extern "C" {
+        fn sched();
+    }
+
+    #[no_mangle]
+    extern "C" fn cpuid() -> i32 {
+        id() as i32
+    }
 
     #[no_mangle]
     extern "C" fn mycpu() -> *mut CPU {
@@ -132,5 +147,38 @@ mod binding {
     #[no_mangle]
     extern "C" fn myproc() -> *mut Process {
         without_interrupt(|| current().process)
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn pid() -> usize {
+        (*myproc()).pid as usize
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn sleep(chan: usize, lock: *mut SpinLockC) {
+        let p = myproc();
+
+        // Must acquire p->lock in order to
+        // change p->state and then call sched.
+        // Once we hold p->lock, we can be
+        // guaranteed that we won't miss any wakeup
+        // (wakeup locks p->lock),
+        // so it's okay to release lk.
+
+        let process = (*p).lock.lock();
+        (*lock).raw_unlock();
+
+        // Go to sleep.
+        (*p).chan = chan;
+        (*p).state = ProcessState::Sleeping;
+
+        sched();
+
+        // Tidy up.
+        (*p).chan = 0;
+
+        // Reacquire original lock.
+        Lock::unlock(process);
+        (*lock).raw_lock();
     }
 }
