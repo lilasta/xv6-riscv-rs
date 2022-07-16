@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![allow(dead_code)]
+#![allow(incomplete_features)]
 #![feature(asm_const)]
 #![feature(const_mut_refs)]
 #![feature(const_nonnull_new)]

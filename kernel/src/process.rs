@@ -4,6 +4,7 @@ pub mod trapframe;
 
 use core::ffi::{c_char, c_void};
 
+use crate::vm::binding::{copyin, copyout};
 use crate::{config::NOFILE, context::Context, lock::spin_c::SpinLockC, riscv::paging::PageTable};
 
 use crate::{
@@ -97,6 +98,32 @@ pub fn free_pagetable(mut pagetable: PageTable, size: usize) {
     unsafe { uvmfree(pagetable, size) };
 }
 
+// Copy to either a user address, or kernel address,
+// depending on usr_dst.
+// Returns 0 on success, -1 on error.
+unsafe fn copyout_either(user_dst: bool, dst: usize, src: usize, len: usize) -> bool {
+    let proc_context = cpu::process();
+    if user_dst {
+        copyout(proc_context.pagetable, dst, src, len) == 0
+    } else {
+        core::ptr::copy(<*const u8>::from_bits(src), <*mut u8>::from_bits(dst), len);
+        true
+    }
+}
+
+// Copy from either a user address, or kernel address,
+// depending on usr_src.
+// Returns 0 on success, -1 on error.
+unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> bool {
+    let proc_context = cpu::process();
+    if user_src {
+        copyin(proc_context.pagetable, dst, src, len) == 0
+    } else {
+        core::ptr::copy(<*const u8>::from_bits(src), <*mut u8>::from_bits(dst), len);
+        true
+    }
+}
+
 mod binding {
     use super::*;
 
@@ -111,5 +138,21 @@ mod binding {
     #[no_mangle]
     extern "C" fn proc_freepagetable(pagetable: PageTable, size: usize) {
         free_pagetable(pagetable, size)
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn either_copyout(user_dst: i32, dst: usize, src: usize, len: usize) -> i32 {
+        match copyout_either(user_dst != 0, dst, src, len) {
+            true => 0,
+            false => -1,
+        }
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn either_copyin(dst: usize, user_src: i32, src: usize, len: usize) -> i32 {
+        match copyin_either(dst, user_src != 0, src, len) {
+            true => 0,
+            false => -1,
+        }
     }
 }
