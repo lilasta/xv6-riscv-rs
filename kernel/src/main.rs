@@ -15,6 +15,7 @@
 #![feature(core_ffi_c)]
 #![feature(decl_macro)]
 #![feature(generic_arg_infer)]
+#![feature(inline_const)]
 #![feature(inline_const_pat)]
 #![feature(let_else)]
 #![feature(negative_impls)]

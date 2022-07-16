@@ -11,7 +11,7 @@
 
 use crate::{
     lock::{Lock, LockGuard},
-    process::CPU,
+    process::cpu,
     uart::UART,
 };
 
@@ -128,7 +128,7 @@ impl Console {
                     // wake up consoleread() if a whole line (or end-of-file)
                     // has arrived.
                     self.write_index = self.edit_index;
-                    CPU::get_current().wakeup(&self.read_index as *const _ as usize);
+                    cpu::current().wakeup(&self.read_index as *const _ as usize);
                 }
             }
         }
@@ -156,7 +156,7 @@ impl<'a, L: Lock<Target = Console>> LockGuard<'a, L> {
                         return -1;
                     }
                 }
-                CPU::get_current().sleep(&self.read_index as *const _ as usize, self)
+                cpu::current().sleep(&self.read_index as *const _ as usize, self)
             }
 
             let c = self.buf[self.read_index % Console::INPUT_BUF_LEN];

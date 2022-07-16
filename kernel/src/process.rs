@@ -1,3 +1,5 @@
+pub mod cpu;
+//pub mod table;
 pub mod trapframe;
 
 use core::ffi::{c_char, c_void};
@@ -5,113 +7,14 @@ use core::ffi::{c_char, c_void};
 use crate::{
     config::NOFILE,
     context::Context,
-    lock::{spin_c::SpinLockC, Lock, LockGuard},
-    riscv::{disable_interrupt, enable_interrupt, is_interrupt_enabled, paging::PageTable},
+    lock::{spin_c::SpinLockC, Lock},
+    riscv::paging::PageTable,
 };
 
 use self::trapframe::TrapFrame;
 
-// Per-CPU state.
 #[repr(C)]
-pub struct CPU {
-    // The process running on this cpu, or null.
-    // TODO: *mut Process
-    process: *mut c_void,
-
-    // swtch() here to enter scheduler().
-    context: Context,
-
-    // Depth of push_off() nesting.
-    disable_interrupt_depth: u32,
-
-    // Were interrupts enabled before push_off()?
-    is_interrupt_enabled_before: u32,
-}
-
-impl CPU {
-    // TODO: めっちゃ危ない
-    pub fn get_current() -> &'static mut Self {
-        extern "C" {
-            fn mycpu() -> *mut CPU;
-        }
-
-        assert!(unsafe { !is_interrupt_enabled() });
-        unsafe { &mut *mycpu() }
-    }
-
-    pub fn without_interrupt<R>(f: impl FnOnce() -> R) -> R {
-        Self::push_disabling_interrupt();
-        let ret = f();
-        Self::pop_disabling_interrupt();
-        ret
-    }
-
-    pub fn push_disabling_interrupt() {
-        // TODO: おそらく順序が大事?
-        let is_enabled = unsafe { is_interrupt_enabled() };
-
-        unsafe {
-            disable_interrupt();
-        }
-
-        let cpu = Self::get_current();
-
-        if cpu.disable_interrupt_depth == 0 {
-            cpu.is_interrupt_enabled_before = is_enabled as u32;
-        }
-
-        cpu.disable_interrupt_depth += 1;
-    }
-
-    pub fn pop_disabling_interrupt() {
-        assert!(
-            unsafe { !is_interrupt_enabled() },
-            "pop_disabling_interrupt: interruptible"
-        );
-
-        let cpu = CPU::get_current();
-
-        assert!(
-            cpu.disable_interrupt_depth > 0,
-            "pop_disabling_interrupt: not pushed before"
-        );
-
-        cpu.disable_interrupt_depth -= 1;
-
-        if cpu.disable_interrupt_depth == 0 {
-            if cpu.is_interrupt_enabled_before == 1 {
-                unsafe { enable_interrupt() }
-            }
-        }
-    }
-
-    pub fn sleep<L: Lock>(&self, wakeup_token: usize, guard: &mut LockGuard<L>) {
-        let lock = L::get_lock_ref(guard);
-        extern "C" {
-            fn sleep_binding1();
-            fn sleep_binding2(chan: *const c_void);
-        }
-        unsafe {
-            sleep_binding1();
-            core::ptr::drop_in_place(guard);
-            sleep_binding2(wakeup_token as *const _);
-        }
-        unsafe { core::ptr::write(guard, lock.lock()) };
-    }
-
-    pub fn wakeup(&self, token: usize) {
-        extern "C" {
-            fn wakeup(chan: *const c_void);
-        }
-
-        unsafe { wakeup(token as *const _) };
-    }
-}
-
-impl !Sync for CPU {}
-impl !Send for CPU {}
-
-#[repr(C)]
+#[derive(Debug)]
 pub enum ProcessState {
     Unused,
     USed,
@@ -123,6 +26,7 @@ pub enum ProcessState {
 
 // Per-process state
 #[repr(C)]
+#[derive(Debug)]
 pub struct Process {
     lock: SpinLockC,
 
@@ -147,20 +51,22 @@ pub struct Process {
     name: [c_char; 16],           // Process name (debugging)
 }
 
-pub mod cpu {
-    use crate::riscv::read_reg;
-
-    pub fn id() -> usize {
-        unsafe { read_reg!(tp) as usize }
-    }
-}
-
 mod binding {
     use super::*;
 
     extern "C" {
         fn myproc() -> *mut Process;
         fn sched();
+    }
+
+    #[no_mangle]
+    extern "C" fn cpuid() -> i32 {
+        cpu::id() as i32
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn pid() -> usize {
+        (*myproc()).pid as usize
     }
 
     #[no_mangle]
@@ -174,7 +80,7 @@ mod binding {
         // (wakeup locks p->lock),
         // so it's okay to release lk.
 
-        (*p).lock.raw_lock(); //DOC: sleeplock1
+        let process = (*p).lock.lock();
         (*lock).raw_unlock();
 
         // Go to sleep.
@@ -187,7 +93,7 @@ mod binding {
         (*p).chan = 0;
 
         // Reacquire original lock.
-        (*p).lock.raw_unlock();
+        Lock::unlock(process);
         (*lock).raw_lock();
     }
 }
