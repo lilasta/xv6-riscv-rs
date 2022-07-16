@@ -20,7 +20,6 @@ const SRCS: &[&str] = &[
     "sleeplock.c",
     "file.c",
     "pipe.c",
-    "exec.c",
     "sysfile.c",
     "virtio_disk.c",
 ];
