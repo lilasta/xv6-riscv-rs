@@ -6,6 +6,7 @@ use core::{
 use crate::{
     config::MAXARG,
     elf::{ELFHeader, ProgramHeader},
+    fs::InodeLockGuard,
     log::LogGuard,
     process::{allocate_pagetable, cpu, free_pagetable},
     riscv::paging::{pg_roundup, PageTable, PGSIZE},
@@ -15,8 +16,6 @@ use crate::{
 extern "C" {
     fn namei(path: *const c_char) -> *mut c_void;
     fn readi(ip: *mut c_void, user_dst: i32, dst: usize, off: u32, n: u32) -> i32;
-    fn ilock(ip: *mut c_void);
-    fn iunlockput(ip: *mut c_void);
 }
 
 pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
@@ -26,30 +25,35 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
     if ip.is_null() {
         return -1;
     }
-    ilock(ip);
+    let ip = InodeLockGuard::new(ip);
 
     let mut elf: MaybeUninit<ELFHeader> = MaybeUninit::uninit();
     // Check ELF header
     let read = readi(
-        ip,
+        *ip,
         0,
         elf.as_mut_ptr() as usize,
         0,
         core::mem::size_of::<ELFHeader>() as _,
     );
     if read as usize != core::mem::size_of::<ELFHeader>() {
-        todo!(); // bad;
+        return -1;
     }
 
     let elf = elf.assume_init();
     if !elf.validate_magic() {
-        todo!(); // bad;
+        return -1;
     }
 
     let current_context = cpu::process();
     let Ok(mut pagetable) = allocate_pagetable(current_context.trapframe.addr()) else {
-		 todo!(); // bad;
-	};
+        return -1;
+    };
+
+    macro bad($sz:ident) {{
+        free_pagetable(pagetable, $sz);
+        return -1;
+    }}
 
     // Load program into memory.
     let mut sz = 0;
@@ -57,14 +61,14 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
     for _ in 0..elf.phnum {
         let mut ph: MaybeUninit<ProgramHeader> = MaybeUninit::uninit();
         let read = readi(
-            ip,
+            *ip,
             0,
             ph.as_mut_ptr() as usize,
             off as _,
             core::mem::size_of::<ProgramHeader>() as _,
         );
         if read as usize != core::mem::size_of::<ProgramHeader>() {
-            todo!(); // bad;
+            bad!(sz);
         }
         let ph = ph.assume_init();
         if ph.kind != ProgramHeader::KIND_LOAD {
@@ -72,29 +76,29 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
         }
 
         if ph.memsz < ph.filesz {
-            todo!(); // bad;
+            bad!(sz);
         }
 
         if ph.vaddr + ph.memsz < ph.vaddr {
-            todo!(); // bad;
+            bad!(sz);
         }
 
-        let Ok(sz1) = pagetable.grow(sz, ph.vaddr + ph.memsz) else {
-			  todo!(); // bad;
-		 };
-        sz = sz1;
+        match pagetable.grow(sz, ph.vaddr + ph.memsz) {
+            Ok(new_size) => sz = new_size,
+            Err(_) => bad!(sz),
+        }
 
         if ph.vaddr % PGSIZE != 0 {
-            todo!(); // bad;
+            bad!(sz);
         }
 
-        if !load_seg(&mut pagetable, ph.vaddr, ip, ph.off, ph.filesz) {
-            todo!(); // bad;
+        if !load_seg(&mut pagetable, ph.vaddr, *ip, ph.off, ph.filesz) {
+            bad!(sz);
         }
 
         off += core::mem::size_of::<ProgramHeader>();
     }
-    iunlockput(ip);
+    drop(ip);
     drop(_logguard);
 
     let oldsz = current_context.sz;
@@ -103,8 +107,8 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
     // Use the second as the user stack.
     let sz = pg_roundup(sz);
     let Ok(sz1) = pagetable.grow(sz, sz + 2 * PGSIZE) else {
-		 todo!(); // bad;
-	};
+        bad!(sz);
+    };
     let sz = sz1;
     pagetable
         .search_entry(sz - 2 * PGSIZE, false)
@@ -118,20 +122,20 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
     let argv = ptr_to_slice(argv);
     for (i, arg) in argv.iter().map(|arg| CStr::from_ptr(*arg)).enumerate() {
         if i >= MAXARG {
-            todo!(); // bad;
+            bad!(sz);
         }
 
-        let len = arg.to_bytes().len();
+        let len = arg.to_bytes().len() + 1;
 
         sp -= len;
         sp -= sp % 16; // riscv sp must be 16-byte aligned
 
         if sp < stackbase {
-            todo!(); // bad;
+            bad!(sz);
         }
 
         if copyout(pagetable, sp, arg.as_ptr() as usize, len) < 0 {
-            todo!(); // bad;
+            bad!(sz);
         }
 
         ustack[i] = sp;
@@ -143,7 +147,7 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
     sp -= sp % 16;
 
     if sp < stackbase {
-        todo!(); // bad;
+        bad!(sz);
     }
 
     if copyout(
@@ -153,7 +157,7 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
         (argv.len() + 1) * core::mem::size_of::<usize>(),
     ) < 0
     {
-        todo!(); // bad;
+        bad!(sz);
     }
 
     // arguments to user main(argc, argv)
@@ -175,17 +179,6 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
 
     // this ends up in a0, the first argument to main(argc, argv)
     argv.len() as i32
-
-    /*
-    bad:
-     if(pagetable)
-        proc_freepagetable(pagetable, sz);
-     if(ip){
-        iunlockput(ip);
-        end_op();
-     }
-     return -1;
-        */
 }
 
 unsafe fn ptr_to_slice<'a, T>(start: *const *const T) -> &'a [*const T] {
@@ -193,9 +186,7 @@ unsafe fn ptr_to_slice<'a, T>(start: *const *const T) -> &'a [*const T] {
     while !(*ptr).is_null() {
         ptr = ptr.offset(1);
     }
-    let end = ptr.sub(1);
-
-    core::slice::from_ptr_range(start..end)
+    core::slice::from_ptr_range(start..ptr)
 }
 
 fn load_seg(
