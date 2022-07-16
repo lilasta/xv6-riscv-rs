@@ -259,7 +259,7 @@ pub mod binding {
     // Copy len bytes to dst from virtual address srcva in a given page table.
     // Return 0 on success, -1 on error.
     #[no_mangle]
-    unsafe extern "C" fn copyin(
+    pub unsafe extern "C" fn copyin(
         pagetable: PageTable,
         mut dst: usize,
         mut src_va: usize,
