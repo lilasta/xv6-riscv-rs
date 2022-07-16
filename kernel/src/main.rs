@@ -36,6 +36,7 @@ mod elf;
 mod entry;
 mod exec;
 mod file;
+mod fs;
 mod kernelvec;
 mod lock;
 mod log;
