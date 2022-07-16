@@ -219,7 +219,7 @@ mod binding {
     use super::*;
 
     #[no_mangle]
-    unsafe extern "C" fn _exec(path: *const c_char, argv: *const *const c_char) -> i32 {
+    unsafe extern "C" fn exec(path: *const c_char, argv: *const *const c_char) -> i32 {
         execute(path, argv)
     }
 

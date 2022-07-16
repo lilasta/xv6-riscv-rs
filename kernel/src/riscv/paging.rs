@@ -276,7 +276,7 @@ impl PageTable {
             // https://github.com/rust-lang/rust/issues/93883
             let mem = KernelAllocator::get().lock().allocate_page();
             let Some(mem) = mem else {
-                self.shrink(a, old_size);
+                self.shrink(a, old_size).unwrap();
                 return Err(());
             };
 
@@ -293,7 +293,7 @@ impl PageTable {
 
             if result.is_err() {
                 KernelAllocator::get().lock().deallocate_page(mem);
-                self.shrink(a, old_size);
+                self.shrink(a, old_size).unwrap();
                 return Err(());
             }
         }
