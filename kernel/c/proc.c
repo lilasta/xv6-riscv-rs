@@ -10,10 +10,10 @@ struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
 
-struct proc *initproc;
-
 int nextpid = 1;
 struct spinlock pid_lock;
+
+struct proc *initproc;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
@@ -25,6 +25,18 @@ extern char trampoline[]; // trampoline.S
 // memory model when using p->parent.
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
+
+int
+allocpid() {
+  int pid;
+  
+  acquire(&pid_lock);
+  pid = nextpid;
+  nextpid = nextpid + 1;
+  release(&pid_lock);
+
+  return pid;
+}
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -48,7 +60,6 @@ procinit(void)
 {
   struct proc *p;
   
-  initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
@@ -56,55 +67,8 @@ procinit(void)
   }
 }
 
-// Must be called with interrupts disabled,
-// to prevent race with process being moved
-// to a different CPU.
-int
-cpuid()
-{
-  int id = r_tp();
-  return id;
-}
-
-uint64
-pid()
-{
-  return myproc()->pid;
-}
-
-// Return this CPU's cpu struct.
-// Interrupts must be disabled.
-struct cpu*
-mycpu(void) {
-  int id = cpuid();
-  struct cpu *c = &cpus[id];
-  return c;
-}
-
-// Return the current struct proc *, or zero if none.
-struct proc*
-myproc(void) {
-  push_off();
-  struct cpu *c = mycpu();
-  struct proc *p = c->proc;
-  pop_off();
-  return p;
-}
-
 int is_myproc_killed_glue(void) {
   return myproc()->killed;
-}
-
-int
-allocpid() {
-  int pid;
-  
-  acquire(&pid_lock);
-  pid = nextpid;
-  nextpid = nextpid + 1;
-  release(&pid_lock);
-
-  return pid;
 }
 
 // Look in the process table for an UNUSED proc.

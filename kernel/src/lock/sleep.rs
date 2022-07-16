@@ -1,13 +1,15 @@
-use crate::process::CPU;
+use crate::process::cpu;
 
 use super::{spin::SpinLock, Lock};
 
+#[derive(Debug)]
 struct Inner<T> {
     pub locked: bool,
     pub value: T,
     pub pid: u64,
 }
 
+#[derive(Debug)]
 pub struct SleepLock<T> {
     inner: SpinLock<Inner<T>>,
 }
@@ -32,7 +34,7 @@ impl<T> Lock for SleepLock<T> {
     unsafe fn raw_lock(&self) {
         let mut inner = self.inner.lock();
         while inner.locked {
-            let cpu = CPU::get_current();
+            let cpu = cpu::current();
             let token = self.wakeup_token();
             cpu.sleep(token, &mut inner);
         }
@@ -52,7 +54,7 @@ impl<T> Lock for SleepLock<T> {
         inner.locked = false;
         inner.pid = 0;
 
-        let cpu = CPU::get_current();
+        let cpu = cpu::current();
         let token = self.wakeup_token();
         cpu.wakeup(token);
 

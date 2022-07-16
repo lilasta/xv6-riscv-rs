@@ -8,7 +8,7 @@ use core::{
 use crate::{
     lock::{spin::SpinLock, Lock, LockGuard},
     memory_layout::UART0,
-    process::CPU,
+    process::cpu,
 };
 
 mod reg {
@@ -112,7 +112,7 @@ impl UART {
     fn send<L: Lock<Target = TransmitBuffer>>(&self, mut tx: LockGuard<L>) {
         use reg::*;
 
-        let cpu = CPU::get_current();
+        let cpu = cpu::current();
 
         loop {
             if tx.w == tx.r {
@@ -182,7 +182,7 @@ impl UART {
             loop {}
         }
 
-        let cpu = CPU::get_current();
+        let cpu = cpu::current();
 
         loop {
             if tx.is_full() {
@@ -204,7 +204,7 @@ impl UART {
     pub fn putc_blocking(&self, c: u8) {
         use reg::*;
 
-        CPU::without_interrupt(|| {
+        cpu::without_interrupt(|| {
             if self.is_panicked() {
                 loop {}
             }

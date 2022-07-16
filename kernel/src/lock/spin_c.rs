@@ -3,14 +3,12 @@ use core::{
     sync::atomic::{AtomicI32, AtomicU32, Ordering::*},
 };
 
-use crate::{
-    process::{cpu, CPU},
-    riscv::is_interrupt_enabled,
-};
+use crate::{process::cpu, riscv::is_interrupt_enabled};
 
 use super::Lock;
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct SpinLockC {
     locked: AtomicU32,
     name: *mut c_void,
@@ -50,7 +48,7 @@ impl Lock for SpinLockC {
 
     unsafe fn raw_lock(&self) {
         // disable interrupts to avoid deadlock.
-        CPU::push_disabling_interrupt();
+        cpu::push_disabling_interrupt();
 
         // 1つのCPUが2度ロックすることはできない
         assert!(!self.is_held_by_current_cpu());
@@ -100,7 +98,7 @@ impl Lock for SpinLockC {
         //   amoswap.w zero, zero, (s1)
         self.locked.store(0, Release);
 
-        CPU::pop_disabling_interrupt();
+        cpu::pop_disabling_interrupt();
     }
 }
 

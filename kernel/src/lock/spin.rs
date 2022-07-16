@@ -3,10 +3,14 @@ use core::{
     sync::atomic::{AtomicBool, AtomicPtr, Ordering::*},
 };
 
-use crate::{process::CPU, riscv::is_interrupt_enabled};
+use crate::{
+    process::cpu::{self, CPU},
+    riscv::is_interrupt_enabled,
+};
 
 use super::Lock;
 
+#[derive(Debug)]
 pub struct SpinLock<T> {
     locked: AtomicBool,
     value: UnsafeCell<T>,
@@ -31,7 +35,7 @@ impl<T> SpinLock<T> {
 
         // TODO: Orderingは正しいのか?
         let cpu_addr_saved = self.cpu.load(Acquire);
-        let cpu_addr_current = CPU::get_current();
+        let cpu_addr_current = cpu::current();
         self.is_locked() && cpu_addr_saved == cpu_addr_current
     }
 }
@@ -49,7 +53,7 @@ impl<T> Lock for SpinLock<T> {
 
     unsafe fn raw_lock(&self) {
         // disable interrupts to avoid deadlock.
-        CPU::push_disabling_interrupt();
+        cpu::push_disabling_interrupt();
 
         // 1つのCPUが2度ロックすることはできない
         assert!(!self.is_held_by_current_cpu());
@@ -72,7 +76,7 @@ impl<T> Lock for SpinLock<T> {
         core::sync::atomic::fence(Acquire);
 
         // Record info about lock acquisition for holding() and debugging.
-        self.cpu.store(CPU::get_current(), Release);
+        self.cpu.store(cpu::current(), Release);
     }
 
     unsafe fn raw_unlock(&self) {
@@ -99,7 +103,7 @@ impl<T> Lock for SpinLock<T> {
         //   amoswap.w zero, zero, (s1)
         self.locked.store(false, Release);
 
-        CPU::pop_disabling_interrupt();
+        cpu::pop_disabling_interrupt();
     }
 }
 

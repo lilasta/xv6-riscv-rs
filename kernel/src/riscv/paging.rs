@@ -116,6 +116,7 @@ impl PTE {
 }
 
 #[repr(transparent)]
+#[derive(Debug)]
 pub struct PageTable(NonNull<PTE>);
 
 impl PageTable {
