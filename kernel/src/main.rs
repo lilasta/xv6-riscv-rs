@@ -12,6 +12,7 @@
 #![feature(const_slice_index)]
 #![feature(const_trait_impl)]
 #![feature(const_try)]
+#![feature(core_c_str)]
 #![feature(core_ffi_c)]
 #![feature(decl_macro)]
 #![feature(generic_arg_infer)]
@@ -22,6 +23,7 @@
 #![feature(nonnull_slice_from_raw_parts)]
 #![feature(nonzero_ops)]
 #![feature(ptr_to_from_bits)]
+#![feature(slice_from_ptr_range)]
 #![feature(slice_ptr_get)]
 #![feature(stdsimd)]
 #![feature(strict_provenance)]
@@ -30,10 +32,13 @@ mod allocator;
 mod config;
 mod console;
 mod context;
+mod elf;
 mod entry;
+mod exec;
 mod file;
 mod kernelvec;
 mod lock;
+mod log;
 mod memory_layout;
 mod plic;
 mod process;
