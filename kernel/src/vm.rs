@@ -69,7 +69,6 @@ pub mod binding {
 
     use crate::{
         allocator::KernelAllocator,
-        lock::Lock,
         riscv::{
             paging::{pg_rounddown, pg_roundup},
             satp::make_satp,
@@ -158,7 +157,7 @@ pub mod binding {
     unsafe extern "C" fn uvminit(mut pagetable: PageTable, src: *mut u8, size: usize) {
         assert!(size < PGSIZE);
 
-        let mem: NonNull<u8> = KernelAllocator::get().lock().allocate().unwrap();
+        let mem: NonNull<u8> = KernelAllocator::get().allocate().unwrap();
         core::ptr::write_bytes(mem.as_ptr(), 0, PGSIZE);
 
         pagetable

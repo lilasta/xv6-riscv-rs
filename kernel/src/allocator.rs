@@ -5,7 +5,7 @@
 use core::ptr::NonNull;
 
 use crate::{
-    lock::spin::SpinLock,
+    lock::{spin::SpinLock, Lock, LockGuard},
     memory_layout::{symbol_addr, PHYSTOP},
     riscv::paging::{pg_roundup, PGSIZE},
 };
@@ -24,9 +24,9 @@ impl KernelAllocator {
     }
 
     // Singleton
-    pub fn get() -> &'static SpinLock<Self> {
+    pub fn get() -> LockGuard<'static, SpinLock<KernelAllocator>> {
         static mut ALLOCATOR: SpinLock<KernelAllocator> = SpinLock::new(KernelAllocator::uninit());
-        unsafe { &ALLOCATOR }
+        unsafe { ALLOCATOR.lock() }
     }
 
     pub const fn is_initialized(&self) -> bool {
@@ -102,23 +102,21 @@ impl KernelAllocator {
 }
 
 mod binding {
-    use crate::lock::Lock;
-
     use super::*;
 
     #[no_mangle]
     unsafe extern "C" fn kinit() {
-        KernelAllocator::get().lock().initialize();
+        KernelAllocator::get().initialize();
     }
 
     #[no_mangle]
     unsafe extern "C" fn kfree(pa: NonNull<u8>) {
-        KernelAllocator::get().lock().deallocate_page(pa);
+        KernelAllocator::get().deallocate_page(pa);
     }
 
     #[no_mangle]
     unsafe extern "C" fn kalloc() -> usize {
-        match KernelAllocator::get().lock().allocate_page() {
+        match KernelAllocator::get().allocate_page() {
             Some(ptr) => ptr.addr().get(),
             None => 0,
         }

@@ -16,7 +16,7 @@ struct spinlock pid_lock;
 struct proc *initproc;
 
 extern void forkret(void);
-static void freeproc(struct proc *p);
+extern void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
 
@@ -71,10 +71,9 @@ int is_myproc_killed_glue(void) {
   return myproc()->killed;
 }
 
-// Look in the process table for an UNUSED proc.
-// If found, initialize state required to run in the kernel,
-// and return with p->lock held.
-// If there are no free procs, or a memory allocation fails, return 0.
+extern void
+allocproc2(struct proc *p);
+
 static struct proc*
 allocproc(void)
 {
@@ -91,53 +90,13 @@ allocproc(void)
   return 0;
 
 found:
-  p->pid = allocpid();
-  p->state = USED;
-
-  // Allocate a trapframe page.
-  if((p->trapframe = (struct trapframe *)kalloc()) == 0){
-    freeproc(p);
-    release(&p->lock);
+  allocproc2(p);
+  
+  if (p->state == USED) {
+    return p;
+  } else {
     return 0;
   }
-
-  // An empty user page table.
-  p->pagetable = proc_pagetable(p->trapframe);
-  if(p->pagetable == 0){
-    freeproc(p);
-    release(&p->lock);
-    return 0;
-  }
-
-  // Set up new context to start executing at forkret,
-  // which returns to user space.
-  memset(&p->context, 0, sizeof(p->context));
-  p->context.ra = (uint64)forkret;
-  p->context.sp = p->kstack + PGSIZE;
-
-  return p;
-}
-
-// free a proc structure and the data hanging from it,
-// including user pages.
-// p->lock must be held.
-static void
-freeproc(struct proc *p)
-{
-  if(p->trapframe)
-    kfree((void*)p->trapframe);
-  p->trapframe = 0;
-  if(p->pagetable)
-    proc_freepagetable(p->pagetable, p->sz);
-  p->pagetable = 0;
-  p->sz = 0;
-  p->pid = 0;
-  p->parent = 0;
-  p->name[0] = 0;
-  p->chan = 0;
-  p->killed = 0;
-  p->xstate = 0;
-  p->state = UNUSED;
 }
 
 // a user program that calls exec("/init")
