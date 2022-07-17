@@ -4,17 +4,16 @@
 		{
 			"type": "gdb",
 			"request": "attach",
-			"name": "Attach to gdbserver",
+			"name": "GDB",
 			"executable": "${workspaceFolder}/xv6/kernel/kernel",
 			"target": ":26000",
 			"remote": true,
 			"cwd": "${workspaceRoot}",
 			"valuesFormatting": "parseText",
-			"gdbpath": "riscv64-elf-gdb",
-			"debugger_args": [
-				"--init-eval-command=set riscv use-compressed-breakpoints yes",
-				"--init-eval-command=set mi-async yes"
-			]
+			"gdbpath": "rust-gdb",
+			"env": {
+				"RUST_GDB": "riscv64-elf-gdb",
+			}
 		}
 	]
 }
