@@ -1,6 +1,6 @@
 use core::ptr::NonNull;
 
-use crate::{allocator::KernelAllocator, lock::Lock};
+use crate::allocator::KernelAllocator;
 
 // bytes per page
 pub const PGSIZE: usize = 4096;
@@ -123,7 +123,7 @@ impl PageTable {
     pub const LEN: usize = 512;
 
     pub fn allocate() -> Result<Self, ()> {
-        let ptr: NonNull<PTE> = KernelAllocator::get().lock().allocate().ok_or(())?;
+        let ptr: NonNull<PTE> = KernelAllocator::get().allocate().ok_or(())?;
         let this = Self::from_ptr(ptr);
         this.clear();
         Ok(this)
@@ -146,7 +146,7 @@ impl PageTable {
                 pte.clear();
             }
         }
-        KernelAllocator::get().lock().deallocate_page(self.0.cast());
+        KernelAllocator::get().deallocate_page(self.0.cast());
     }
 
     pub fn copy(&self, mut to: Self, size: usize) -> Result<(), ()> {
@@ -154,7 +154,7 @@ impl PageTable {
             let pte = self.search_entry(i, false).unwrap();
             assert!(pte.is_valid());
 
-            let mem = match KernelAllocator::get().lock().allocate_page() {
+            let mem = match KernelAllocator::get().allocate_page() {
                 Some(mem) => mem,
                 None => {
                     to.unmap(0, i / PGSIZE, true);
@@ -168,7 +168,7 @@ impl PageTable {
             unsafe { core::ptr::copy(<*const u8>::from_bits(pa), mem.as_ptr(), PGSIZE) };
 
             if let Err(_) = to.map(i, mem.addr().get(), PGSIZE, flags) {
-                KernelAllocator::get().lock().deallocate_page(mem);
+                KernelAllocator::get().deallocate_page(mem);
                 to.unmap(0, i / PGSIZE, true);
                 return Err(());
             }
@@ -254,7 +254,7 @@ impl PageTable {
                 let ptr = pte.get_physical_addr();
                 let ptr = <*mut _>::from_bits(ptr);
                 let ptr = NonNull::new(ptr).unwrap();
-                KernelAllocator::get().lock().deallocate_page(ptr);
+                KernelAllocator::get().deallocate_page(ptr);
             }
 
             pte.clear();
@@ -274,7 +274,7 @@ impl PageTable {
             // TODO: Rustの仕様
             // https://github.com/rust-lang/rust/issues/87335#issuecomment-1169479987
             // https://github.com/rust-lang/rust/issues/93883
-            let mem = KernelAllocator::get().lock().allocate_page();
+            let mem = KernelAllocator::get().allocate_page();
             let Some(mem) = mem else {
                 self.shrink(a, old_size).unwrap();
                 return Err(());
@@ -292,7 +292,7 @@ impl PageTable {
             );
 
             if result.is_err() {
-                KernelAllocator::get().lock().deallocate_page(mem);
+                KernelAllocator::get().deallocate_page(mem);
                 self.shrink(a, old_size).unwrap();
                 return Err(());
             }

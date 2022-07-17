@@ -3,7 +3,9 @@ pub mod cpu;
 pub mod trapframe;
 
 use core::ffi::{c_char, c_void};
+use core::ptr::NonNull;
 
+use crate::allocator::KernelAllocator;
 use crate::vm::binding::{copyin, copyout};
 use crate::{config::NOFILE, context::Context, lock::spin_c::SpinLockC, riscv::paging::PageTable};
 
@@ -19,7 +21,7 @@ use self::trapframe::TrapFrame;
 #[derive(Debug)]
 pub enum ProcessState {
     Unused,
-    USed,
+    Used,
     Sleeping,
     Runnable,
     Running,
@@ -51,6 +53,69 @@ pub struct Process {
     pub ofile: [*mut c_void; NOFILE], // Open files
     pub cwd: *mut c_void,             // Current directory
     pub name: [c_char; 16],           // Process name (debugging)
+}
+
+impl Process {
+    // Look in the process table for an UNUSED proc.
+    // If found, initialize state required to run in the kernel,
+    // and return with p->lock held.
+    // If there are no free procs, or a memory allocation fails, return 0.
+    pub unsafe fn allocate(&mut self) {
+        extern "C" {
+            fn allocpid() -> i32;
+            fn forkret();
+        }
+
+        self.pid = allocpid();
+        self.state = ProcessState::Used;
+
+        // Allocate a trapframe page.
+        match KernelAllocator::get().allocate() {
+            Some(trapframe) => self.trapframe = trapframe.as_ptr(),
+            None => {
+                self.deallocate();
+                return;
+            }
+        }
+
+        // An empty user page table.
+        match allocate_pagetable(self.trapframe.addr()) {
+            Ok(pagetable) => self.pagetable = pagetable,
+            Err(_) => {
+                self.deallocate();
+                return;
+            }
+        }
+
+        // Set up new context to start executing at forkret,
+        // which returns to user space.
+        self.context = Context::zeroed();
+        self.context.ra = forkret as u64;
+        self.context.sp = (self.kstack + PGSIZE) as u64;
+    }
+
+    // free a proc structure and the data hanging from it,
+    // including user pages.
+    // p->lock must be held.
+    pub unsafe fn deallocate(&mut self) {
+        if !self.trapframe.is_null() {
+            KernelAllocator::get().deallocate(NonNull::new_unchecked(self.trapframe));
+            self.trapframe = core::ptr::null_mut();
+        }
+
+        if !self.pagetable.as_ptr().is_null() {
+            free_pagetable(self.pagetable, self.sz);
+        }
+
+        self.sz = 0;
+        self.pid = 0;
+        self.parent = core::ptr::null_mut();
+        self.name[0] = 0;
+        self.chan = 0;
+        self.killed = 0;
+        self.xstate = 0;
+        self.state = ProcessState::Unused;
+    }
 }
 
 pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
@@ -126,6 +191,16 @@ unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> b
 
 mod binding {
     use super::*;
+
+    #[no_mangle]
+    unsafe extern "C" fn allocproc2(p: *mut Process) {
+        (*p).allocate();
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn freeproc(p: *mut Process) {
+        (*p).deallocate();
+    }
 
     #[no_mangle]
     extern "C" fn proc_pagetable(trapframe: usize) -> u64 {
