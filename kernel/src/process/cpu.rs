@@ -4,6 +4,7 @@ use crate::{
     config::NCPU,
     context::Context,
     lock::{Lock, LockGuard},
+    process::ProcessState,
     riscv::{disable_interrupt, enable_interrupt, is_interrupt_enabled, read_reg},
 };
 
@@ -37,17 +38,36 @@ impl CPU {
     }
 
     pub fn sleep<L: Lock>(&self, wakeup_token: usize, guard: &mut LockGuard<L>) {
-        let lock = L::get_lock_ref(guard);
-        extern "C" {
-            fn sleep_binding1();
-            fn sleep_binding2(chan: *const c_void);
-        }
         unsafe {
-            sleep_binding1();
-            core::ptr::drop_in_place(guard);
-            sleep_binding2(wakeup_token as *const _);
+            let p = self.process;
+
+            // Must acquire p->lock in order to
+            // change p->state and then call sched.
+            // Once we hold p->lock, we can be
+            // guaranteed that we won't miss any wakeup
+            // (wakeup locks p->lock),
+            // so it's okay to release lk.
+
+            let process = (*p).lock.lock();
+            (*L::get_lock_ref(guard)).raw_unlock();
+
+            // Go to sleep.
+            (*p).chan = wakeup_token;
+            (*p).state = ProcessState::Sleeping;
+
+            extern "C" {
+                fn sched();
+            }
+
+            sched();
+
+            // Tidy up.
+            (*p).chan = 0;
+
+            // Reacquire original lock.
+            Lock::unlock(process);
+            (*L::get_lock_ref(guard)).raw_lock();
         }
-        unsafe { core::ptr::write(guard, lock.lock()) };
     }
 
     pub fn wakeup(&self, token: usize) {
@@ -126,13 +146,9 @@ pub fn without_interrupt<R>(f: impl FnOnce() -> R) -> R {
 }
 
 mod binding {
-    use crate::{lock::spin_c::SpinLockC, process::ProcessState};
+    use crate::lock::spin_c::SpinLockC;
 
     use super::*;
-
-    extern "C" {
-        fn sched();
-    }
 
     #[no_mangle]
     extern "C" fn cpuid() -> i32 {
@@ -156,29 +172,8 @@ mod binding {
 
     #[no_mangle]
     unsafe extern "C" fn sleep(chan: usize, lock: *mut SpinLockC) {
-        let p = myproc();
-
-        // Must acquire p->lock in order to
-        // change p->state and then call sched.
-        // Once we hold p->lock, we can be
-        // guaranteed that we won't miss any wakeup
-        // (wakeup locks p->lock),
-        // so it's okay to release lk.
-
-        let process = (*p).lock.lock();
-        (*lock).raw_unlock();
-
-        // Go to sleep.
-        (*p).chan = chan;
-        (*p).state = ProcessState::Sleeping;
-
-        sched();
-
-        // Tidy up.
-        (*p).chan = 0;
-
-        // Reacquire original lock.
-        Lock::unlock(process);
-        (*lock).raw_lock();
+        let mut guard = LockGuard::new(&mut *lock);
+        current().sleep(chan, &mut guard);
+        core::mem::forget(guard);
     }
 }
