@@ -30,6 +30,7 @@ const CFLAGS: &[&'static str] = &[
     "-O",
     "-fno-omit-frame-pointer",
     "-ggdb",
+    "-gdwarf-2",
     "-MD",
     "-mcmodel=medany",
     "-ffreestanding",
