@@ -20,6 +20,7 @@
 #![feature(inline_const)]
 #![feature(inline_const_pat)]
 #![feature(let_else)]
+#![feature(mixed_integer_ops)]
 #![feature(negative_impls)]
 #![feature(nonnull_slice_from_raw_parts)]
 #![feature(nonzero_ops)]
