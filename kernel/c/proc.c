@@ -454,39 +454,6 @@ forkret(void)
   usertrapret();
 }
 
-void
-sleep_binding1(void)
-{
-  struct proc *p = myproc();
-
-  // Must acquire p->lock in order to
-  // change p->state and then call sched.
-  // Once we hold p->lock, we can be
-  // guaranteed that we won't miss any wakeup
-  // (wakeup locks p->lock),
-  // so it's okay to release lk.
-
-  acquire(&p->lock);  //DOC: sleeplock1
-}
-
-void
-sleep_binding2(void *chan)
-{
-  struct proc *p = myproc();
-
-  // Go to sleep.
-  p->chan = chan;
-  p->state = SLEEPING;
-
-  sched();
-
-  // Tidy up.
-  p->chan = 0;
-
-  // Reacquire original lock.
-  release(&p->lock);
-}
-
 // Wake up all processes sleeping on chan.
 // Must be called without any p->lock.
 void

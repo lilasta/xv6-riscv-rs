@@ -44,6 +44,12 @@ pub struct LockGuard<'a, L: Lock> {
     lock: &'a L,
 }
 
+impl<'a, L: Lock> LockGuard<'a, L> {
+    pub const unsafe fn new(lock: &'a L) -> Self {
+        Self { lock }
+    }
+}
+
 impl<'a, L: ~const Lock> const Deref for LockGuard<'a, L> {
     type Target = L::Target;
 
