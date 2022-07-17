@@ -116,6 +116,21 @@ impl Process {
         self.xstate = 0;
         self.state = ProcessState::Unused;
     }
+
+    pub fn resize_memory(&mut self, n: isize) -> Result<(), ()> {
+        if n == 0 {
+            return Ok(());
+        }
+
+        let old_size = self.sz;
+        let new_size = self.sz.wrapping_add_signed(n);
+        if n > 0 {
+            self.sz = self.pagetable.grow(old_size, new_size)?;
+        } else {
+            self.sz = self.pagetable.shrink(old_size, new_size)?;
+        }
+        return Ok(());
+    }
 }
 
 pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
@@ -213,6 +228,15 @@ mod binding {
     #[no_mangle]
     extern "C" fn proc_freepagetable(pagetable: PageTable, size: usize) {
         free_pagetable(pagetable, size)
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn growproc(n: i32) -> i32 {
+        let p = cpu::process();
+        match p.resize_memory(n as _) {
+            Ok(_) => 0,
+            Err(_) => -1,
+        }
     }
 
     #[no_mangle]
