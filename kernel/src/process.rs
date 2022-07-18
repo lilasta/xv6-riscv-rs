@@ -1,5 +1,5 @@
 pub mod cpu;
-//pub mod table;
+pub mod table;
 pub mod trapframe;
 
 use core::ffi::{c_char, c_void};
@@ -47,7 +47,7 @@ pub struct Process {
     // these are private to the process, so p->lock need not be held.
     pub kstack: usize,                // Virtual address of kernel stack
     pub sz: usize,                    // Size of process memory (bytes)
-    pub pagetable: PageTable,         // User page table
+    pub pagetable: Option<PageTable>, // User page table
     pub trapframe: *mut TrapFrame,    // data page for trampoline.S
     pub context: Context,             // swtch() here to run process
     pub ofile: [*mut c_void; NOFILE], // Open files
@@ -56,6 +56,26 @@ pub struct Process {
 }
 
 impl Process {
+    pub const fn unused() -> Self {
+        Self {
+            lock: SpinLockC::new(),
+            state: ProcessState::Unused,
+            chan: 0,
+            killed: 0,
+            xstate: 0,
+            pid: 0,
+            parent: core::ptr::null_mut(),
+            kstack: 0,
+            sz: 0,
+            pagetable: None,
+            trapframe: core::ptr::null_mut(),
+            context: Context::zeroed(),
+            ofile: [core::ptr::null_mut(); _],
+            cwd: core::ptr::null_mut(),
+            name: [0; _],
+        }
+    }
+
     // Look in the process table for an UNUSED proc.
     // If found, initialize state required to run in the kernel,
     // and return with p->lock held.
@@ -80,7 +100,7 @@ impl Process {
 
         // An empty user page table.
         match allocate_pagetable(self.trapframe.addr()) {
-            Ok(pagetable) => self.pagetable = pagetable,
+            Ok(pagetable) => self.pagetable = Some(pagetable),
             Err(_) => {
                 self.deallocate();
                 return;
@@ -103,8 +123,8 @@ impl Process {
             self.trapframe = core::ptr::null_mut();
         }
 
-        if !self.pagetable.as_ptr().is_null() {
-            free_pagetable(self.pagetable, self.sz);
+        if let Some(pagetable) = &self.pagetable {
+            free_pagetable(*pagetable, self.sz);
         }
 
         self.sz = 0;
@@ -125,9 +145,9 @@ impl Process {
         let old_size = self.sz;
         let new_size = self.sz.wrapping_add_signed(n);
         if n > 0 {
-            self.sz = self.pagetable.grow(old_size, new_size)?;
+            self.sz = self.pagetable.unwrap().grow(old_size, new_size)?;
         } else {
-            self.sz = self.pagetable.shrink(old_size, new_size)?;
+            self.sz = self.pagetable.unwrap().shrink(old_size, new_size)?;
         }
         return Ok(());
     }
@@ -184,7 +204,7 @@ pub fn free_pagetable(mut pagetable: PageTable, size: usize) {
 unsafe fn copyout_either(user_dst: bool, dst: usize, src: usize, len: usize) -> bool {
     let proc_context = cpu::process();
     if user_dst {
-        copyout(proc_context.pagetable, dst, src, len) == 0
+        copyout(proc_context.pagetable.unwrap(), dst, src, len) == 0
     } else {
         core::ptr::copy(<*const u8>::from_bits(src), <*mut u8>::from_bits(dst), len);
         true
@@ -197,7 +217,7 @@ unsafe fn copyout_either(user_dst: bool, dst: usize, src: usize, len: usize) -> 
 unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> bool {
     let proc_context = cpu::process();
     if user_src {
-        copyin(proc_context.pagetable, dst, src, len) == 0
+        copyin(proc_context.pagetable.unwrap(), dst, src, len) == 0
     } else {
         core::ptr::copy(<*const u8>::from_bits(src), <*mut u8>::from_bits(dst), len);
         true

@@ -171,7 +171,7 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
     //char* dummyname = "DUMMY"; // TODO
     //safestrcpy(p->name, last, sizeof(p->name));
 
-    let old_pagetable = core::mem::replace(&mut current_context.pagetable, pagetable);
+    let old_pagetable = core::mem::replace(current_context.pagetable.as_mut().unwrap(), pagetable);
     current_context.sz = sz;
     (*current_context.trapframe).epc = elf.entry as u64;
     (*current_context.trapframe).sp = sp as u64;

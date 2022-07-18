@@ -22,7 +22,7 @@ pub struct ProcessTable {
 impl ProcessTable {
     pub const fn new() -> Self {
         Self {
-            procs: [const { SpinLock::new(Process::Unused) }; _],
+            procs: [const { Process::unused() }; _],
             parent_maps: SpinLock::new(ArrayVec::new_const()),
             next_pid: AtomicUsize::new(1),
         }
