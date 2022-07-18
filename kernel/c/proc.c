@@ -8,8 +8,6 @@
 
 struct cpu cpus[NCPU];
 
-struct proc proc[NPROC];
-
 struct proc *initproc;
 
 extern void forkret(void);
@@ -25,32 +23,20 @@ struct spinlock wait_lock;
 
 extern int allocpid(void);
 
+extern struct proc* proc(int);
+
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
 // guard page.
 void
 proc_mapstacks(pagetable_t * kpgtbl) {
-  struct proc *p;
-  
-  for(p = proc; p < &proc[NPROC]; p++) {
+  for(int i = 0; i < NPROC; i++) {
+    struct proc *p = proc(i);
     char *pa = kalloc();
     if(pa == 0)
       panic("kalloc");
-    uint64 va = KSTACK((int) (p - proc));
+    uint64 va = KSTACK((int) (p - proc(0)));
     kvmmap(*kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-  }
-}
-
-// initialize the proc table at boot time.
-void
-procinit(void)
-{
-  struct proc *p;
-  
-  initlock(&wait_lock, "wait_lock");
-  for(p = proc; p < &proc[NPROC]; p++) {
-      initlock(&p->lock, "proc");
-      p->kstack = KSTACK((int) (p - proc));
   }
 }
 
@@ -65,8 +51,8 @@ static struct proc*
 allocproc(void)
 {
   struct proc *p;
-
-  for(p = proc; p < &proc[NPROC]; p++) {
+  for(int i = 0; i < NPROC; i++) {
+    p = proc(i);
     acquire(&p->lock);
     if(p->state == UNUSED) {
       goto found;
@@ -180,9 +166,8 @@ fork(void)
 void
 reparent(struct proc *p)
 {
-  struct proc *pp;
-
-  for(pp = proc; pp < &proc[NPROC]; pp++){
+  for(int i = 0; i < NPROC; i++) {
+    struct proc *pp = proc(i);
     if(pp->parent == p){
       pp->parent = initproc;
       wakeup(initproc);
@@ -240,7 +225,6 @@ exit(int status)
 int
 wait(uint64 addr)
 {
-  struct proc *np;
   int havekids, pid;
   struct proc *p = myproc();
 
@@ -249,7 +233,8 @@ wait(uint64 addr)
   for(;;){
     // Scan through table looking for exited children.
     havekids = 0;
-    for(np = proc; np < &proc[NPROC]; np++){
+    for(int i = 0; i < NPROC; i++) {
+      struct proc *np = proc(i);
       if(np->parent == p){
         // make sure the child isn't still in exit() or swtch().
         acquire(&np->lock);
@@ -294,7 +279,6 @@ wait(uint64 addr)
 void
 scheduler(void)
 {
-  struct proc *p;
   struct cpu *c = mycpu();
   
   c->proc = 0;
@@ -302,7 +286,8 @@ scheduler(void)
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
 
-    for(p = proc; p < &proc[NPROC]; p++) {
+    for(int i = 0; i < NPROC; i++) {
+      struct proc *p = proc(i);
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
         // Switch to chosen process.  It is the process's job
@@ -385,9 +370,8 @@ forkret(void)
 void
 wakeup(void *chan)
 {
-  struct proc *p;
-
-  for(p = proc; p < &proc[NPROC]; p++) {
+  for(int i = 0; i < NPROC; i++) {
+    struct proc *p = proc(i);
     if(p != myproc()){
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
@@ -404,9 +388,8 @@ wakeup(void *chan)
 int
 kill(int pid)
 {
-  struct proc *p;
-
-  for(p = proc; p < &proc[NPROC]; p++){
+  for(int i = 0; i < NPROC; i++) {
+    struct proc *p = proc(i);
     acquire(&p->lock);
     if(p->pid == pid){
       p->killed = 1;
@@ -435,11 +418,11 @@ procdump(void)
   [RUNNING]   "run   ",
   [ZOMBIE]    "zombie"
   };
-  struct proc *p;
   char *state;
 
   printf("\n");
-  for(p = proc; p < &proc[NPROC]; p++){
+  for(int i = 0; i < NPROC; i++) {
+    struct proc *p = proc(i);
     if(p->state == UNUSED)
       continue;
     if(p->state >= 0 && p->state < NELEM(states) && states[p->state])

@@ -2,7 +2,7 @@ use core::sync::atomic::AtomicUsize;
 
 use arrayvec::ArrayVec;
 
-use crate::{config::NPROC, lock::spin::SpinLock};
+use crate::{config::NPROC, lock::spin::SpinLock, memory_layout::kstack};
 
 use super::Process;
 
@@ -12,6 +12,7 @@ struct Parent {
     child_pid: usize,
 }
 
+#[repr(C)]
 #[derive(Debug)]
 pub struct ProcessTable {
     procs: [Process; NPROC],
@@ -28,15 +29,21 @@ impl ProcessTable {
         }
     }
 
+    pub fn init(&mut self) {
+        for (i, process) in self.procs.iter_mut().enumerate() {
+            process.kstack = kstack(i);
+        }
+    }
+
     fn allocate_pid(&self) -> usize {
         use core::sync::atomic::Ordering::AcqRel;
         self.next_pid.fetch_add(1, AcqRel)
     }
 }
 
-pub fn table() -> &'static ProcessTable {
+pub fn table() -> &'static mut ProcessTable {
     static mut TABLE: ProcessTable = ProcessTable::new();
-    unsafe { &TABLE }
+    unsafe { &mut TABLE }
 }
 
 mod binding {
@@ -45,5 +52,15 @@ mod binding {
     #[no_mangle]
     extern "C" fn allocpid() -> i32 {
         table().allocate_pid() as i32
+    }
+
+    #[no_mangle]
+    extern "C" fn procinit() {
+        table().init();
+    }
+
+    #[no_mangle]
+    extern "C" fn proc(index: i32) -> *mut Process {
+        &mut table().procs[index as usize]
     }
 }
