@@ -2,9 +2,13 @@ use core::sync::atomic::AtomicUsize;
 
 use arrayvec::ArrayVec;
 
-use crate::{config::NPROC, lock::spin::SpinLock, memory_layout::kstack};
+use crate::{
+    config::NPROC,
+    lock::{spin::SpinLock, Lock},
+    memory_layout::kstack,
+};
 
-use super::Process;
+use super::{cpu, Process, ProcessState};
 
 #[derive(Debug)]
 struct Parent {
@@ -39,6 +43,33 @@ impl ProcessTable {
         use core::sync::atomic::Ordering::AcqRel;
         self.next_pid.fetch_add(1, AcqRel)
     }
+
+    pub fn wakeup(&mut self, token: usize) {
+        for process in self.procs.iter_mut() {
+            if core::ptr::eq(process, unsafe { cpu::process() }) {
+                continue;
+            }
+
+            let _guard = process.lock.lock();
+            if process.state == ProcessState::Sleeping && process.chan == token {
+                process.state = ProcessState::Runnable;
+            }
+        }
+    }
+
+    pub fn kill(&mut self, pid: usize) -> bool {
+        for process in self.procs.iter_mut() {
+            let _guard = process.lock.lock();
+            if process.pid == pid as i32 {
+                process.killed = 1;
+                if process.state == ProcessState::Sleeping {
+                    process.state = ProcessState::Runnable;
+                }
+                return true;
+            }
+        }
+        false
+    }
 }
 
 pub fn table() -> &'static mut ProcessTable {
@@ -62,5 +93,15 @@ mod binding {
     #[no_mangle]
     extern "C" fn proc(index: i32) -> *mut Process {
         &mut table().procs[index as usize]
+    }
+
+    #[no_mangle]
+    extern "C" fn wakeup(chan: usize) {
+        table().wakeup(chan);
+    }
+
+    #[no_mangle]
+    extern "C" fn kill(pid: i32) -> i32 {
+        table().kill(pid as usize) as i32
     }
 }

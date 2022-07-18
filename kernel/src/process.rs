@@ -18,7 +18,7 @@ use crate::{
 use self::trapframe::TrapFrame;
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ProcessState {
     Unused,
     Used,
