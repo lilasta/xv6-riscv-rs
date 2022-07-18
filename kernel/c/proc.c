@@ -10,9 +10,6 @@ struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
 
-int nextpid = 1;
-struct spinlock pid_lock;
-
 struct proc *initproc;
 
 extern void forkret(void);
@@ -26,17 +23,7 @@ extern char trampoline[]; // trampoline.S
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
 
-int
-allocpid() {
-  int pid;
-  
-  acquire(&pid_lock);
-  pid = nextpid;
-  nextpid = nextpid + 1;
-  release(&pid_lock);
-
-  return pid;
-}
+extern int allocpid(void);
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
