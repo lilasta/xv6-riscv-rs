@@ -92,7 +92,7 @@ pagetable_t     proc_pagetable(struct trapframe *);
 void            proc_freepagetable(pagetable_t, uint64);
 int             kill(int);
 struct cpu      mycpu(void);
-struct proc*    myproc();
+struct proc     myproc();
 void            procinit(void);
 void            scheduler(void) __attribute__((noreturn));
 void            sched(void);

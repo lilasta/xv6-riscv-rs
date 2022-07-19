@@ -172,7 +172,7 @@ impl CPUGlue {
 }
 
 mod binding {
-    use crate::lock::spin_c::SpinLockC;
+    use crate::{lock::spin_c::SpinLockC, process::ProcessGlue};
 
     use super::*;
 
@@ -187,13 +187,13 @@ mod binding {
     }
 
     #[no_mangle]
-    extern "C" fn myproc() -> *mut Process {
-        without_interrupt(|| current().process)
+    unsafe extern "C" fn myproc() -> ProcessGlue {
+        ProcessGlue::from_process(&mut *without_interrupt(|| current().process))
     }
 
     #[no_mangle]
     unsafe extern "C" fn pid() -> usize {
-        (*myproc()).pid as usize
+        *myproc().pid as usize
     }
 
     #[no_mangle]
