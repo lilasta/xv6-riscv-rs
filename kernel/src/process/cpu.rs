@@ -207,7 +207,7 @@ mod binding {
     }
 
     #[no_mangle]
-    unsafe extern "C" fn sleep(chan: usize, lock: *mut SpinLockC) {
+    unsafe extern "C" fn sleep(chan: usize, lock: *mut SpinLockC<()>) {
         let mut guard = LockGuard::new(&mut *lock);
         current().sleep(chan, &mut guard);
         core::mem::forget(guard);

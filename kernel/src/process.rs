@@ -33,7 +33,7 @@ pub enum ProcessState {
 // Per-process state
 #[derive(Debug)]
 pub struct Process {
-    pub lock: SpinLockC,
+    pub lock: SpinLockC<()>,
 
     // p->lock must be held when using these:
     pub state: ProcessState, // Process state
@@ -59,7 +59,7 @@ pub struct Process {
 impl Process {
     pub const fn unused() -> Self {
         Self {
-            lock: SpinLockC::new(),
+            lock: SpinLockC::new(()),
             state: ProcessState::Unused,
             chan: 0,
             killed: 0,
@@ -229,7 +229,7 @@ unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> b
 #[repr(C)]
 #[derive(Debug)]
 pub struct ProcessGlue {
-    pub lock: *mut SpinLockC,
+    pub lock: *mut SpinLockC<()>,
 
     // p->lock must be held when using these:
     pub state: *mut ProcessState, // Process state
