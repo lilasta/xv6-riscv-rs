@@ -47,30 +47,7 @@ int is_myproc_killed_glue(void) {
 extern void
 allocproc2(struct proc *p);
 
-static struct proc*
-allocproc(void)
-{
-  struct proc *p;
-  for(int i = 0; i < NPROC; i++) {
-    p = proc(i);
-    acquire(&p->lock);
-    if(p->state == UNUSED) {
-      goto found;
-    } else {
-      release(&p->lock);
-    }
-  }
-  return 0;
-
-found:
-  allocproc2(p);
-  
-  if (p->state == USED) {
-    return p;
-  } else {
-    return 0;
-  }
-}
+extern struct proc* allocproc(void);
 
 // a user program that calls exec("/init")
 // od -t xC initcode
