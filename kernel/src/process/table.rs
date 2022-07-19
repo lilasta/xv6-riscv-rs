@@ -44,6 +44,22 @@ impl ProcessTable {
         self.next_pid.fetch_add(1, AcqRel)
     }
 
+    pub fn allocate_process(&mut self) -> *mut Process {
+        for process in self.procs.iter_mut() {
+            unsafe { process.lock.raw_lock() };
+            if process.state == ProcessState::Unused {
+                unsafe { process.allocate() };
+                if process.state == ProcessState::Used {
+                    return process;
+                } else {
+                    return core::ptr::null_mut();
+                }
+            }
+            unsafe { process.lock.raw_unlock() };
+        }
+        core::ptr::null_mut()
+    }
+
     pub fn wakeup(&mut self, token: usize) {
         for process in self.procs.iter_mut() {
             if core::ptr::eq(process, unsafe { cpu::process() }) {
@@ -93,6 +109,11 @@ mod binding {
     #[no_mangle]
     extern "C" fn proc(index: i32) -> *mut Process {
         &mut table().procs[index as usize]
+    }
+
+    #[no_mangle]
+    extern "C" fn allocproc() -> *mut Process {
+        table().allocate_process()
     }
 
     #[no_mangle]
