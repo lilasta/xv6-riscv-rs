@@ -1,3 +1,5 @@
+#include <stdbool.h>
+
 // Saved registers for kernel context switches.
 struct context
 {
@@ -22,13 +24,11 @@ struct context
 // Per-CPU state.
 struct cpu
 {
-  struct proc *proc;      // The process running on this cpu, or null.
-  struct context context; // swtch() here to enter scheduler().
-  int noff;               // Depth of push_off() nesting.
-  int intena;             // Were interrupts enabled before push_off()?
+  struct proc **proc;      // The process running on this cpu, or null.
+  struct context *context; // swtch() here to enter scheduler().
+  uint64 *noff;               // Depth of push_off() nesting.
+  bool *intena;             // Were interrupts enabled before push_off()?
 };
-
-extern struct cpu cpus[NCPU];
 
 // per-process data for the trap handling code in trampoline.S.
 // sits in a page by itself just under the trampoline page in the
