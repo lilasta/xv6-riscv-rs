@@ -33,7 +33,6 @@
 mod allocator;
 mod config;
 mod console;
-mod context;
 mod elf;
 mod entry;
 mod exec;

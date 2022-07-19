@@ -2,13 +2,12 @@ use core::ffi::c_void;
 
 use crate::{
     config::NCPU,
-    context::Context,
     lock::{Lock, LockGuard},
     process::ProcessState,
     riscv::{disable_interrupt, enable_interrupt, is_interrupt_enabled, read_reg},
 };
 
-use super::Process;
+use super::{context::CPUContext, Process};
 
 // Per-CPU state.
 #[repr(C)]
@@ -18,7 +17,7 @@ pub struct CPU {
     process: *mut Process,
 
     // swtch() here to enter scheduler().
-    context: Context,
+    context: CPUContext,
 
     // Depth of push_off() nesting.
     disable_interrupt_depth: u32,
@@ -31,7 +30,7 @@ impl CPU {
     const fn new() -> Self {
         Self {
             process: core::ptr::null_mut(),
-            context: Context::zeroed(),
+            context: CPUContext::zeroed(),
             disable_interrupt_depth: 0,
             is_interrupt_enabled_before: 0,
         }
