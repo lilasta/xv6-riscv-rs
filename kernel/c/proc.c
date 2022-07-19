@@ -256,9 +256,9 @@ wait(uint64 addr)
 void
 scheduler(void)
 {
-  struct cpu *c = mycpu();
+  struct cpu c = mycpu();
   
-  c->proc = 0;
+  *(c.proc) = 0;
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
@@ -271,12 +271,12 @@ scheduler(void)
         // to release its lock and then reacquire it
         // before jumping back to us.
         p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+        *(c.proc) = p;
+        swtch(c.context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
-        c->proc = 0;
+        *(c.proc) = 0;
       }
       release(&p->lock);
     }
@@ -298,16 +298,16 @@ sched(void)
 
   if(!holding(&p->lock))
     panic("sched p->lock");
-  if(mycpu()->noff != 1)
+  if(*mycpu().noff != 1)
     panic("sched locks");
   if(p->state == RUNNING)
     panic("sched running");
   if(intr_get())
     panic("sched interruptible");
 
-  intena = mycpu()->intena;
-  swtch(&p->context, &mycpu()->context);
-  mycpu()->intena = intena;
+  intena = *mycpu().intena;
+  swtch(&p->context, mycpu().context);
+  *mycpu().intena = intena;
 }
 
 // Give up the CPU for one scheduling round.

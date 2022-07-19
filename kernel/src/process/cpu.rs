@@ -10,23 +10,6 @@ use crate::{
 use super::{context::CPUContext, Process};
 
 // Per-CPU state.
-#[repr(C)]
-pub struct CPUGlue {
-    // The process running on this cpu, or null.
-    // TODO: *mut Process
-    process: *mut Process,
-
-    // swtch() here to enter scheduler().
-    context: *mut CPUContext,
-
-    // Depth of push_off() nesting.
-    disable_interrupt_depth: *mut usize,
-
-    // Were interrupts enabled before push_off()?
-    is_interrupt_enabled_before: *mut u32,
-}
-
-// Per-CPU state.
 pub struct CPU {
     // The process running on this cpu, or null.
     // TODO: *mut Process
@@ -39,7 +22,7 @@ pub struct CPU {
     disable_interrupt_depth: usize,
 
     // Were interrupts enabled before push_off()?
-    is_interrupt_enabled_before: u32,
+    is_interrupt_enabled_before: bool,
 }
 
 impl CPU {
@@ -48,7 +31,7 @@ impl CPU {
             process: core::ptr::null_mut(),
             context: CPUContext::zeroed(),
             disable_interrupt_depth: 0,
-            is_interrupt_enabled_before: 0,
+            is_interrupt_enabled_before: false,
         }
     }
 
@@ -125,7 +108,7 @@ pub fn push_disabling_interrupt() {
     let cpu = current();
 
     if cpu.disable_interrupt_depth == 0 {
-        cpu.is_interrupt_enabled_before = is_enabled as u32;
+        cpu.is_interrupt_enabled_before = is_enabled;
     }
 
     cpu.disable_interrupt_depth += 1;
@@ -147,7 +130,7 @@ pub fn pop_disabling_interrupt() {
     cpu.disable_interrupt_depth -= 1;
 
     if cpu.disable_interrupt_depth == 0 {
-        if cpu.is_interrupt_enabled_before == 1 {
+        if cpu.is_interrupt_enabled_before {
             unsafe { enable_interrupt() }
         }
     }
@@ -158,6 +141,34 @@ pub fn without_interrupt<R>(f: impl FnOnce() -> R) -> R {
     let ret = f();
     pop_disabling_interrupt();
     ret
+}
+
+// Per-CPU state.
+#[repr(C)]
+pub struct CPUGlue {
+    // The process running on this cpu, or null.
+    // TODO: *mut Process
+    process: *mut *mut Process,
+
+    // swtch() here to enter scheduler().
+    context: *mut CPUContext,
+
+    // Depth of push_off() nesting.
+    disable_interrupt_depth: *mut usize,
+
+    // Were interrupts enabled before push_off()?
+    is_interrupt_enabled_before: *mut bool,
+}
+
+impl CPUGlue {
+    pub const fn from_cpu(cpu: &mut CPU) -> Self {
+        Self {
+            process: &mut cpu.process,
+            context: &mut cpu.context,
+            disable_interrupt_depth: &mut cpu.disable_interrupt_depth,
+            is_interrupt_enabled_before: &mut cpu.is_interrupt_enabled_before,
+        }
+    }
 }
 
 mod binding {
@@ -171,8 +182,8 @@ mod binding {
     }
 
     #[no_mangle]
-    extern "C" fn mycpu() -> *mut CPU {
-        current()
+    extern "C" fn mycpu() -> CPUGlue {
+        CPUGlue::from_cpu(current())
     }
 
     #[no_mangle]
