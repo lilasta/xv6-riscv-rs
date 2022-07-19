@@ -11,6 +11,22 @@ use super::{context::CPUContext, Process};
 
 // Per-CPU state.
 #[repr(C)]
+pub struct CPUGlue {
+    // The process running on this cpu, or null.
+    // TODO: *mut Process
+    process: *mut Process,
+
+    // swtch() here to enter scheduler().
+    context: *mut CPUContext,
+
+    // Depth of push_off() nesting.
+    disable_interrupt_depth: *mut usize,
+
+    // Were interrupts enabled before push_off()?
+    is_interrupt_enabled_before: *mut u32,
+}
+
+// Per-CPU state.
 pub struct CPU {
     // The process running on this cpu, or null.
     // TODO: *mut Process
@@ -20,7 +36,7 @@ pub struct CPU {
     context: CPUContext,
 
     // Depth of push_off() nesting.
-    disable_interrupt_depth: u32,
+    disable_interrupt_depth: usize,
 
     // Were interrupts enabled before push_off()?
     is_interrupt_enabled_before: u32,
@@ -167,6 +183,16 @@ mod binding {
     #[no_mangle]
     unsafe extern "C" fn pid() -> usize {
         (*myproc()).pid as usize
+    }
+
+    #[no_mangle]
+    extern "C" fn push_off() {
+        push_disabling_interrupt();
+    }
+
+    #[no_mangle]
+    extern "C" fn pop_off() {
+        pop_disabling_interrupt();
     }
 
     #[no_mangle]
