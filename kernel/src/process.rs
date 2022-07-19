@@ -31,7 +31,6 @@ pub enum ProcessState {
 }
 
 // Per-process state
-#[repr(C)]
 #[derive(Debug)]
 pub struct Process {
     pub lock: SpinLockC,
@@ -226,17 +225,63 @@ unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> b
     }
 }
 
+// Per-process state
+#[repr(C)]
+#[derive(Debug)]
+pub struct ProcessGlue {
+    pub lock: *mut SpinLockC,
+
+    // p->lock must be held when using these:
+    pub state: *mut ProcessState, // Process state
+    pub chan: *mut usize,         // If non-zero, sleeping on chan
+    pub killed: *mut i32,         // If non-zero, have been killed
+    pub xstate: *mut i32,         // Exit status to be returned to parent's wait
+    pub pid: *mut i32,            // Process ID
+
+    // wait_lock must be held when using this:
+    pub parent: *mut *mut Process, // Parent process
+
+    // these are private to the process, so p->lock need not be held.
+    pub kstack: *mut usize,                // Virtual address of kernel stack
+    pub sz: *mut usize,                    // Size of process memory (bytes)
+    pub pagetable: *mut Option<PageTable>, // User page table
+    pub trapframe: *mut *mut TrapFrame,    // data page for trampoline.S
+    pub context: *mut CPUContext,          // swtch() here to run process
+    pub ofile: *mut [*mut c_void; NOFILE], // Open files
+    pub cwd: *mut *mut c_void,             // Current directory
+    pub name: *mut [c_char; 16],           // Process name (debugging)
+    pub original: *mut c_void,
+}
+
+impl ProcessGlue {
+    pub fn from_process(process: &mut Process) -> Self {
+        Self {
+            lock: &mut process.lock,
+            state: &mut process.state,
+            chan: &mut process.chan,
+            killed: &mut process.killed,
+            xstate: &mut process.xstate,
+            pid: &mut process.pid,
+            parent: &mut process.parent,
+            kstack: &mut process.kstack,
+            sz: &mut process.sz,
+            pagetable: (&mut process.pagetable as *mut Option<_>).cast(),
+            trapframe: &mut process.trapframe,
+            context: &mut process.context,
+            ofile: &mut process.ofile,
+            cwd: &mut process.cwd,
+            name: &mut process.name,
+            original: (process as *mut Process).cast(),
+        }
+    }
+}
+
 mod binding {
     use super::*;
 
     #[no_mangle]
-    unsafe extern "C" fn allocproc2(p: *mut Process) {
-        (*p).allocate();
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn freeproc(p: *mut Process) {
-        (*p).deallocate();
+    unsafe extern "C" fn freeproc(p: ProcessGlue) {
+        (*p.original.cast::<Process>()).deallocate();
     }
 
     #[no_mangle]

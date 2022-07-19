@@ -94,6 +94,8 @@ pub fn table() -> &'static mut ProcessTable {
 }
 
 mod binding {
+    use crate::process::ProcessGlue;
+
     use super::*;
 
     #[no_mangle]
@@ -107,13 +109,13 @@ mod binding {
     }
 
     #[no_mangle]
-    extern "C" fn proc(index: i32) -> *mut Process {
-        &mut table().procs[index as usize]
+    extern "C" fn proc(index: i32) -> ProcessGlue {
+        ProcessGlue::from_process(&mut table().procs[index as usize])
     }
 
     #[no_mangle]
-    extern "C" fn allocproc() -> *mut Process {
-        table().allocate_process()
+    unsafe extern "C" fn allocproc() -> ProcessGlue {
+        ProcessGlue::from_process(&mut *table().allocate_process())
     }
 
     #[no_mangle]
