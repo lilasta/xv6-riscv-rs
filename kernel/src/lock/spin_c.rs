@@ -1,4 +1,5 @@
 use core::{
+    cell::UnsafeCell,
     ffi::c_void,
     sync::atomic::{AtomicI32, AtomicU32, Ordering::*},
 };
@@ -9,18 +10,20 @@ use super::Lock;
 
 #[repr(C)]
 #[derive(Debug)]
-pub struct SpinLockC {
+pub struct SpinLockC<T> {
     locked: AtomicU32,
     name: *mut c_void,
     cpuid: AtomicI32,
+    value: UnsafeCell<T>,
 }
 
-impl SpinLockC {
-    pub const fn new() -> Self {
+impl<T> SpinLockC<T> {
+    pub const fn new(value: T) -> Self {
         Self {
             locked: AtomicU32::new(0),
             name: core::ptr::null_mut(),
             cpuid: AtomicI32::new(0),
+            value: UnsafeCell::new(value),
         }
     }
 
@@ -35,15 +38,15 @@ impl SpinLockC {
     }
 }
 
-impl Lock for SpinLockC {
-    type Target = ();
+impl<T> Lock for SpinLockC<T> {
+    type Target = T;
 
-    unsafe fn get(&self) -> &Self::Target {
-        unimplemented!()
+    unsafe fn get(&self) -> &T {
+        &*self.value.get()
     }
 
-    unsafe fn get_mut(&self) -> &mut Self::Target {
-        unimplemented!()
+    unsafe fn get_mut(&self) -> &mut T {
+        &mut *self.value.get()
     }
 
     unsafe fn raw_lock(&self) {
@@ -102,4 +105,4 @@ impl Lock for SpinLockC {
     }
 }
 
-unsafe impl Sync for SpinLockC {}
+unsafe impl<T> Sync for SpinLockC<T> {}
