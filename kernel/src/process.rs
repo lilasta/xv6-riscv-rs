@@ -1,3 +1,4 @@
+pub mod context;
 pub mod cpu;
 pub mod table;
 pub mod trapframe;
@@ -7,7 +8,7 @@ use core::ptr::NonNull;
 
 use crate::allocator::KernelAllocator;
 use crate::vm::binding::{copyin, copyout};
-use crate::{config::NOFILE, context::Context, lock::spin_c::SpinLockC, riscv::paging::PageTable};
+use crate::{config::NOFILE, lock::spin_c::SpinLockC, riscv::paging::PageTable};
 
 use crate::{
     memory_layout::{TRAMPOLINE, TRAPFRAME},
@@ -15,6 +16,7 @@ use crate::{
     trampoline::trampoline,
 };
 
+use self::context::CPUContext;
 use self::trapframe::TrapFrame;
 
 #[repr(C)]
@@ -49,7 +51,7 @@ pub struct Process {
     pub sz: usize,                    // Size of process memory (bytes)
     pub pagetable: Option<PageTable>, // User page table
     pub trapframe: *mut TrapFrame,    // data page for trampoline.S
-    pub context: Context,             // swtch() here to run process
+    pub context: CPUContext,          // swtch() here to run process
     pub ofile: [*mut c_void; NOFILE], // Open files
     pub cwd: *mut c_void,             // Current directory
     pub name: [c_char; 16],           // Process name (debugging)
@@ -69,7 +71,7 @@ impl Process {
             sz: 0,
             pagetable: None,
             trapframe: core::ptr::null_mut(),
-            context: Context::zeroed(),
+            context: CPUContext::zeroed(),
             ofile: [core::ptr::null_mut(); _],
             cwd: core::ptr::null_mut(),
             name: [0; _],
@@ -109,7 +111,7 @@ impl Process {
 
         // Set up new context to start executing at forkret,
         // which returns to user space.
-        self.context = Context::zeroed();
+        self.context = CPUContext::zeroed();
         self.context.ra = forkret as u64;
         self.context.sp = (self.kstack + PGSIZE) as u64;
     }
