@@ -17,6 +17,7 @@
 #![feature(core_ffi_c)]
 #![feature(decl_macro)]
 #![feature(generic_arg_infer)]
+#![feature(generic_const_exprs)]
 #![feature(inline_const)]
 #![feature(inline_const_pat)]
 #![feature(let_else)]
@@ -31,6 +32,7 @@
 #![feature(strict_provenance)]
 
 mod allocator;
+mod bitmap;
 mod config;
 mod console;
 mod elf;
@@ -75,6 +77,10 @@ pub macro print($($arg:tt)*) {{
 
 pub macro println($fmt:expr, $($arg:tt)*) {
     crate::print!(concat!($fmt, "\n"), $($arg)*)
+}
+
+pub macro cstr($s:literal) {
+    core::ffi::CStr::from_bytes_with_nul_unchecked(concat!($s, '\0').as_bytes())
 }
 
 #[panic_handler]

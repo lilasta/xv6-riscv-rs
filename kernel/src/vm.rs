@@ -154,7 +154,7 @@ pub mod binding {
     // for the very first process.
     // sz must be less than a page.
     #[no_mangle]
-    unsafe extern "C" fn uvminit(mut pagetable: PageTable, src: *mut u8, size: usize) {
+    pub unsafe extern "C" fn uvminit(mut pagetable: PageTable, src: *const u8, size: usize) {
         assert!(size < PGSIZE);
 
         let mem: NonNull<u8> = KernelAllocator::get().allocate().unwrap();
@@ -173,8 +173,8 @@ pub mod binding {
     }
 
     #[no_mangle]
-    unsafe extern "C" fn uvmcopy(pagetable: PageTable, to: PageTable, size: usize) -> i32 {
-        match pagetable.copy(to, size) {
+    unsafe extern "C" fn uvmcopy(pagetable: PageTable, mut to: PageTable, size: usize) -> i32 {
+        match pagetable.copy(&mut to, size) {
             Ok(_) => 0,
             Err(_) => -1,
         }

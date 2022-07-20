@@ -75,6 +75,10 @@ pub const fn kstack(p: usize) -> usize {
     TRAMPOLINE - ((p) + 1) * 2 * PGSIZE
 }
 
+pub const fn kstack_index(kstack: usize) -> usize {
+    (TRAMPOLINE - kstack) / 2 / PGSIZE - 1
+}
+
 // User memory layout.
 // Address zero first:
 //   text

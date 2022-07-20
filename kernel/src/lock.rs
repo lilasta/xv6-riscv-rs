@@ -7,7 +7,6 @@ use core::{
     ops::{Deref, DerefMut},
 };
 
-#[const_trait]
 pub trait Lock {
     type Target;
 
@@ -32,6 +31,26 @@ pub trait Lock {
         // drop(_guard)
     }
 
+    fn unlock_temporarily<R>(guard: &mut LockGuard<Self>, f: impl FnOnce() -> R) -> R
+    where
+        Self: Sized,
+    {
+        let lock = guard.lock;
+
+        unsafe { core::ptr::drop_in_place(guard) };
+        let ret = f();
+        unsafe { core::ptr::write(guard, lock.lock()) };
+        ret
+    }
+
+    fn with<R>(&self, f: impl FnOnce(&mut Self::Target) -> R) -> R
+    where
+        Self: Sized,
+    {
+        let mut guard = self.lock();
+        f(guard.deref_mut())
+    }
+
     fn get_lock_ref<'a>(guard: &LockGuard<'a, Self>) -> &'a Self
     where
         Self: Sized,
@@ -40,6 +59,7 @@ pub trait Lock {
     }
 }
 
+#[derive(Debug)]
 pub struct LockGuard<'a, L: Lock> {
     lock: &'a L,
 }
