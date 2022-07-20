@@ -149,7 +149,7 @@ impl PageTable {
         KernelAllocator::get().deallocate_page(self.0.cast());
     }
 
-    pub fn copy(&self, mut to: Self, size: usize) -> Result<(), ()> {
+    pub fn copy(&self, to: &mut Self, size: usize) -> Result<(), ()> {
         for i in (0..size).step_by(PGSIZE) {
             let pte = self.search_entry(i, false).unwrap();
             assert!(pte.is_valid());
