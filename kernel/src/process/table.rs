@@ -39,7 +39,7 @@ impl ProcessTable {
         }
     }
 
-    fn allocate_pid(&self) -> usize {
+    pub fn allocate_pid(&self) -> usize {
         use core::sync::atomic::Ordering::AcqRel;
         self.next_pid.fetch_add(1, AcqRel)
     }
@@ -99,40 +99,4 @@ impl ProcessTable {
 pub fn table() -> &'static mut ProcessTable {
     static mut TABLE: ProcessTable = ProcessTable::new();
     unsafe { &mut TABLE }
-}
-
-mod binding {
-    use crate::process::ProcessGlue;
-
-    use super::*;
-
-    #[no_mangle]
-    extern "C" fn allocpid() -> i32 {
-        table().allocate_pid() as i32
-    }
-
-    #[no_mangle]
-    extern "C" fn procinit() {
-        table().init();
-    }
-
-    #[no_mangle]
-    extern "C" fn proc(index: i32) -> ProcessGlue {
-        ProcessGlue::from_process(&mut table().procs[index as usize])
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn allocproc() -> ProcessGlue {
-        ProcessGlue::from_process(&mut *table().allocate_process())
-    }
-
-    #[no_mangle]
-    extern "C" fn wakeup(chan: usize) {
-        table().wakeup(chan);
-    }
-
-    #[no_mangle]
-    extern "C" fn kill(pid: i32) -> i32 {
-        table().kill(pid as usize) as i32
-    }
 }

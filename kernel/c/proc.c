@@ -21,8 +21,6 @@ extern char trampoline[]; // trampoline.S
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
 
-extern int allocpid(void);
-
 extern struct proc proc(int);
 
 // Allocate a page for each process's kernel stack.

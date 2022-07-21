@@ -1,4 +1,4 @@
-use crate::process::cpu;
+use crate::process;
 
 use super::{spin::SpinLock, Lock};
 
@@ -34,9 +34,8 @@ impl<T> Lock for SleepLock<T> {
     unsafe fn raw_lock(&self) {
         let mut inner = self.inner.lock();
         while inner.locked {
-            let cpu = cpu::current();
             let token = self.wakeup_token();
-            cpu.sleep(token, &mut inner);
+            process::sleep(token, &mut inner);
         }
 
         extern "C" {
@@ -54,9 +53,8 @@ impl<T> Lock for SleepLock<T> {
         inner.locked = false;
         inner.pid = 0;
 
-        let cpu = cpu::current();
         let token = self.wakeup_token();
-        cpu.wakeup(token);
+        process::wakeup(token);
 
         SpinLock::unlock(inner);
     }
