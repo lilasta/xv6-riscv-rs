@@ -1,4 +1,7 @@
-use core::ffi::c_void;
+use core::{
+    ffi::c_void,
+    ops::{Deref, DerefMut},
+};
 
 use crate::{
     config::{NCPU, ROOTDEV},
@@ -81,17 +84,39 @@ impl CPU {
 impl !Sync for CPU {}
 impl !Send for CPU {}
 
+pub struct CurrentCPU;
+
+impl CurrentCPU {
+    unsafe fn get_raw() -> &'static mut CPU {
+        assert!(!is_interrupt_enabled());
+        assert!(id() < NCPU);
+
+        static mut CPUS: [CPU; NCPU] = [const { CPU::new() }; _];
+        &mut CPUS[id()]
+    }
+}
+
+impl Deref for CurrentCPU {
+    type Target = CPU;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { Self::get_raw() }
+    }
+}
+
+impl DerefMut for CurrentCPU {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { Self::get_raw() }
+    }
+}
+
 pub fn id() -> usize {
     assert!(unsafe { !is_interrupt_enabled() });
     unsafe { read_reg!(tp) as usize }
 }
 
-pub fn current() -> &'static mut CPU {
-    assert!(unsafe { !is_interrupt_enabled() });
-    assert!(id() < NCPU);
-
-    static mut CPUS: [CPU; NCPU] = [const { CPU::new() }; _];
-    unsafe { &mut CPUS[id()] }
+pub fn current() -> CurrentCPU {
+    CurrentCPU
 }
 
 pub unsafe fn process() -> &'static mut Process {
@@ -106,7 +131,7 @@ pub fn push_disabling_interrupt() {
         disable_interrupt();
     }
 
-    let cpu = current();
+    let mut cpu = current();
 
     if cpu.disable_interrupt_depth == 0 {
         cpu.is_interrupt_enabled_before = is_enabled;
@@ -121,7 +146,7 @@ pub fn pop_disabling_interrupt() {
         "pop_disabling_interrupt: interruptible"
     );
 
-    let cpu = current();
+    let mut cpu = current();
 
     assert!(
         cpu.disable_interrupt_depth > 0,
@@ -218,7 +243,7 @@ mod binding {
 
     #[no_mangle]
     extern "C" fn mycpu() -> CPUGlue {
-        CPUGlue::from_cpu(current())
+        CPUGlue::from_cpu(&mut current())
     }
 
     #[no_mangle]

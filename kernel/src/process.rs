@@ -237,7 +237,7 @@ unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> b
 
 #[no_mangle]
 pub extern "C" fn scheduler() {
-    let cpu = cpu::current();
+    let mut cpu = cpu::current();
     cpu.process = core::ptr::null_mut();
 
     loop {
@@ -260,7 +260,7 @@ pub extern "C" fn scheduler() {
 
 #[no_mangle]
 pub extern "C" fn sched() {
-    let cpu = cpu::current();
+    let mut cpu = cpu::current();
     let process = unsafe { cpu::process() };
     assert!(process.lock.is_held_by_current_cpu());
     assert!(cpu.disable_interrupt_depth == 1);
@@ -269,8 +269,6 @@ pub extern "C" fn sched() {
 
     let intena = cpu.is_interrupt_enabled_before;
     unsafe { context::switch(&mut process.context, &cpu.context) };
-
-    let cpu = cpu::current();
     cpu.is_interrupt_enabled_before = intena;
 }
 
