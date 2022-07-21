@@ -2,6 +2,7 @@
 
 use crate::{
     memory_layout::{symbol_addr, KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, UART0, VIRTIO0},
+    process::kernel_stack::kstack_allocator,
     riscv::paging::{PageTable, PGSIZE, PTE},
 };
 
@@ -56,10 +57,7 @@ fn make_pagetable_for_kernel() -> PageTable {
         .unwrap();
 
     // map kernel stacks
-    extern "C" {
-        fn proc_mapstacks(kpgtbl: *const PageTable);
-    }
-    unsafe { proc_mapstacks(&pagetable) };
+    kstack_allocator().initialize(&mut pagetable);
 
     pagetable
 }

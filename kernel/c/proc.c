@@ -23,20 +23,6 @@ struct spinlock wait_lock;
 
 extern struct proc proc(int);
 
-// Allocate a page for each process's kernel stack.
-// Map it high in memory, followed by an invalid
-// guard page.
-void
-proc_mapstacks(pagetable_t * kpgtbl) {
-  for(int i = 0; i < NPROC; i++) {
-    char *pa = kalloc();
-    if(pa == 0)
-      panic("kalloc");
-    uint64 va = KSTACK((int) (i));
-    kvmmap(*kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-  }
-}
-
 int is_myproc_killed_glue(void) {
   return *myproc().killed;
 }
