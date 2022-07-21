@@ -47,8 +47,8 @@ impl CPUContext {
 
 global_asm!(
     r#"
-.global swtch
-swtch:
+.global switch
+switch:
     sd ra, 0(a0)
     sd sp, 8(a0)
     sd s0, 16(a0)
@@ -86,5 +86,5 @@ swtch:
 extern "C" {
     /// コンテキストスイッチを行う。
     /// 現在のレジスタの値を`old`に保存し、`new`のもので置き換える。
-    pub fn swtch(old: *mut CPUContext, new: *const CPUContext);
+    pub fn switch(old: *mut CPUContext, new: *const CPUContext);
 }
