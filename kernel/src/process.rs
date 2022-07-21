@@ -1,5 +1,6 @@
 pub mod context;
 pub mod cpu;
+pub mod kernel_stack;
 pub mod table;
 pub mod trapframe;
 

@@ -13,8 +13,6 @@
 #![feature(const_slice_index)]
 #![feature(const_trait_impl)]
 #![feature(const_try)]
-#![feature(core_c_str)]
-#![feature(core_ffi_c)]
 #![feature(decl_macro)]
 #![feature(generic_arg_infer)]
 #![feature(generic_const_exprs)]

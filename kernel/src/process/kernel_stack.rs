@@ -1,8 +1,10 @@
 use crate::{
+    allocator::KernelAllocator,
     bitmap::Bitmap,
     config::NPROC,
     lock::{spin::SpinLock, Lock, LockGuard},
     memory_layout::{kstack, kstack_index},
+    riscv::paging::{PageTable, PGSIZE, PTE},
 };
 
 pub struct KernelStackAllocator {
@@ -13,6 +15,15 @@ impl KernelStackAllocator {
     pub const fn new() -> Self {
         Self {
             bitmap: Bitmap::new(),
+        }
+    }
+
+    pub fn initialize(&self, pagetable: &mut PageTable) {
+        for i in 0..self.bitmap.bits() {
+            let memory = KernelAllocator::get().allocate_page().unwrap();
+            let pa = memory.addr().get();
+            let va = kstack(i);
+            pagetable.map(va, pa, PGSIZE, PTE::R | PTE::W).unwrap();
         }
     }
 
