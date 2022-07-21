@@ -13,10 +13,10 @@ use super::{context::CPUContext, Process};
 pub struct CPU {
     // The process running on this cpu, or null.
     // TODO: *mut Process
-    process: *mut Process,
+    pub process: *mut Process,
 
     // swtch() here to enter scheduler().
-    context: CPUContext,
+    pub context: CPUContext,
 
     // Depth of push_off() nesting.
     disable_interrupt_depth: usize,
