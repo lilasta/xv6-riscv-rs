@@ -7,6 +7,8 @@ use core::ffi::{c_char, c_void};
 use core::ptr::NonNull;
 
 use crate::allocator::KernelAllocator;
+use crate::lock::Lock;
+use crate::riscv::enable_interrupt;
 use crate::vm::binding::{copyin, copyout};
 use crate::{config::NOFILE, lock::spin_c::SpinLockC, riscv::paging::PageTable};
 
@@ -230,6 +232,29 @@ unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> b
     } else {
         core::ptr::copy(<*const u8>::from_bits(src), <*mut u8>::from_bits(dst), len);
         true
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn scheduler() {
+    let cpu = cpu::current();
+    cpu.process = core::ptr::null_mut();
+
+    loop {
+        unsafe { enable_interrupt() };
+
+        for process in table::table().iter_mut() {
+            unsafe { process.lock.raw_lock() };
+            if process.state == ProcessState::Runnable {
+                process.state = ProcessState::Running;
+                cpu.process = process;
+
+                unsafe { context::swtch(&mut cpu.context, &process.context) };
+
+                cpu.process = core::ptr::null_mut();
+            }
+            unsafe { process.lock.raw_unlock() };
+        }
     }
 }
 
