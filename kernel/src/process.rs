@@ -375,7 +375,7 @@ impl ProcessGlue {
 }
 
 mod binding {
-    use super::{cpu::CPUGlue, *};
+    use super::*;
 
     #[no_mangle]
     unsafe extern "C" fn freeproc(p: ProcessGlue) {
@@ -423,11 +423,6 @@ mod binding {
     #[no_mangle]
     extern "C" fn cpuid() -> i32 {
         cpu::id() as i32
-    }
-
-    #[no_mangle]
-    extern "C" fn mycpu() -> CPUGlue {
-        CPUGlue::from_cpu(&mut cpu::current())
     }
 
     #[no_mangle]

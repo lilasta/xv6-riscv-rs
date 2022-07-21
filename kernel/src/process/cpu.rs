@@ -124,34 +124,6 @@ pub fn without_interrupt<R>(f: impl FnOnce() -> R) -> R {
     ret
 }
 
-// Per-CPU state.
-#[repr(C)]
-pub struct CPUGlue {
-    // The process running on this cpu, or null.
-    // TODO: *mut Process
-    process: *mut *mut Process,
-
-    // swtch() here to enter scheduler().
-    context: *mut CPUContext,
-
-    // Depth of push_off() nesting.
-    disable_interrupt_depth: *mut usize,
-
-    // Were interrupts enabled before push_off()?
-    is_interrupt_enabled_before: *mut bool,
-}
-
-impl CPUGlue {
-    pub const fn from_cpu(cpu: &mut CPU) -> Self {
-        Self {
-            process: &mut cpu.process,
-            context: &mut cpu.context,
-            disable_interrupt_depth: &mut cpu.disable_interrupt_depth,
-            is_interrupt_enabled_before: &mut cpu.is_interrupt_enabled_before,
-        }
-    }
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn forkret() {
     static mut FIRST: bool = true;
