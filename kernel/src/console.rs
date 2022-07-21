@@ -11,7 +11,7 @@
 
 use crate::{
     lock::{Lock, LockGuard},
-    process::cpu,
+    process::{self, cpu},
     uart::UART,
 };
 
@@ -82,12 +82,7 @@ impl Console {
     pub fn handle_interrupt(&mut self, c: u8) {
         match c {
             const { ctrl('P') } => {
-                extern "C" {
-                    fn procdump();
-                }
-                unsafe {
-                    procdump();
-                }
+                process::procdump();
             }
             const { ctrl('U') } => {
                 while self.edit_index != self.write_index

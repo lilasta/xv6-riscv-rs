@@ -86,6 +86,10 @@ impl ProcessTable {
         }
         false
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Process> {
+        self.procs.iter()
+    }
 }
 
 pub fn table() -> &'static mut ProcessTable {

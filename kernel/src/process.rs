@@ -152,6 +152,14 @@ impl Process {
         }
         return Ok(());
     }
+
+    pub fn dump(&self) {
+        if self.state == ProcessState::Unused {
+            return;
+        }
+
+        crate::println!("{} {:?} {:?}", self.pid, self.state, self.name);
+    }
 }
 
 pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
@@ -222,6 +230,13 @@ unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> b
     } else {
         core::ptr::copy(<*const u8>::from_bits(src), <*mut u8>::from_bits(dst), len);
         true
+    }
+}
+
+pub fn procdump() {
+    crate::print!("\n");
+    for process in table::table().iter() {
+        process.dump();
     }
 }
 
