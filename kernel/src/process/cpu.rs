@@ -10,6 +10,7 @@ use crate::{
 use super::{context::CPUContext, Process};
 
 // Per-CPU state.
+#[derive(Debug)]
 pub struct CPU {
     // The process running on this cpu, or null.
     // TODO: *mut Process
@@ -19,10 +20,10 @@ pub struct CPU {
     pub context: CPUContext,
 
     // Depth of push_off() nesting.
-    disable_interrupt_depth: usize,
+    pub disable_interrupt_depth: usize,
 
     // Were interrupts enabled before push_off()?
-    is_interrupt_enabled_before: bool,
+    pub is_interrupt_enabled_before: bool,
 }
 
 impl CPU {
