@@ -35,7 +35,7 @@ impl<T> SpinLock<T> {
 
         // TODO: Orderingは正しいのか?
         let cpu_addr_saved = self.cpu.load(Acquire);
-        let cpu_addr_current = cpu::current();
+        let cpu_addr_current = &mut *cpu::current();
         self.is_locked() && cpu_addr_saved == cpu_addr_current
     }
 }
@@ -76,7 +76,7 @@ impl<T> Lock for SpinLock<T> {
         core::sync::atomic::fence(Acquire);
 
         // Record info about lock acquisition for holding() and debugging.
-        self.cpu.store(cpu::current(), Release);
+        self.cpu.store(&mut *cpu::current(), Release);
     }
 
     unsafe fn raw_unlock(&self) {
