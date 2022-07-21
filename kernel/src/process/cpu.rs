@@ -1,7 +1,7 @@
 use core::ffi::c_void;
 
 use crate::{
-    config::NCPU,
+    config::{NCPU, ROOTDEV},
     lock::{Lock, LockGuard},
     process::ProcessState,
     riscv::{disable_interrupt, enable_interrupt, is_interrupt_enabled, read_reg},
@@ -171,6 +171,40 @@ impl CPUGlue {
     }
 }
 
+extern "C" {
+    fn sched();
+}
+
+pub unsafe fn pause() {
+    let process = process();
+    let _guard = process.lock.lock();
+    process.state = ProcessState::Runnable;
+    sched();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn forkret() {
+    static mut FIRST: bool = true;
+
+    process().lock.raw_unlock();
+
+    if FIRST {
+        FIRST = false;
+
+        extern "C" {
+            fn fsinit(dev: i32);
+        }
+
+        fsinit(ROOTDEV as _);
+    }
+
+    extern "C" {
+        fn usertrapret();
+    }
+
+    usertrapret();
+}
+
 mod binding {
     use crate::{lock::spin_c::SpinLockC, process::ProcessGlue};
 
@@ -211,5 +245,10 @@ mod binding {
         let mut guard = LockGuard::new(&mut *lock);
         current().sleep(chan, &mut guard);
         core::mem::forget(guard);
+    }
+
+    #[no_mangle]
+    extern "C" fn r#yield() {
+        unsafe { super::pause() };
     }
 }
