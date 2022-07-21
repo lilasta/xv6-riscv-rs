@@ -8,7 +8,7 @@ use core::ptr::NonNull;
 
 use crate::allocator::KernelAllocator;
 use crate::lock::Lock;
-use crate::riscv::enable_interrupt;
+use crate::riscv::{enable_interrupt, is_interrupt_enabled};
 use crate::vm::binding::{copyin, copyout};
 use crate::{config::NOFILE, lock::spin_c::SpinLockC, riscv::paging::PageTable};
 
@@ -256,6 +256,22 @@ pub extern "C" fn scheduler() {
             unsafe { process.lock.raw_unlock() };
         }
     }
+}
+
+#[no_mangle]
+pub extern "C" fn sched() {
+    let cpu = cpu::current();
+    let process = unsafe { cpu::process() };
+    assert!(process.lock.is_held_by_current_cpu());
+    assert!(cpu.disable_interrupt_depth == 1);
+    assert!(process.state != ProcessState::Running);
+    assert!(unsafe { !is_interrupt_enabled() });
+
+    let intena = cpu.is_interrupt_enabled_before;
+    unsafe { context::swtch(&mut process.context, &cpu.context) };
+
+    let cpu = cpu::current();
+    cpu.is_interrupt_enabled_before = intena;
 }
 
 pub fn procdump() {

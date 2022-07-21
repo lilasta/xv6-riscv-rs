@@ -241,30 +241,3 @@ wait(uint64 addr)
     sleep(p.original, &wait_lock);  //DOC: wait-sleep
   }
 }
-
-// Switch to scheduler.  Must hold only p->lock
-// and have changed proc->state. Saves and restores
-// intena because intena is a property of this
-// kernel thread, not this CPU. It should
-// be proc->intena and proc->noff, but that would
-// break in the few places where a lock is held but
-// there's no process.
-void
-sched(void)
-{
-  int intena;
-  struct proc p = myproc();
-
-  if(!holding(p.lock))
-    panic("sched p->lock");
-  if(*mycpu().noff != 1)
-    panic("sched locks");
-  if(*p.state == RUNNING)
-    panic("sched running");
-  if(intr_get())
-    panic("sched interruptible");
-
-  intena = *mycpu().intena;
-  swtch(p.context, mycpu().context);
-  *mycpu().intena = intena;
-}
