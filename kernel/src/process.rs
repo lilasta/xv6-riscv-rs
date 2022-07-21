@@ -249,7 +249,7 @@ pub extern "C" fn scheduler() {
                 process.state = ProcessState::Running;
                 cpu.process = process;
 
-                unsafe { context::swtch(&mut cpu.context, &process.context) };
+                unsafe { context::switch(&mut cpu.context, &process.context) };
 
                 cpu.process = core::ptr::null_mut();
             }
@@ -268,7 +268,7 @@ pub extern "C" fn sched() {
     assert!(unsafe { !is_interrupt_enabled() });
 
     let intena = cpu.is_interrupt_enabled_before;
-    unsafe { context::swtch(&mut process.context, &cpu.context) };
+    unsafe { context::switch(&mut process.context, &cpu.context) };
 
     let cpu = cpu::current();
     cpu.is_interrupt_enabled_before = intena;
