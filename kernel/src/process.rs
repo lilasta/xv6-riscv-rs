@@ -7,7 +7,7 @@ use core::ffi::{c_char, c_void};
 use core::ptr::NonNull;
 
 use crate::allocator::KernelAllocator;
-use crate::lock::Lock;
+use crate::lock::{Lock, LockGuard};
 use crate::riscv::{enable_interrupt, is_interrupt_enabled};
 use crate::vm::binding::{copyin, copyout};
 use crate::{config::NOFILE, lock::spin_c::SpinLockC, riscv::paging::PageTable};
@@ -85,11 +85,10 @@ impl Process {
     // If there are no free procs, or a memory allocation fails, return 0.
     pub unsafe fn allocate(&mut self) {
         extern "C" {
-            fn allocpid() -> i32;
             fn forkret();
         }
 
-        self.pid = allocpid();
+        self.pid = table::table().allocate_pid() as _;
         self.state = ProcessState::Used;
 
         // Allocate a trapframe page.
@@ -235,6 +234,43 @@ unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> b
     }
 }
 
+pub fn sleep<L: Lock>(wakeup_token: usize, guard: &mut LockGuard<L>) {
+    unsafe {
+        let p = cpu::process();
+
+        // Must acquire p->lock in order to
+        // change p->state and then call sched.
+        // Once we hold p->lock, we can be
+        // guaranteed that we won't miss any wakeup
+        // (wakeup locks p->lock),
+        // so it's okay to release lk.
+
+        let process = (*p).lock.lock();
+        (*L::get_lock_ref(guard)).raw_unlock();
+
+        // Go to sleep.
+        (*p).chan = wakeup_token;
+        (*p).state = ProcessState::Sleeping;
+
+        sched();
+
+        // Tidy up.
+        (*p).chan = 0;
+
+        // Reacquire original lock.
+        Lock::unlock(process);
+        (*L::get_lock_ref(guard)).raw_lock();
+    }
+}
+
+pub fn wakeup(token: usize) {
+    extern "C" {
+        fn wakeup(chan: *const c_void);
+    }
+
+    unsafe { wakeup(token as *const _) };
+}
+
 #[no_mangle]
 pub extern "C" fn scheduler() {
     let mut cpu = cpu::current();
@@ -270,6 +306,13 @@ pub extern "C" fn sched() {
     let intena = cpu.is_interrupt_enabled_before;
     unsafe { context::switch(&mut process.context, &cpu.context) };
     cpu.is_interrupt_enabled_before = intena;
+}
+
+pub unsafe fn pause() {
+    let process = cpu::process();
+    let _guard = process.lock.lock();
+    process.state = ProcessState::Runnable;
+    sched();
 }
 
 pub fn procdump() {
@@ -331,7 +374,7 @@ impl ProcessGlue {
 }
 
 mod binding {
-    use super::*;
+    use super::{cpu::CPUGlue, *};
 
     #[no_mangle]
     unsafe extern "C" fn freeproc(p: ProcessGlue) {
@@ -374,5 +417,72 @@ mod binding {
             true => 0,
             false => -1,
         }
+    }
+
+    #[no_mangle]
+    extern "C" fn cpuid() -> i32 {
+        cpu::id() as i32
+    }
+
+    #[no_mangle]
+    extern "C" fn mycpu() -> CPUGlue {
+        CPUGlue::from_cpu(&mut cpu::current())
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn myproc() -> ProcessGlue {
+        ProcessGlue::from_process(&mut *cpu::without_interrupt(|| cpu::current().process))
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn pid() -> usize {
+        *myproc().pid as usize
+    }
+
+    #[no_mangle]
+    extern "C" fn push_off() {
+        cpu::push_disabling_interrupt();
+    }
+
+    #[no_mangle]
+    extern "C" fn pop_off() {
+        cpu::pop_disabling_interrupt();
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn sleep(chan: usize, lock: *mut SpinLockC<()>) {
+        let mut guard = LockGuard::new(&mut *lock);
+        super::sleep(chan, &mut guard);
+        core::mem::forget(guard);
+    }
+
+    #[no_mangle]
+    extern "C" fn r#yield() {
+        unsafe { super::pause() };
+    }
+
+    #[no_mangle]
+    extern "C" fn procinit() {
+        table::table().init();
+    }
+
+    #[no_mangle]
+    extern "C" fn proc(index: i32) -> ProcessGlue {
+        ProcessGlue::from_process(table::table().iter_mut().nth(index as usize).unwrap())
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn allocproc() -> ProcessGlue {
+        ProcessGlue::from_process(&mut *table::table().allocate_process())
+    }
+
+    #[no_mangle]
+    extern "C" fn wakeup(chan: usize) {
+        table::table().wakeup(chan);
+    }
+
+    #[no_mangle]
+    extern "C" fn kill(pid: i32) -> i32 {
+        table::table().kill(pid as usize) as i32
     }
 }

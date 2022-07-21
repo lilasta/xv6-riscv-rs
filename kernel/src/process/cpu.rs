@@ -1,12 +1,8 @@
-use core::{
-    ffi::c_void,
-    ops::{Deref, DerefMut},
-};
+use core::ops::{Deref, DerefMut};
 
 use crate::{
     config::{NCPU, ROOTDEV},
-    lock::{Lock, LockGuard},
-    process::ProcessState,
+    lock::Lock,
     riscv::{disable_interrupt, enable_interrupt, is_interrupt_enabled, read_reg},
 };
 
@@ -37,47 +33,6 @@ impl CPU {
             disable_interrupt_depth: 0,
             is_interrupt_enabled_before: false,
         }
-    }
-
-    pub fn sleep<L: Lock>(&self, wakeup_token: usize, guard: &mut LockGuard<L>) {
-        unsafe {
-            let p = self.process;
-
-            // Must acquire p->lock in order to
-            // change p->state and then call sched.
-            // Once we hold p->lock, we can be
-            // guaranteed that we won't miss any wakeup
-            // (wakeup locks p->lock),
-            // so it's okay to release lk.
-
-            let process = (*p).lock.lock();
-            (*L::get_lock_ref(guard)).raw_unlock();
-
-            // Go to sleep.
-            (*p).chan = wakeup_token;
-            (*p).state = ProcessState::Sleeping;
-
-            extern "C" {
-                fn sched();
-            }
-
-            sched();
-
-            // Tidy up.
-            (*p).chan = 0;
-
-            // Reacquire original lock.
-            Lock::unlock(process);
-            (*L::get_lock_ref(guard)).raw_lock();
-        }
-    }
-
-    pub fn wakeup(&self, token: usize) {
-        extern "C" {
-            fn wakeup(chan: *const c_void);
-        }
-
-        unsafe { wakeup(token as *const _) };
     }
 }
 
@@ -197,17 +152,6 @@ impl CPUGlue {
     }
 }
 
-extern "C" {
-    fn sched();
-}
-
-pub unsafe fn pause() {
-    let process = process();
-    let _guard = process.lock.lock();
-    process.state = ProcessState::Runnable;
-    sched();
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn forkret() {
     static mut FIRST: bool = true;
@@ -229,52 +173,4 @@ pub unsafe extern "C" fn forkret() {
     }
 
     usertrapret();
-}
-
-mod binding {
-    use crate::{lock::spin_c::SpinLockC, process::ProcessGlue};
-
-    use super::*;
-
-    #[no_mangle]
-    extern "C" fn cpuid() -> i32 {
-        id() as i32
-    }
-
-    #[no_mangle]
-    extern "C" fn mycpu() -> CPUGlue {
-        CPUGlue::from_cpu(&mut current())
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn myproc() -> ProcessGlue {
-        ProcessGlue::from_process(&mut *without_interrupt(|| current().process))
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn pid() -> usize {
-        *myproc().pid as usize
-    }
-
-    #[no_mangle]
-    extern "C" fn push_off() {
-        push_disabling_interrupt();
-    }
-
-    #[no_mangle]
-    extern "C" fn pop_off() {
-        pop_disabling_interrupt();
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn sleep(chan: usize, lock: *mut SpinLockC<()>) {
-        let mut guard = LockGuard::new(&mut *lock);
-        current().sleep(chan, &mut guard);
-        core::mem::forget(guard);
-    }
-
-    #[no_mangle]
-    extern "C" fn r#yield() {
-        unsafe { super::pause() };
-    }
 }
