@@ -7,6 +7,7 @@ use crate::{
     config::MAXARG,
     elf::{ELFHeader, ProgramHeader},
     fs::InodeLockGuard,
+    lock::Lock,
     log::LogGuard,
     process::{allocate_pagetable, cpu, free_pagetable},
     riscv::paging::{pg_roundup, PageTable, PGSIZE},
@@ -45,7 +46,7 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
         return -1;
     }
 
-    let current_context = cpu::process();
+    let current_context = cpu::process().get_mut();
     let Ok(mut pagetable) = allocate_pagetable(current_context.trapframe.addr()) else {
         return -1;
     };

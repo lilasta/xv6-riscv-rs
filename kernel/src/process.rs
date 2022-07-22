@@ -36,8 +36,6 @@ pub enum ProcessState {
 // Per-process state
 #[derive(Debug)]
 pub struct Process {
-    pub lock: SpinLockC<()>,
-
     // p->lock must be held when using these:
     pub state: ProcessState, // Process state
     pub chan: usize,         // If non-zero, sleeping on chan
@@ -62,7 +60,6 @@ pub struct Process {
 impl Process {
     pub const fn unused() -> Self {
         Self {
-            lock: SpinLockC::new(()),
             state: ProcessState::Unused,
             chan: 0,
             killed: 0,
@@ -213,7 +210,7 @@ pub fn free_pagetable(mut pagetable: PageTable, size: usize) {
 // depending on usr_dst.
 // Returns 0 on success, -1 on error.
 unsafe fn copyout_either(user_dst: bool, dst: usize, src: usize, len: usize) -> bool {
-    let proc_context = cpu::process();
+    let proc_context = cpu::process().get_mut();
     if user_dst {
         copyout(proc_context.pagetable.unwrap(), dst, src, len) == 0
     } else {
@@ -226,7 +223,7 @@ unsafe fn copyout_either(user_dst: bool, dst: usize, src: usize, len: usize) -> 
 // depending on usr_src.
 // Returns 0 on success, -1 on error.
 unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> bool {
-    let proc_context = cpu::process();
+    let proc_context = cpu::process().get_mut();
     if user_src {
         copyin(proc_context.pagetable.unwrap(), dst, src, len) == 0
     } else {
@@ -237,8 +234,6 @@ unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> b
 
 pub fn sleep<L: Lock>(wakeup_token: usize, guard: &mut LockGuard<L>) {
     unsafe {
-        let p = cpu::process();
-
         // Must acquire p->lock in order to
         // change p->state and then call sched.
         // Once we hold p->lock, we can be
@@ -246,17 +241,17 @@ pub fn sleep<L: Lock>(wakeup_token: usize, guard: &mut LockGuard<L>) {
         // (wakeup locks p->lock),
         // so it's okay to release lk.
 
-        let process = (*p).lock.lock();
+        let mut process = cpu::process().lock();
         (*L::get_lock_ref(guard)).raw_unlock();
 
         // Go to sleep.
-        (*p).chan = wakeup_token;
-        (*p).state = ProcessState::Sleeping;
+        process.chan = wakeup_token;
+        process.state = ProcessState::Sleeping;
 
         sched();
 
         // Tidy up.
-        (*p).chan = 0;
+        process.chan = 0;
 
         // Reacquire original lock.
         Lock::unlock(process);
@@ -280,17 +275,16 @@ pub extern "C" fn scheduler() {
     loop {
         unsafe { enable_interrupt() };
 
-        for process in table::table().iter_mut() {
-            unsafe { process.lock.raw_lock() };
+        for process in table::table().iter() {
+            let mut process = process.lock();
             if process.state == ProcessState::Runnable {
                 process.state = ProcessState::Running;
-                cpu.process = process;
+                cpu.process = Lock::get_lock_ref(&process) as *const _ as *mut _;
 
                 unsafe { context::switch(&mut cpu.context, &process.context) };
 
                 cpu.process = core::ptr::null_mut();
             }
-            unsafe { process.lock.raw_unlock() };
         }
     }
 }
@@ -299,19 +293,18 @@ pub extern "C" fn scheduler() {
 pub extern "C" fn sched() {
     let mut cpu = cpu::current();
     let process = unsafe { cpu::process() };
-    assert!(process.lock.is_held_by_current_cpu());
+    assert!(process.is_held_by_current_cpu());
     assert!(cpu.disable_interrupt_depth == 1);
-    assert!(process.state != ProcessState::Running);
+    assert!(unsafe { process.get().state != ProcessState::Running });
     assert!(unsafe { !is_interrupt_enabled() });
 
     let intena = cpu.is_interrupt_enabled_before;
-    unsafe { context::switch(&mut process.context, &cpu.context) };
+    unsafe { context::switch(&mut process.get_mut().context, &cpu.context) };
     cpu.is_interrupt_enabled_before = intena;
 }
 
 pub unsafe fn pause() {
-    let process = cpu::process();
-    let _guard = process.lock.lock();
+    let mut process = cpu::process().lock();
     process.state = ProcessState::Runnable;
     sched();
 }
@@ -319,7 +312,7 @@ pub unsafe fn pause() {
 pub fn procdump() {
     crate::print!("\n");
     for process in table::table().iter() {
-        process.dump();
+        unsafe { process.get().dump() };
     }
 }
 
@@ -352,9 +345,12 @@ pub struct ProcessGlue {
 }
 
 impl ProcessGlue {
-    pub fn from_process(process: &mut Process) -> Self {
+    pub fn from_process(process: &SpinLockC<Process>) -> Self {
+        let lock_ptr = process as *const _ as *mut _;
+        let original = process as *const _ as *mut _;
+        let process = unsafe { process.get_mut() };
         Self {
-            lock: &mut process.lock,
+            lock: lock_ptr,
             state: &mut process.state,
             chan: &mut process.chan,
             killed: &mut process.killed,
@@ -369,7 +365,7 @@ impl ProcessGlue {
             ofile: &mut process.ofile,
             cwd: &mut process.cwd,
             name: &mut process.name,
-            original: (process as *mut Process).cast(),
+            original: original,
         }
     }
 }
@@ -379,7 +375,9 @@ mod binding {
 
     #[no_mangle]
     unsafe extern "C" fn freeproc(p: ProcessGlue) {
-        (*p.original.cast::<Process>()).deallocate();
+        (*p.original.cast::<SpinLockC<Process>>())
+            .get_mut()
+            .deallocate();
     }
 
     #[no_mangle]
@@ -397,7 +395,7 @@ mod binding {
 
     #[no_mangle]
     unsafe extern "C" fn growproc(n: i32) -> i32 {
-        let p = cpu::process();
+        let p = cpu::process().get_mut();
         match p.resize_memory(n as _) {
             Ok(_) => 0,
             Err(_) => -1,
@@ -427,7 +425,7 @@ mod binding {
 
     #[no_mangle]
     unsafe extern "C" fn myproc() -> ProcessGlue {
-        ProcessGlue::from_process(&mut *cpu::without_interrupt(|| cpu::current().process))
+        ProcessGlue::from_process(&*cpu::without_interrupt(|| cpu::current().process))
     }
 
     #[no_mangle]
@@ -464,12 +462,20 @@ mod binding {
 
     #[no_mangle]
     extern "C" fn proc(index: i32) -> ProcessGlue {
-        ProcessGlue::from_process(table::table().iter_mut().nth(index as usize).unwrap())
+        ProcessGlue::from_process(table::table().iter().nth(index as usize).unwrap())
     }
 
     #[no_mangle]
     unsafe extern "C" fn allocproc() -> ProcessGlue {
-        ProcessGlue::from_process(&mut *table::table().allocate_process())
+        match table::table().allocate_process() {
+            Some(process) => {
+                let refe = Lock::get_lock_ref(&process);
+                let glue = ProcessGlue::from_process(refe);
+                core::mem::forget(process);
+                glue
+            }
+            None => todo!(),
+        }
     }
 
     #[no_mangle]

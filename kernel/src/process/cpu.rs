@@ -2,7 +2,7 @@ use core::ops::{Deref, DerefMut};
 
 use crate::{
     config::{NCPU, ROOTDEV},
-    lock::Lock,
+    lock::{spin_c::SpinLockC, Lock},
     riscv::{disable_interrupt, enable_interrupt, is_interrupt_enabled, read_reg},
 };
 
@@ -13,7 +13,7 @@ use super::{context::CPUContext, Process};
 pub struct CPU {
     // The process running on this cpu, or null.
     // TODO: *mut Process
-    pub process: *mut Process,
+    pub process: *mut SpinLockC<Process>,
 
     // swtch() here to enter scheduler().
     pub context: CPUContext,
@@ -74,7 +74,7 @@ pub fn current() -> CurrentCPU {
     CurrentCPU
 }
 
-pub unsafe fn process() -> &'static mut Process {
+pub unsafe fn process() -> &'static SpinLockC<Process> {
     without_interrupt(|| &mut *current().process)
 }
 
@@ -128,7 +128,7 @@ pub fn without_interrupt<R>(f: impl FnOnce() -> R) -> R {
 pub unsafe extern "C" fn forkret() {
     static mut FIRST: bool = true;
 
-    process().lock.raw_unlock();
+    process().raw_unlock();
 
     if FIRST {
         FIRST = false;

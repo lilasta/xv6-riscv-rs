@@ -4,7 +4,7 @@ use arrayvec::ArrayVec;
 
 use crate::{
     config::NPROC,
-    lock::{spin::SpinLock, Lock},
+    lock::{spin::SpinLock, spin_c::SpinLockC, Lock, LockGuard},
     memory_layout::kstack,
 };
 
@@ -19,7 +19,7 @@ struct Parent {
 #[repr(C)]
 #[derive(Debug)]
 pub struct ProcessTable {
-    procs: [Process; NPROC],
+    procs: [SpinLockC<Process>; NPROC],
     parent_maps: SpinLock<ArrayVec<Parent, NPROC>>,
     next_pid: AtomicUsize,
 }
@@ -27,7 +27,7 @@ pub struct ProcessTable {
 impl ProcessTable {
     pub const fn new() -> Self {
         Self {
-            procs: [const { Process::unused() }; _],
+            procs: [const { SpinLockC::new(Process::unused()) }; _],
             parent_maps: SpinLock::new(ArrayVec::new_const()),
             next_pid: AtomicUsize::new(1),
         }
@@ -35,7 +35,7 @@ impl ProcessTable {
 
     pub fn init(&mut self) {
         for (i, process) in self.procs.iter_mut().enumerate() {
-            process.kstack = kstack(i);
+            unsafe { process.get_mut().kstack = kstack(i) };
         }
     }
 
@@ -44,20 +44,19 @@ impl ProcessTable {
         self.next_pid.fetch_add(1, AcqRel)
     }
 
-    pub fn allocate_process(&mut self) -> *mut Process {
-        for process in self.procs.iter_mut() {
-            unsafe { process.lock.raw_lock() };
+    pub fn allocate_process(&mut self) -> Option<LockGuard<SpinLockC<Process>>> {
+        for process in self.procs.iter() {
+            let mut process = process.lock();
             if process.state == ProcessState::Unused {
                 unsafe { process.allocate() };
                 if process.state == ProcessState::Used {
-                    return process;
+                    return Some(process);
                 } else {
-                    return core::ptr::null_mut();
+                    return None;
                 }
             }
-            unsafe { process.lock.raw_unlock() };
         }
-        core::ptr::null_mut()
+        None
     }
 
     pub fn wakeup(&mut self, token: usize) {
@@ -66,7 +65,7 @@ impl ProcessTable {
                 continue;
             }
 
-            let _guard = process.lock.lock();
+            let mut process = process.lock();
             if process.state == ProcessState::Sleeping && process.chan == token {
                 process.state = ProcessState::Runnable;
             }
@@ -75,7 +74,7 @@ impl ProcessTable {
 
     pub fn kill(&mut self, pid: usize) -> bool {
         for process in self.procs.iter_mut() {
-            let _guard = process.lock.lock();
+            let mut process = process.lock();
             if process.pid == pid as i32 {
                 process.killed = 1;
                 if process.state == ProcessState::Sleeping {
@@ -87,12 +86,8 @@ impl ProcessTable {
         false
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Process> {
+    pub fn iter(&self) -> impl Iterator<Item = &SpinLockC<Process>> {
         self.procs.iter()
-    }
-
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Process> {
-        self.procs.iter_mut()
     }
 }
 
