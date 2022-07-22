@@ -345,6 +345,26 @@ pub struct ProcessGlue {
 }
 
 impl ProcessGlue {
+    pub fn null() -> Self {
+        Self {
+            lock: core::ptr::null_mut(),
+            state: core::ptr::null_mut(),
+            chan: core::ptr::null_mut(),
+            killed: core::ptr::null_mut(),
+            xstate: core::ptr::null_mut(),
+            pid: core::ptr::null_mut(),
+            parent: core::ptr::null_mut(),
+            kstack: core::ptr::null_mut(),
+            sz: core::ptr::null_mut(),
+            pagetable: core::ptr::null_mut(),
+            trapframe: core::ptr::null_mut(),
+            context: core::ptr::null_mut(),
+            ofile: core::ptr::null_mut(),
+            cwd: core::ptr::null_mut(),
+            name: core::ptr::null_mut(),
+            original: core::ptr::null_mut(),
+        }
+    }
     pub fn from_process(process: &SpinLockC<Process>) -> Self {
         let lock_ptr = process as *const _ as *mut _;
         let original = process as *const _ as *mut _;
@@ -474,7 +494,7 @@ mod binding {
                 core::mem::forget(process);
                 glue
             }
-            None => todo!(),
+            None => ProcessGlue::null(),
         }
     }
 
