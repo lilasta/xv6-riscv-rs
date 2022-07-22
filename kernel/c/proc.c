@@ -6,8 +6,6 @@
 #include "proc.h"
 #include "defs.h"
 
-struct cpu cpus[NCPU];
-
 struct proc initproc;
 
 extern void forkret(void);
