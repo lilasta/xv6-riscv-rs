@@ -21,15 +21,6 @@ struct context
   uint64 s11;
 };
 
-// Per-CPU state.
-struct cpu
-{
-  struct proc **proc;      // The process running on this cpu, or null.
-  struct context *context; // swtch() here to enter scheduler().
-  uint64 *noff;               // Depth of push_off() nesting.
-  bool *intena;             // Were interrupts enabled before push_off()?
-};
-
 // per-process data for the trap handling code in trampoline.S.
 // sits in a page by itself just under the trampoline page in the
 // user page table. not specially mapped in the kernel page table.
