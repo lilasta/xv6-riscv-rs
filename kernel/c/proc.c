@@ -163,16 +163,8 @@ exit(int status)
   // Parent might be sleeping in wait().
   wakeup(*p.parent);
   
-  acquire(p.lock);
-
-  *p.xstate = status;
-  *p.state = ZOMBIE;
-
-  release(&wait_lock);
-
-  // Jump into the scheduler, never to return.
-  sched();
-  panic("zombie exit");
+  extern void exit_glue(int, struct spinlock*);
+  exit_glue(status, &wait_lock);
 }
 
 // Wait for a child process to exit and return its pid.
