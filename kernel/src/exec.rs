@@ -46,7 +46,7 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
         return -1;
     }
 
-    let current_context = cpu::process().get_mut();
+    let current_context = cpu::process().unwrap().get_mut();
     let Ok(mut pagetable) = allocate_pagetable(current_context.trapframe.addr()) else {
         return -1;
     };

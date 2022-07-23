@@ -61,8 +61,10 @@ impl ProcessTable {
 
     pub fn wakeup(&mut self, token: usize) {
         for process in self.procs.iter_mut() {
-            if core::ptr::eq(process, unsafe { cpu::process() }) {
-                continue;
+            if let Some(current) = cpu::process() {
+                if core::ptr::eq(process, current) {
+                    continue;
+                }
             }
 
             let mut process = process.lock();
