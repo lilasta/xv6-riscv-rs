@@ -125,9 +125,49 @@ pub fn wakeup(token: usize) {
 }
 
 pub unsafe fn fork() -> Option<usize> {
-    let process = cpu::process()?;
-    let process_new = table::table().allocate_process()?;
-    todo!()
+    let p = cpu::process()?;
+    let process = p.get();
+    let mut process_new = table::table().allocate_process()?;
+
+    if let Err(_) = process
+        .pagetable
+        .unwrap()
+        .copy(process_new.pagetable.as_mut().unwrap(), process.sz)
+    {
+        process_new.deallocate();
+        return None;
+    }
+
+    process_new.sz = process.sz;
+    *process_new.trapframe = (*process.trapframe).clone();
+    (*process_new.trapframe).a0 = 0;
+
+    extern "C" {
+        fn filedup(f: *mut c_void) -> *mut c_void;
+        fn idup(f: *mut c_void) -> *mut c_void;
+    }
+
+    for (from, to) in process.ofile.iter().zip(process_new.ofile.iter_mut()) {
+        if !from.is_null() {
+            *to = filedup(*from);
+        }
+    }
+    process_new.cwd = idup(process.cwd);
+
+    process_new.name = process.name;
+
+    let pid = process_new.pid;
+
+    let parent_ptr = &mut process_new.parent as *mut *mut _ as *mut *mut SpinLockC<Process>;
+    Lock::unlock_temporarily(&mut process_new, || {
+        let _guard = (*table::wait_lock()).lock();
+        *parent_ptr = p as *const _ as *mut _;
+        //table::table().register_parent(process.pid as _, pid as _);
+    });
+
+    process_new.state = ProcessState::Runnable;
+
+    Some(pid as _)
 }
 
 #[no_mangle]
@@ -331,6 +371,13 @@ mod binding {
         core::mem::forget(guard);
     }
 
+    #[no_mangle]
+    extern "C" fn fork() -> i32 {
+        match unsafe { super::fork() } {
+            Some(pid) => pid as _,
+            None => -1,
+        }
+    }
     #[no_mangle]
     extern "C" fn r#yield() {
         super::pause();

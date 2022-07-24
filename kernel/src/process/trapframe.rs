@@ -12,6 +12,7 @@
 // return-to-user path via usertrapret() doesn't return through
 // the entire kernel call stack.
 #[repr(C)]
+#[derive(Debug, Clone)]
 pub struct TrapFrame {
     pub kernel_satp: u64,   // kernel page table
     pub kernel_sp: u64,     // top of process's kernel stack
