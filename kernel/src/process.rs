@@ -124,6 +124,12 @@ pub fn wakeup(token: usize) {
     unsafe { wakeup(token as *const _) };
 }
 
+pub unsafe fn fork() -> Option<usize> {
+    let process = cpu::process()?;
+    let process_new = table::table().allocate_process()?;
+    todo!()
+}
+
 #[no_mangle]
 pub extern "C" fn scheduler() {
     let mut cpu = cpu::current();
@@ -163,7 +169,7 @@ pub fn sched(mut process: LockGuard<'static, SpinLockC<Process>>) {
     cpu::transition(|state| state.complete_switch().unwrap());
 }
 
-pub unsafe fn pause() {
+pub fn pause() {
     let mut process = cpu::transition(|state| state.stop1().unwrap());
     process.state = ProcessState::Runnable;
     sched(process);
@@ -271,19 +277,6 @@ mod binding {
     }
 
     #[no_mangle]
-    extern "C" fn proc_pagetable(trapframe: usize) -> u64 {
-        match allocate_pagetable(trapframe) {
-            Ok(pt) => pt.as_u64(),
-            Err(_) => 0,
-        }
-    }
-
-    #[no_mangle]
-    extern "C" fn proc_freepagetable(pagetable: PageTable, size: usize) {
-        free_pagetable(pagetable, size)
-    }
-
-    #[no_mangle]
     unsafe extern "C" fn growproc(n: i32) -> i32 {
         let p = cpu::process().unwrap().get_mut();
         match p.resize_memory(n as _) {
@@ -322,11 +315,6 @@ mod binding {
     }
 
     #[no_mangle]
-    unsafe extern "C" fn pid() -> usize {
-        *myproc().pid as usize
-    }
-
-    #[no_mangle]
     extern "C" fn push_off() {
         cpu::push_disabling_interrupt();
     }
@@ -345,7 +333,7 @@ mod binding {
 
     #[no_mangle]
     extern "C" fn r#yield() {
-        unsafe { super::pause() };
+        super::pause();
     }
 
     #[no_mangle]
