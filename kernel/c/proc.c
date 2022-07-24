@@ -10,14 +10,9 @@ struct proc initproc;
 
 extern void forkret(void);
 extern void freeproc(struct proc p);
+extern struct spinlock* wait_lock();
 
 extern char trampoline[]; // trampoline.S
-
-// helps ensure that wakeups of wait()ing
-// parents are not lost. helps obey the
-// memory model when using p->parent.
-// must be acquired before any p->lock.
-struct spinlock wait_lock;
 
 extern struct proc proc(int);
 
@@ -65,57 +60,6 @@ userinit(void)
   release(p.lock);
 }
 
-// Create a new process, copying the parent.
-// Sets up child kernel stack to return as if from fork() system call.
-int
-fork(void)
-{
-  int i, pid;
-  struct proc np;
-  struct proc p = myproc();
-
-  // Allocate process.
-  if((np = allocproc()).original == 0){
-    return -1;
-  }
-
-  // Copy user memory from parent to child.
-  if(uvmcopy(*p.pagetable, *np.pagetable, *p.sz) < 0){
-    freeproc(np);
-    release(np.lock);
-    return -1;
-  }
-  *np.sz = *p.sz;
-
-  // copy saved user registers.
-  *(*np.trapframe) = *(*p.trapframe);
-
-  // Cause fork to return 0 in the child.
-  (*np.trapframe)->a0 = 0;
-
-  // increment reference counts on open file descriptors.
-  for(i = 0; i < NOFILE; i++)
-    if(p.ofile[i])
-      np.ofile[i] = filedup(p.ofile[i]);
-  *np.cwd = idup(*p.cwd);
-
-  safestrcpy(np.name, p.name, sizeof(16));
-
-  pid = *np.pid;
-
-  release(np.lock);
-
-  acquire(&wait_lock);
-  *np.parent = p.original;
-  release(&wait_lock);
-
-  acquire(np.lock);
-  *np.state = RUNNABLE;
-  release(np.lock);
-
-  return pid;
-}
-
 // Pass p's abandoned children to init.
 // Caller must hold wait_lock.
 void
@@ -155,7 +99,7 @@ exit(int status)
   end_op();
   *p.cwd = 0;
 
-  acquire(&wait_lock);
+  acquire(wait_lock());
 
   // Give any children to init.
   reparent(p);
@@ -164,7 +108,7 @@ exit(int status)
   wakeup(*p.parent);
   
   extern void exit_glue(int, struct spinlock*);
-  exit_glue(status, &wait_lock);
+  exit_glue(status, wait_lock());
 }
 
 // Wait for a child process to exit and return its pid.
@@ -175,7 +119,7 @@ wait(uint64 addr)
   int havekids, pid;
   struct proc p = myproc();
 
-  acquire(&wait_lock);
+  acquire(wait_lock());
 
   for(;;){
     // Scan through table looking for exited children.
@@ -193,12 +137,12 @@ wait(uint64 addr)
           if(addr != 0 && copyout(*p.pagetable, addr, (char *)np.xstate,
                                   sizeof(*np.xstate)) < 0) {
             release(np.lock);
-            release(&wait_lock);
+            release(wait_lock());
             return -1;
           }
           freeproc(np);
           release(np.lock);
-          release(&wait_lock);
+          release(wait_lock());
           return pid;
         }
         release(np.lock);
@@ -207,11 +151,11 @@ wait(uint64 addr)
 
     // No point waiting if we don't have any children.
     if(!havekids || *p.killed){
-      release(&wait_lock);
+      release(wait_lock());
       return -1;
     }
     
     // Wait for a child to exit.
-    sleep(p.original, &wait_lock);  //DOC: wait-sleep
+    sleep(p.original, wait_lock());  //DOC: wait-sleep
   }
 }

@@ -4,7 +4,7 @@ use arrayvec::ArrayVec;
 
 use crate::{
     config::NPROC,
-    lock::{spin::SpinLock, spin_c::SpinLockC, Lock, LockGuard},
+    lock::{spin_c::SpinLockC, Lock, LockGuard},
     memory_layout::kstack,
 };
 
@@ -20,7 +20,7 @@ struct Parent {
 #[derive(Debug)]
 pub struct ProcessTable {
     procs: [SpinLockC<Process>; NPROC],
-    parent_maps: SpinLock<ArrayVec<Parent, NPROC>>,
+    parent_maps: SpinLockC<ArrayVec<Parent, NPROC>>,
     next_pid: AtomicUsize,
 }
 
@@ -28,7 +28,7 @@ impl ProcessTable {
     pub const fn new() -> Self {
         Self {
             procs: [const { SpinLockC::new(Process::unused()) }; _],
-            parent_maps: SpinLock::new(ArrayVec::new_const()),
+            parent_maps: SpinLockC::new(ArrayVec::new_const()),
             next_pid: AtomicUsize::new(1),
         }
     }
@@ -88,6 +88,13 @@ impl ProcessTable {
         false
     }
 
+    pub fn register_parent(&mut self, parent_pid: usize, child_pid: usize) {
+        self.parent_maps.lock().push(Parent {
+            parent_pid,
+            child_pid,
+        });
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &SpinLockC<Process>> {
         self.procs.iter()
     }
@@ -96,4 +103,9 @@ impl ProcessTable {
 pub fn table() -> &'static mut ProcessTable {
     static mut TABLE: ProcessTable = ProcessTable::new();
     unsafe { &mut TABLE }
+}
+
+#[no_mangle]
+pub extern "C" fn wait_lock() -> *mut SpinLockC<()> {
+    &mut table().parent_maps as *mut _ as *mut _
 }
