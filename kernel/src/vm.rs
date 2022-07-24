@@ -91,63 +91,6 @@ pub mod binding {
         sfence_vma(0, 0);
     }
 
-    #[no_mangle]
-    unsafe extern "C" fn walk(pagetable: PageTable, va: usize, alloc: i32) -> *mut PTE {
-        match pagetable.search_entry(va, if alloc != 0 { true } else { false }) {
-            Ok(pte) => pte,
-            Err(_) => core::ptr::null_mut(),
-        }
-    }
-
-    // Look up a virtual address, return the physical address,
-    // or 0 if not mapped.
-    // Can only be used to look up user pages.
-    #[no_mangle]
-    unsafe extern "C" fn walkaddr(pagetable: PageTable, va: usize) -> usize {
-        pagetable.virtual_to_physical(va).unwrap_or(0)
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn kvmmap(
-        mut kpgtbl: PageTable,
-        va: usize,
-        pa: usize,
-        size: usize,
-        flags: i32,
-    ) {
-        kpgtbl.map(va, pa, size, flags as u64).unwrap();
-    }
-
-    // Create PTEs for virtual addresses starting at va that refer to
-    // physical addresses starting at pa. va and size might not
-    // be page-aligned. Returns 0 on success, -1 if walk() couldn't
-    // allocate a needed page-table page.
-    #[no_mangle]
-    unsafe extern "C" fn mappages(
-        mut kpgtbl: PageTable,
-        va: usize,
-        size: usize,
-        pa: usize,
-        flags: i32,
-    ) -> i32 {
-        match kpgtbl.map(va, pa, size, flags as u64) {
-            Ok(_) => 0,
-            Err(_) => -1,
-        }
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn uvmunmap(mut pagetable: PageTable, va: usize, npages: usize, free: i32) {
-        pagetable.unmap(va, npages, if free != 0 { true } else { false })
-    }
-
-    // create an empty user page table.
-    // returns 0 if out of memory.
-    #[no_mangle]
-    unsafe extern "C" fn uvmcreate() -> u64 {
-        PageTable::allocate().map(|t| t.as_u64()).unwrap_or(0)
-    }
-
     // Load the user initcode into address 0 of pagetable,
     // for the very first process.
     // sz must be less than a page.
@@ -178,30 +121,6 @@ pub mod binding {
         }
     }
 
-    #[no_mangle]
-    unsafe extern "C" fn uvmalloc(
-        mut pagetable: PageTable,
-        old_size: usize,
-        new_size: usize,
-    ) -> usize {
-        match pagetable.grow(old_size, new_size) {
-            Ok(sz) => sz,
-            Err(_) => 0,
-        }
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn uvmdealloc(
-        mut pagetable: PageTable,
-        old_size: usize,
-        new_size: usize,
-    ) -> usize {
-        match pagetable.shrink(old_size, new_size) {
-            Ok(sz) => sz,
-            Err(_) => 0,
-        }
-    }
-
     // Free user memory pages,
     // then free page-table pages.
     #[no_mangle]
@@ -210,14 +129,6 @@ pub mod binding {
             pagetable.unmap(0, pg_roundup(size) / PGSIZE, true);
         }
         pagetable.deallocate();
-    }
-
-    // mark a PTE invalid for user access.
-    // used by exec for the user stack guard page.
-    #[no_mangle]
-    unsafe extern "C" fn uvmclear(pagetable: PageTable, va: usize) {
-        let pte = pagetable.search_entry(va, false).unwrap();
-        pte.set_user_access(false);
     }
 
     // Copy from kernel to user.

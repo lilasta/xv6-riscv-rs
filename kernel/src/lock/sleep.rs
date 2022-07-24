@@ -1,4 +1,4 @@
-use crate::process;
+use crate::process::{self, cpu};
 
 use super::{spin::SpinLock, Lock};
 
@@ -6,7 +6,7 @@ use super::{spin::SpinLock, Lock};
 struct Inner<T> {
     pub locked: bool,
     pub value: T,
-    pub pid: u64,
+    pub pid: usize,
 }
 
 #[derive(Debug)]
@@ -38,13 +38,9 @@ impl<T> Lock for SleepLock<T> {
             process::sleep(token, &mut inner);
         }
 
-        extern "C" {
-            fn pid() -> u64;
-        }
-
         let mut inner = self.inner.lock();
         inner.locked = true;
-        inner.pid = pid();
+        inner.pid = cpu::process().unwrap().get().pid as usize;
         SpinLock::unlock(inner);
     }
 
