@@ -395,13 +395,6 @@ mod binding {
     }
 
     #[no_mangle]
-    unsafe extern "C" fn freeproc(p: ProcessGlue) {
-        (*p.original.cast::<SpinLockC<Process>>())
-            .get_mut()
-            .deallocate();
-    }
-
-    #[no_mangle]
     unsafe extern "C" fn growproc(n: i32) -> i32 {
         let p = cpu::process().unwrap().get_mut();
         match p.resize_memory(n as _) {
@@ -463,6 +456,7 @@ mod binding {
             None => -1,
         }
     }
+
     #[no_mangle]
     extern "C" fn r#yield() {
         super::pause();
@@ -471,11 +465,6 @@ mod binding {
     #[no_mangle]
     extern "C" fn procinit() {
         table::table().init();
-    }
-
-    #[no_mangle]
-    extern "C" fn proc(index: i32) -> ProcessGlue {
-        ProcessGlue::from_process(table::table().iter().nth(index as usize).unwrap())
     }
 
     #[no_mangle]
