@@ -11,7 +11,7 @@
 
 use crate::{
     lock::{Lock, LockGuard},
-    process,
+    process::{self, cpu},
     uart::UART,
 };
 
@@ -143,13 +143,8 @@ impl<'a, L: Lock<Target = Console>> LockGuard<'a, L> {
             // wait until interrupt handler has put some
             // input into cons.buffer.
             while self.read_index == self.write_index {
-                extern "C" {
-                    fn is_myproc_killed_glue() -> i32;
-                }
-                unsafe {
-                    if is_myproc_killed_glue() != 0 {
-                        return -1;
-                    }
+                if unsafe { cpu::process().unwrap().get().killed != 0 } {
+                    return -1;
                 }
                 process::sleep(&self.read_index as *const _ as usize, self)
             }
