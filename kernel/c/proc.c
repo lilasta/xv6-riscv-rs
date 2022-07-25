@@ -6,22 +6,6 @@
 #include "proc.h"
 #include "defs.h"
 
-struct proc initproc;
-
-extern void forkret(void);
-extern void freeproc(struct proc p);
-extern struct spinlock* wait_lock();
-
-extern char trampoline[]; // trampoline.S
-
-extern struct proc proc(int);
-
-int is_myproc_killed_glue(void) {
-  return *myproc().killed;
-}
-
-extern struct proc allocproc(void);
-
 // a user program that calls exec("/init")
 // od -t xC initcode
 uchar initcode[] = {
@@ -34,6 +18,8 @@ uchar initcode[] = {
   0x00, 0x00, 0x00, 0x00
 };
 
+extern struct proc allocproc(void);
+
 // Set up first user process.
 void
 userinit(void)
@@ -41,7 +27,6 @@ userinit(void)
   struct proc p;
 
   p = allocproc();
-  initproc = p;
   
   // allocate one user page and copy init's instructions
   // and data into it.
