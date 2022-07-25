@@ -8,6 +8,7 @@ pub mod trapframe;
 use core::ffi::{c_char, c_void};
 
 use crate::lock::{Lock, LockGuard};
+use crate::log::LogGuard;
 use crate::riscv::{enable_interrupt, is_interrupt_enabled};
 use crate::vm::binding::{copyin, copyout};
 use crate::{config::NOFILE, lock::spin_c::SpinLockC, riscv::paging::PageTable};
@@ -170,6 +171,50 @@ pub unsafe fn fork() -> Option<usize> {
     Some(pid as _)
 }
 
+pub unsafe fn exit(status: i32) {
+    let pl = cpu::process().unwrap();
+    let process = pl.get_mut();
+    assert!(process.pid != 1);
+
+    extern "C" {
+        fn fileclose(fd: *mut c_void);
+        fn iput(i: *mut c_void);
+    }
+
+    for fd in process.ofile.iter_mut() {
+        if !fd.is_null() {
+            fileclose(*fd);
+            *fd = core::ptr::null_mut();
+        }
+    }
+
+    let _guard = LogGuard::new();
+    iput(process.cwd);
+    drop(_guard);
+    process.cwd = core::ptr::null_mut();
+
+    let _guard = (*table::wait_lock()).lock();
+    //table::table().remove_parent(process.pid as usize);
+
+    let initptr = table::table().iter().find(|p| p.get().pid == 1).unwrap();
+    for p in table::table().iter() {
+        if p.get().parent == (pl as *const _ as *mut _) {
+            p.get_mut().parent = initptr as *const _ as *mut _;
+            wakeup(initptr as *const _ as usize);
+        }
+    }
+
+    wakeup(process.parent as usize);
+
+    let mut process = cpu::transition(|state| state.stop1().unwrap());
+    process.xstate = status;
+    process.state = ProcessState::Zombie;
+    drop(_guard);
+
+    sched(process);
+    unreachable!("zombie exit");
+}
+
 #[no_mangle]
 pub extern "C" fn scheduler() {
     let mut cpu = cpu::current();
@@ -300,13 +345,8 @@ mod binding {
     use super::*;
 
     #[no_mangle]
-    unsafe extern "C" fn exit_glue(status: i32, wait_lock: *mut SpinLockC<()>) {
-        let mut process = cpu::transition(|state| state.stop1().unwrap());
-        process.xstate = status;
-        process.state = ProcessState::Zombie;
-        (*wait_lock).raw_unlock();
-        sched(process);
-        unreachable!("zombie exit");
+    unsafe extern "C" fn exit(status: i32) {
+        super::exit(status);
     }
 
     #[no_mangle]

@@ -60,57 +60,6 @@ userinit(void)
   release(p.lock);
 }
 
-// Pass p's abandoned children to init.
-// Caller must hold wait_lock.
-void
-reparent(struct proc p)
-{
-  for(int i = 0; i < NPROC; i++) {
-    struct proc pp = proc(i);
-    if(*pp.parent == p.original){
-      *pp.parent = initproc.original;
-      wakeup(initproc.original);
-    }
-  }
-}
-
-// Exit the current process.  Does not return.
-// An exited process remains in the zombie state
-// until its parent calls wait().
-void
-exit(int status)
-{
-  struct proc p = myproc();
-
-  if(p.original == initproc.original)
-    panic("init exiting");
-
-  // Close all open files.
-  for(int fd = 0; fd < NOFILE; fd++){
-    if(p.ofile[fd]){
-      struct file *f = p.ofile[fd];
-      fileclose(f);
-      p.ofile[fd] = 0;
-    }
-  }
-
-  begin_op();
-  iput(*p.cwd);
-  end_op();
-  *p.cwd = 0;
-
-  acquire(wait_lock());
-
-  // Give any children to init.
-  reparent(p);
-
-  // Parent might be sleeping in wait().
-  wakeup(*p.parent);
-  
-  extern void exit_glue(int, struct spinlock*);
-  exit_glue(status, wait_lock());
-}
-
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
 int
