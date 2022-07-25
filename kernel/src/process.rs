@@ -260,6 +260,43 @@ pub fn pause() {
     sched(process);
 }
 
+pub unsafe fn wait(addr: Option<usize>) -> Option<usize> {
+    let current = cpu::process()?;
+    let mut _guard = (*table::wait_lock()).lock();
+    loop {
+        let mut havekids = false;
+        for process in table::table().iter() {
+            if process.get().parent == (current as *const _ as *mut _) {
+                let mut process = process.lock();
+                havekids = true;
+
+                if process.state == ProcessState::Zombie {
+                    let pid = process.pid;
+                    if let Some(addr) = addr {
+                        if copyout(
+                            current.get().pagetable.unwrap(),
+                            addr,
+                            &process.xstate as *const _ as usize,
+                            core::mem::size_of_val(&process.xstate),
+                        ) < 0
+                        {
+                            return None;
+                        }
+                    }
+                    process.deallocate();
+                    return Some(pid as _);
+                }
+            }
+        }
+
+        if !havekids || current.get().killed != 0 {
+            return None;
+        }
+
+        sleep(current as *const _ as usize, &mut _guard);
+    }
+}
+
 pub fn procdump() {
     crate::print!("\n");
     for process in table::table().iter() {
@@ -347,6 +384,14 @@ mod binding {
     #[no_mangle]
     unsafe extern "C" fn exit(status: i32) {
         super::exit(status);
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn wait(addr: usize) -> i32 {
+        match super::wait(if addr == 0 { None } else { Some(addr) }) {
+            Some(pid) => pid as _,
+            None => -1,
+        }
     }
 
     #[no_mangle]
