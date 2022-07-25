@@ -95,6 +95,16 @@ impl ProcessTable {
         });
     }
 
+    pub fn remove_parent(&mut self, parent_pid: usize) {
+        unsafe {
+            for map in self.parent_maps.get_mut().iter_mut() {
+                if map.parent_pid == parent_pid {
+                    map.parent_pid = 1;
+                }
+            }
+        }
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &SpinLockC<Process>> {
         self.procs.iter()
     }
