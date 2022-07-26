@@ -7,10 +7,11 @@ pub mod trapframe;
 
 use core::ffi::{c_char, c_void};
 
+use crate::cstr;
 use crate::lock::{Lock, LockGuard};
 use crate::log::LogGuard;
 use crate::riscv::{enable_interrupt, is_interrupt_enabled};
-use crate::vm::binding::{copyin, copyout};
+use crate::vm::binding::{copyin, copyout, uvminit};
 use crate::{config::NOFILE, lock::spin_c::SpinLockC, riscv::paging::PageTable};
 
 use crate::{
@@ -22,6 +23,36 @@ use crate::{
 use self::context::CPUContext;
 use self::process::{Process, ProcessState};
 use self::trapframe::TrapFrame;
+
+pub unsafe fn setup_init_process() {
+    // a user program that calls exec("/init")
+    // od -t xC initcode
+    static INITCODE: &[u8] = &[
+        0x17, 0x05, 0x00, 0x00, 0x13, 0x05, 0x45, 0x02, 0x97, 0x05, 0x00, 0x00, 0x93, 0x85, 0x35,
+        0x02, 0x93, 0x08, 0x70, 0x00, 0x73, 0x00, 0x00, 0x00, 0x93, 0x08, 0x20, 0x00, 0x73, 0x00,
+        0x00, 0x00, 0xef, 0xf0, 0x9f, 0xff, 0x2f, 0x69, 0x6e, 0x69, 0x74, 0x00, 0x00, 0x24, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    let mut process = table::table().allocate_process().unwrap();
+    uvminit(
+        process.pagetable.unwrap(),
+        INITCODE.as_ptr(),
+        INITCODE.len(),
+    );
+    process.sz = PGSIZE;
+
+    (*process.trapframe).epc = 0;
+    (*process.trapframe).sp = PGSIZE as _;
+
+    // process.name = "initcode";
+
+    extern "C" {
+        fn namei(str: *const c_char) -> *mut c_void;
+    }
+    process.cwd = namei(cstr!("/").as_ptr());
+    process.state = ProcessState::Runnable;
+}
 
 pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
     let mut pagetable = PageTable::allocate()?;
@@ -380,6 +411,11 @@ impl ProcessGlue {
 
 mod binding {
     use super::*;
+
+    #[no_mangle]
+    unsafe extern "C" fn userinit() {
+        super::setup_init_process();
+    }
 
     #[no_mangle]
     unsafe extern "C" fn exit(status: i32) {
