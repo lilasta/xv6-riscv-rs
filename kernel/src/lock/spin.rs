@@ -4,8 +4,8 @@ use core::{
 };
 
 use crate::{
+    interrupt,
     process::cpu::{self, CPU},
-    riscv::is_interrupt_enabled,
 };
 
 use super::Lock;
@@ -31,7 +31,7 @@ impl<T> SpinLock<T> {
     }
 
     pub fn is_held_by_current_cpu(&self) -> bool {
-        assert!(unsafe { !is_interrupt_enabled() });
+        assert!(!interrupt::is_enabled());
 
         // TODO: Orderingは正しいのか?
         let cpu_addr_saved = self.cpu.load(Acquire);
@@ -53,7 +53,7 @@ impl<T> Lock for SpinLock<T> {
 
     unsafe fn raw_lock(&self) {
         // disable interrupts to avoid deadlock.
-        cpu::push_disabling_interrupt();
+        interrupt::push_off();
 
         // 1つのCPUが2度ロックすることはできない
         assert!(!self.is_held_by_current_cpu());
@@ -103,7 +103,7 @@ impl<T> Lock for SpinLock<T> {
         //   amoswap.w zero, zero, (s1)
         self.locked.store(false, Release);
 
-        cpu::pop_disabling_interrupt();
+        interrupt::pop_off();
     }
 }
 

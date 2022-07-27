@@ -2,17 +2,21 @@ pub mod context;
 pub mod cpu;
 pub mod kernel_stack;
 pub mod process;
+mod scheduler;
 pub mod table;
 pub mod trapframe;
 
 use core::ffi::{c_char, c_void};
 
-use crate::cstr;
+use arrayvec::ArrayVec;
+
+use crate::config::NPROC;
 use crate::lock::{Lock, LockGuard};
 use crate::log::LogGuard;
-use crate::riscv::{enable_interrupt, is_interrupt_enabled};
+use crate::riscv::enable_interrupt;
 use crate::vm::binding::{copyin, copyout, uvminit};
 use crate::{config::NOFILE, lock::spin_c::SpinLockC, riscv::paging::PageTable};
+use crate::{cstr, interrupt};
 
 use crate::{
     memory_layout::{TRAMPOLINE, TRAPFRAME},
@@ -23,6 +27,11 @@ use crate::{
 use self::context::CPUContext;
 use self::process::{Process, ProcessState};
 use self::trapframe::TrapFrame;
+
+pub struct Scheduler {
+    runnables: ArrayVec<&'static SpinLockC<Process>, NPROC>,
+    zombies: ArrayVec<&'static SpinLockC<Process>, NPROC>,
+}
 
 pub unsafe fn setup_init_process() {
     // a user program that calls exec("/init")
@@ -191,13 +200,15 @@ pub unsafe fn fork() -> Option<usize> {
     let pid = process_new.pid;
 
     let parent_ptr = &mut process_new.parent as *mut *mut _ as *mut *mut SpinLockC<Process>;
+    let state_ptr = &mut process_new.state as *mut _;
     Lock::unlock_temporarily(&mut process_new, || {
         let _guard = (*table::wait_lock()).lock();
         *parent_ptr = p as *const _ as *mut _;
+        *state_ptr = ProcessState::Runnable;
         //table::table().register_parent(process.pid as _, pid as _);
     });
 
-    process_new.state = ProcessState::Runnable;
+    //process_new.state = ProcessState::Runnable;
 
     Some(pid as _)
 }
@@ -270,17 +281,17 @@ pub extern "C" fn scheduler() {
 }
 
 pub fn sched(mut process: LockGuard<'static, SpinLockC<Process>>) {
-    let mut cpu = cpu::current();
-    assert!(cpu.disable_interrupt_depth == 1);
+    assert!(!interrupt::is_enabled());
+    assert!(interrupt::get_depth() == 1);
     assert!(process.state != ProcessState::Running);
-    assert!(unsafe { !is_interrupt_enabled() });
 
     let context_ptr = &mut process.context as *mut _;
     cpu::transition(|state| state.stop2(process).unwrap());
 
-    let intena = cpu.is_interrupt_enabled_before;
+    let cpu = cpu::current();
+    let intena = interrupt::is_enabled_before();
     unsafe { context::switch(context_ptr, &cpu.context) };
-    cpu.is_interrupt_enabled_before = intena;
+    interrupt::set_enabled_before(intena);
 
     cpu::transition(|state| state.complete_switch().unwrap());
 }
@@ -384,6 +395,7 @@ impl ProcessGlue {
             original: core::ptr::null_mut(),
         }
     }
+
     pub fn from_process(process: &SpinLockC<Process>) -> Self {
         let lock_ptr = process as *const _ as *mut _;
         let original = process as *const _ as *mut _;
@@ -466,16 +478,6 @@ mod binding {
             Some(p) => ProcessGlue::from_process(p),
             None => ProcessGlue::null(),
         }
-    }
-
-    #[no_mangle]
-    extern "C" fn push_off() {
-        cpu::push_disabling_interrupt();
-    }
-
-    #[no_mangle]
-    extern "C" fn pop_off() {
-        cpu::pop_disabling_interrupt();
     }
 
     #[no_mangle]

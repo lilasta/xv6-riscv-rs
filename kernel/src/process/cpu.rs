@@ -2,8 +2,9 @@ use core::ops::{Deref, DerefMut};
 
 use crate::{
     config::{NCPU, ROOTDEV},
+    interrupt,
     lock::{spin_c::SpinLockC, Lock, LockGuard},
-    riscv::{disable_interrupt, enable_interrupt, is_interrupt_enabled, read_reg},
+    riscv::read_reg,
 };
 
 use super::{context::CPUContext, Process};
@@ -17,12 +18,6 @@ pub struct CPU {
 
     // swtch() here to enter scheduler().
     pub context: CPUContext,
-
-    // Depth of push_off() nesting.
-    pub disable_interrupt_depth: usize,
-
-    // Were interrupts enabled before push_off()?
-    pub is_interrupt_enabled_before: bool,
 }
 
 impl CPU {
@@ -30,8 +25,6 @@ impl CPU {
         Self {
             state: CPUState::Ready,
             context: CPUContext::zeroed(),
-            disable_interrupt_depth: 0,
-            is_interrupt_enabled_before: false,
         }
     }
 }
@@ -137,7 +130,7 @@ pub struct CurrentCPU;
 
 impl CurrentCPU {
     unsafe fn get_raw() -> &'static mut CPU {
-        assert!(!is_interrupt_enabled());
+        assert!(!interrupt::is_enabled());
         assert!(id() < NCPU);
 
         static mut CPUS: [CPU; NCPU] = [const { CPU::new() }; _];
@@ -160,7 +153,7 @@ impl DerefMut for CurrentCPU {
 }
 
 pub fn id() -> usize {
-    assert!(unsafe { !is_interrupt_enabled() });
+    assert!(!interrupt::is_enabled());
     unsafe { read_reg!(tp) as usize }
 }
 
@@ -169,57 +162,11 @@ pub fn current() -> CurrentCPU {
 }
 
 pub fn process() -> Option<&'static SpinLockC<Process>> {
-    without_interrupt(|| current().state.assigned_process())
+    interrupt::off(|| current().state.assigned_process())
 }
 
 pub fn transition<R>(f: impl FnOnce(&mut CPUState<'static>) -> R) -> R {
-    without_interrupt(|| f(&mut current().state))
-}
-
-pub fn push_disabling_interrupt() {
-    // TODO: おそらく順序が大事?
-    let is_enabled = unsafe { is_interrupt_enabled() };
-
-    unsafe {
-        disable_interrupt();
-    }
-
-    let mut cpu = current();
-
-    if cpu.disable_interrupt_depth == 0 {
-        cpu.is_interrupt_enabled_before = is_enabled;
-    }
-
-    cpu.disable_interrupt_depth += 1;
-}
-
-pub fn pop_disabling_interrupt() {
-    assert!(
-        unsafe { !is_interrupt_enabled() },
-        "pop_disabling_interrupt: interruptible"
-    );
-
-    let mut cpu = current();
-
-    assert!(
-        cpu.disable_interrupt_depth > 0,
-        "pop_disabling_interrupt: not pushed before"
-    );
-
-    cpu.disable_interrupt_depth -= 1;
-
-    if cpu.disable_interrupt_depth == 0 {
-        if cpu.is_interrupt_enabled_before {
-            unsafe { enable_interrupt() }
-        }
-    }
-}
-
-pub fn without_interrupt<R>(f: impl FnOnce() -> R) -> R {
-    push_disabling_interrupt();
-    let ret = f();
-    pop_disabling_interrupt();
-    ret
+    interrupt::off(|| f(&mut current().state))
 }
 
 #[no_mangle]

@@ -4,7 +4,7 @@ use core::{
     sync::atomic::{AtomicI32, AtomicU32, Ordering::*},
 };
 
-use crate::{process::cpu, riscv::is_interrupt_enabled};
+use crate::{interrupt, process::cpu};
 
 use super::Lock;
 
@@ -32,8 +32,7 @@ impl<T> SpinLockC<T> {
     }
 
     pub fn is_held_by_current_cpu(&self) -> bool {
-        assert!(unsafe { !is_interrupt_enabled() });
-
+        assert!(!interrupt::is_enabled());
         self.is_locked() && self.cpuid.load(Relaxed) == cpu::id() as _
     }
 }
@@ -51,7 +50,7 @@ impl<T> Lock for SpinLockC<T> {
 
     unsafe fn raw_lock(&self) {
         // disable interrupts to avoid deadlock.
-        cpu::push_disabling_interrupt();
+        interrupt::push_off();
 
         // 1つのCPUが2度ロックすることはできない
         assert!(!self.is_held_by_current_cpu());
@@ -101,7 +100,7 @@ impl<T> Lock for SpinLockC<T> {
         //   amoswap.w zero, zero, (s1)
         self.locked.store(0, Release);
 
-        cpu::pop_disabling_interrupt();
+        interrupt::pop_off();
     }
 }
 

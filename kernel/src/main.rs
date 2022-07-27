@@ -38,6 +38,7 @@ mod entry;
 mod exec;
 mod file;
 mod fs;
+mod interrupt;
 mod kernelvec;
 mod lock;
 mod log;
