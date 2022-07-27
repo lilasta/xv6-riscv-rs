@@ -10,7 +10,7 @@ use crate::{
     riscv::paging::{PageTable, PGSIZE},
 };
 
-use super::{context::CPUContext, free_pagetable, trapframe::TrapFrame};
+use super::{context::CPUContext, cpu::forkret, free_pagetable, trapframe::TrapFrame};
 
 #[repr(C)]
 #[derive(Debug, PartialEq, Eq)]
@@ -72,10 +72,6 @@ impl Process {
     // and return with p->lock held.
     // If there are no free procs, or a memory allocation fails, return 0.
     pub unsafe fn allocate(&mut self) {
-        extern "C" {
-            fn forkret();
-        }
-
         self.pid = table::table().allocate_pid() as _;
         self.state = ProcessState::Used;
 
