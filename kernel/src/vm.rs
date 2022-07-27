@@ -121,16 +121,6 @@ pub mod binding {
         }
     }
 
-    // Free user memory pages,
-    // then free page-table pages.
-    #[no_mangle]
-    unsafe extern "C" fn uvmfree(mut pagetable: PageTable, size: usize) {
-        if size > 0 {
-            pagetable.unmap(0, pg_roundup(size) / PGSIZE, true);
-        }
-        pagetable.deallocate();
-    }
-
     // Copy from kernel to user.
     // Copy len bytes from src to virtual address dstva in a given page table.
     // Return 0 on success, -1 on error.

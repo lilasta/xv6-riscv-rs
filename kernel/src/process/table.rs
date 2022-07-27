@@ -115,7 +115,6 @@ pub fn table() -> &'static mut ProcessTable {
     unsafe { &mut TABLE }
 }
 
-#[no_mangle]
-pub extern "C" fn wait_lock() -> *mut SpinLockC<()> {
+pub fn wait_lock() -> *mut SpinLockC<()> {
     &mut table().parent_maps as *mut _ as *mut _
 }

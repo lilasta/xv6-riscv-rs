@@ -63,11 +63,17 @@ pub unsafe fn setup_init_process() {
     process.state = ProcessState::Runnable;
 }
 
+// Free user memory pages,
+// then free page-table pages.
+unsafe fn uvmfree(mut pagetable: PageTable, size: usize) {
+    if size > 0 {
+        pagetable.unmap(0, crate::riscv::paging::pg_roundup(size) / PGSIZE, true);
+    }
+    pagetable.deallocate();
+}
+
 pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
     let mut pagetable = PageTable::allocate()?;
-    extern "C" {
-        fn uvmfree(pt: PageTable, size: usize);
-    }
 
     // map the trampoline code (for system call return)
     // at the highest user virtual address.
@@ -99,10 +105,6 @@ pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
 }
 
 pub fn free_pagetable(mut pagetable: PageTable, size: usize) {
-    extern "C" {
-        fn uvmfree(pt: PageTable, size: usize);
-    }
-
     pagetable.unmap(TRAMPOLINE, 1, false);
     pagetable.unmap(TRAPFRAME, 1, false);
     unsafe { uvmfree(pagetable, size) };
@@ -111,7 +113,7 @@ pub fn free_pagetable(mut pagetable: PageTable, size: usize) {
 // Copy to either a user address, or kernel address,
 // depending on usr_dst.
 // Returns 0 on success, -1 on error.
-unsafe fn copyout_either(user_dst: bool, dst: usize, src: usize, len: usize) -> bool {
+pub unsafe fn copyout_either(user_dst: bool, dst: usize, src: usize, len: usize) -> bool {
     let proc_context = cpu::process().unwrap().get_mut();
     if user_dst {
         copyout(proc_context.pagetable.unwrap(), dst, src, len) == 0
@@ -124,7 +126,7 @@ unsafe fn copyout_either(user_dst: bool, dst: usize, src: usize, len: usize) -> 
 // Copy from either a user address, or kernel address,
 // depending on usr_src.
 // Returns 0 on success, -1 on error.
-unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> bool {
+pub unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> bool {
     let proc_context = cpu::process().unwrap().get_mut();
     if user_src {
         copyin(proc_context.pagetable.unwrap(), dst, src, len) == 0
@@ -158,11 +160,7 @@ pub fn sleep<L: Lock>(wakeup_token: usize, guard: &mut LockGuard<L>) {
 }
 
 pub fn wakeup(token: usize) {
-    extern "C" {
-        fn wakeup(chan: *const c_void);
-    }
-
-    unsafe { wakeup(token as *const _) };
+    table::table().wakeup(token);
 }
 
 pub unsafe fn fork() -> Option<usize> {
@@ -520,7 +518,7 @@ mod binding {
 
     #[no_mangle]
     extern "C" fn wakeup(chan: usize) {
-        table::table().wakeup(chan);
+        super::wakeup(chan);
     }
 
     #[no_mangle]
