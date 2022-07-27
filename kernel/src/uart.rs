@@ -6,6 +6,7 @@ use core::{
 };
 
 use crate::{
+    interrupt,
     lock::{spin::SpinLock, Lock, LockGuard},
     memory_layout::UART0,
     process,
@@ -200,7 +201,7 @@ impl UART {
     pub fn putc_blocking(&self, c: u8) {
         use reg::*;
 
-        process::cpu::without_interrupt(|| {
+        interrupt::off(|| {
             if self.is_panicked() {
                 loop {}
             }
