@@ -52,7 +52,7 @@ fn cpu() -> InterruptGuard<&'static mut CPU<*mut CPUContext, Process>> {
 pub unsafe extern "C" fn forkret() {
     static mut FIRST: bool = true;
 
-    cpu().complete_switch().unwrap();
+    cpu().finish_dispatch().unwrap();
 
     if FIRST {
         FIRST = false;
@@ -165,26 +165,21 @@ pub unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) 
 }
 
 pub fn sleep<L: Lock>(wakeup_token: usize, guard: &mut LockGuard<L>) {
-    unsafe {
-        // Must acquire p->lock in order to
-        // change p->state and then call sched.
-        // Once we hold p->lock, we can be
-        // guaranteed that we won't miss any wakeup
-        // (wakeup locks p->lock),
-        // so it's okay to release lk.
+    // Must acquire p->lock in order to
+    // change p->state and then call sched.
+    // Once we hold p->lock, we can be
+    // guaranteed that we won't miss any wakeup
+    // (wakeup locks p->lock),
+    // so it's okay to release lk.
 
-        let mut process = cpu().stop1().unwrap();
-        (*L::get_lock_ref(guard)).raw_unlock();
-
+    let mut process = cpu().assigned_process().unwrap().lock();
+    L::unlock_temporarily(guard, || {
         // Go to sleep.
         process.chan = wakeup_token;
         process.state = ProcessState::Sleeping;
 
         sched(process);
-
-        // Reacquire original lock.
-        (*L::get_lock_ref(guard)).raw_lock();
-    }
+    })
 }
 
 pub fn wakeup(token: usize) {
@@ -274,7 +269,7 @@ pub unsafe fn exit(status: i32) {
 
     wakeup(process.parent as usize);
 
-    let mut process = cpu().stop1().unwrap();
+    let mut process = cpu().assigned_process().unwrap().lock();
     process.xstate = status;
     process.state = ProcessState::Zombie;
     drop(_guard);
@@ -295,11 +290,11 @@ pub extern "C" fn scheduler() {
 
                 let mut cpu_context = CPUContext::zeroed();
                 let process_context = &process.context as *const _;
-                cpu().start(&mut cpu_context, process).unwrap();
+                cpu().start_dispatch(&mut cpu_context, process).unwrap();
 
                 unsafe { context::switch(&mut cpu_context, process_context) };
 
-                cpu().end().unwrap();
+                cpu().finish_preemption().unwrap();
             }
         }
     }
@@ -311,17 +306,17 @@ fn sched(mut process: LockGuard<'static, SpinLock<Process>>) {
     assert!(process.state != ProcessState::Running);
 
     let process_context = &mut process.context as *mut _;
-    let cpu_context = cpu().stop2(process).unwrap();
+    let cpu_context = cpu().start_preemption(process).unwrap();
 
     let intena = interrupt::is_enabled_before();
     unsafe { context::switch(process_context, &*cpu_context) };
     interrupt::set_enabled_before(intena);
 
-    cpu().complete_switch().unwrap();
+    cpu().finish_dispatch().unwrap();
 }
 
 pub fn pause() {
-    let mut process = cpu().stop1().unwrap();
+    let mut process = cpu().assigned_process().unwrap().lock();
     process.state = ProcessState::Runnable;
     sched(process);
 }
@@ -524,19 +519,6 @@ mod binding {
     #[no_mangle]
     extern "C" fn procinit() {
         table::table().init();
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn allocproc() -> ProcessGlue {
-        match table::table().allocate_process() {
-            Some(process) => {
-                let refe = Lock::get_lock_ref(&process);
-                let glue = ProcessGlue::from_process(refe);
-                core::mem::forget(process);
-                glue
-            }
-            None => ProcessGlue::null(),
-        }
     }
 
     #[no_mangle]

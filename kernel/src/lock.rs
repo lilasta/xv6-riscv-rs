@@ -2,10 +2,7 @@ pub mod sleep;
 pub mod spin;
 pub mod spin_c;
 
-use core::{
-    marker::Destruct,
-    ops::{Deref, DerefMut},
-};
+use core::ops::{Deref, DerefMut};
 
 pub trait Lock {
     type Target;
@@ -23,12 +20,13 @@ pub trait Lock {
         LockGuard { lock: self }
     }
 
-    fn unlock<'a>(_guard: LockGuard<'a, Self>)
+    fn unlock<'a>(guard: LockGuard<'a, Self>) -> &'a Self
     where
         Self: Sized,
-        LockGuard<'a, Self>: ~const Destruct,
     {
-        // drop(_guard)
+        let this = guard.lock;
+        drop(guard);
+        this
     }
 
     fn unlock_temporarily<R>(guard: &mut LockGuard<Self>, f: impl FnOnce() -> R) -> R
@@ -50,13 +48,6 @@ pub trait Lock {
         let mut guard = self.lock();
         f(guard.deref_mut())
     }
-
-    fn get_lock_ref<'a>(guard: &LockGuard<'a, Self>) -> &'a Self
-    where
-        Self: Sized,
-    {
-        guard.lock
-    }
 }
 
 #[derive(Debug)]
@@ -70,7 +61,7 @@ impl<'a, L: Lock> LockGuard<'a, L> {
     }
 }
 
-impl<'a, L: ~const Lock> const Deref for LockGuard<'a, L> {
+impl<'a, L: Lock> Deref for LockGuard<'a, L> {
     type Target = L::Target;
 
     fn deref(&self) -> &Self::Target {
@@ -78,13 +69,13 @@ impl<'a, L: ~const Lock> const Deref for LockGuard<'a, L> {
     }
 }
 
-impl<'a, L: ~const Lock> const DerefMut for LockGuard<'a, L> {
+impl<'a, L: Lock> DerefMut for LockGuard<'a, L> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { self.lock.get_mut() }
     }
 }
 
-impl<'a, L: ~const Lock> const Drop for LockGuard<'a, L> {
+impl<'a, L: Lock> Drop for LockGuard<'a, L> {
     fn drop(&mut self) {
         unsafe { self.lock.raw_unlock() }
     }
