@@ -1,12 +1,9 @@
 use core::{
     cell::UnsafeCell,
-    sync::atomic::{AtomicBool, AtomicPtr, Ordering::*},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering::*},
 };
 
-use crate::{
-    interrupt,
-    process::cpu::{self, CPU},
-};
+use crate::{interrupt, process::cpu};
 
 use super::Lock;
 
@@ -14,7 +11,7 @@ use super::Lock;
 pub struct SpinLock<T> {
     locked: AtomicBool,
     value: UnsafeCell<T>,
-    cpu: AtomicPtr<CPU>,
+    cpuid: AtomicUsize,
 }
 
 impl<T> SpinLock<T> {
@@ -22,7 +19,7 @@ impl<T> SpinLock<T> {
         Self {
             locked: AtomicBool::new(false),
             value: UnsafeCell::new(value),
-            cpu: AtomicPtr::new(core::ptr::null_mut()),
+            cpuid: AtomicUsize::new(usize::MAX),
         }
     }
 
@@ -34,9 +31,7 @@ impl<T> SpinLock<T> {
         assert!(!interrupt::is_enabled());
 
         // TODO: Orderingは正しいのか?
-        let cpu_addr_saved = self.cpu.load(Acquire);
-        let cpu_addr_current = &mut *cpu::current();
-        self.is_locked() && cpu_addr_saved == cpu_addr_current
+        self.is_locked() && self.cpuid.load(Acquire) == cpu::id()
     }
 }
 
@@ -76,14 +71,14 @@ impl<T> Lock for SpinLock<T> {
         core::sync::atomic::fence(Acquire);
 
         // Record info about lock acquisition for holding() and debugging.
-        self.cpu.store(&mut *cpu::current(), Release);
+        self.cpuid.store(cpu::id(), Release);
     }
 
     unsafe fn raw_unlock(&self) {
         // 同じCPUによってロックされているかチェック
         assert!(self.is_held_by_current_cpu());
 
-        self.cpu.store(core::ptr::null_mut(), Release);
+        self.cpuid.store(usize::MAX, Release);
 
         // Tell the C compiler and the CPU to not move loads or stores
         // past this point, to ensure that all the stores in the critical

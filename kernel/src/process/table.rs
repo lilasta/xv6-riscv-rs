@@ -61,7 +61,7 @@ impl ProcessTable {
 
     pub fn wakeup(&mut self, token: usize) {
         for process in self.procs.iter_mut() {
-            if let Some(current) = cpu::process() {
+            if let Some(current) = cpu::current().assigned_process() {
                 if core::ptr::eq(process, current) {
                     continue;
                 }

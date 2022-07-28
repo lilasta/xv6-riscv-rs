@@ -1,48 +1,23 @@
-use core::ops::{Deref, DerefMut};
-
 use crate::{
     config::{NCPU, ROOTDEV},
-    interrupt,
+    interrupt::{self, InterruptGuard},
     lock::{spin_c::SpinLockC, Lock, LockGuard},
     riscv::read_reg,
 };
 
 use super::{context::CPUContext, Process};
 
-// Per-CPU state.
 #[derive(Debug)]
-pub struct CPU {
-    // The process running on this cpu, or null.
-    // TODO: *mut Process
-    state: CPUState<'static>,
-
-    // swtch() here to enter scheduler().
-    pub context: CPUContext,
+pub enum CPU {
+    Invalid,
+    Ready,
+    Starting(CPUContext, LockGuard<'static, SpinLockC<Process>>),
+    Running(CPUContext, &'static SpinLockC<Process>),
+    Stopping1(CPUContext, &'static SpinLockC<Process>),
+    Stopping2(LockGuard<'static, SpinLockC<Process>>),
 }
 
 impl CPU {
-    const fn new() -> Self {
-        Self {
-            state: CPUState::Ready,
-            context: CPUContext::zeroed(),
-        }
-    }
-}
-
-impl !Sync for CPU {}
-impl !Send for CPU {}
-
-#[derive(Debug)]
-pub enum CPUState<'a> {
-    Invalid,
-    Ready,
-    Starting(LockGuard<'a, SpinLockC<Process>>),
-    Running(&'a SpinLockC<Process>),
-    Stopping1(&'a SpinLockC<Process>),
-    Stopping2(LockGuard<'a, SpinLockC<Process>>),
-}
-
-impl<'a> CPUState<'a> {
     pub const fn is_invalid(&self) -> bool {
         matches!(self, Self::Invalid)
     }
@@ -52,24 +27,24 @@ impl<'a> CPUState<'a> {
     }
 
     pub const fn is_starting(&self) -> bool {
-        matches!(self, Self::Starting(_))
+        matches!(self, Self::Starting(_, _))
     }
 
     pub const fn is_running(&self) -> bool {
-        matches!(self, Self::Running(_))
+        matches!(self, Self::Running(_, _))
     }
 
     pub const fn is_stopping(&self) -> bool {
-        matches!(self, Self::Stopping1(_) | Self::Stopping2(_))
+        matches!(self, Self::Stopping1(_, _) | Self::Stopping2(_))
     }
 
-    pub fn assigned_process(&self) -> Option<&'a SpinLockC<Process>> {
+    pub fn assigned_process(&self) -> Option<&'static SpinLockC<Process>> {
         match self {
             Self::Invalid => None,
             Self::Ready => None,
-            Self::Starting(_) => None,
-            Self::Running(process) => Some(process),
-            Self::Stopping1(process) => Some(process),
+            Self::Starting(_, _) => None,
+            Self::Running(_, process) => Some(process),
+            Self::Stopping1(_, process) => Some(process),
             Self::Stopping2(_) => None,
         }
     }
@@ -86,39 +61,49 @@ impl<'a> CPUState<'a> {
 
     pub fn start(
         &mut self,
-        process: LockGuard<'a, SpinLockC<Process>>,
-    ) -> Result<(), LockGuard<'a, SpinLockC<Process>>> {
+        process: LockGuard<'static, SpinLockC<Process>>,
+    ) -> Result<*mut CPUContext, LockGuard<'static, SpinLockC<Process>>> {
         self.transition(|this| match this {
-            Self::Ready => (Self::Starting(process), Ok(())),
+            Self::Ready => (Self::Starting(CPUContext::zeroed(), process), Ok(())),
             other => (other, Err(process)),
-        })
+        })?;
+
+        let Self::Starting(context, _) = self else {
+            unreachable!();
+        };
+
+        Ok(context)
     }
 
     pub fn complete_switch(&mut self) -> Result<(), ()> {
         self.transition(|this| match this {
-            Self::Starting(process) => (Self::Running(Lock::get_lock_ref(&process)), Ok(())),
+            Self::Starting(context, process) => {
+                (Self::Running(context, Lock::get_lock_ref(&process)), Ok(()))
+            }
             other => (other, Err(())),
         })
     }
 
-    pub fn stop1(&mut self) -> Result<LockGuard<'a, SpinLockC<Process>>, ()> {
+    pub fn stop1(&mut self) -> Result<LockGuard<'static, SpinLockC<Process>>, ()> {
         self.transition(|this| match this {
-            Self::Running(process) => (Self::Stopping1(process), Ok(process.lock())),
+            Self::Running(context, process) => {
+                (Self::Stopping1(context, process), Ok(process.lock()))
+            }
             other => (other, Err(())),
         })
     }
 
     pub fn stop2(
         &mut self,
-        process: LockGuard<'a, SpinLockC<Process>>,
-    ) -> Result<(), LockGuard<'a, SpinLockC<Process>>> {
+        process: LockGuard<'static, SpinLockC<Process>>,
+    ) -> Result<CPUContext, LockGuard<'static, SpinLockC<Process>>> {
         self.transition(|this| match this {
-            Self::Stopping1(_) => (Self::Stopping2(process), Ok(())),
+            Self::Stopping1(context, _) => (Self::Stopping2(process), Ok(context)),
             other => (other, Err(process)),
         })
     }
 
-    pub fn end(&mut self) -> Result<LockGuard<'a, SpinLockC<Process>>, ()> {
+    pub fn end(&mut self) -> Result<LockGuard<'static, SpinLockC<Process>>, ()> {
         self.transition(|this| match this {
             Self::Stopping2(process) => (Self::Ready, Ok(process)),
             other => (other, Err(())),
@@ -126,54 +111,31 @@ impl<'a> CPUState<'a> {
     }
 }
 
-pub struct CurrentCPU;
-
-impl CurrentCPU {
-    unsafe fn get_raw() -> &'static mut CPU {
-        assert!(!interrupt::is_enabled());
-        assert!(id() < NCPU);
-
-        static mut CPUS: [CPU; NCPU] = [const { CPU::new() }; _];
-        &mut CPUS[id()]
-    }
-}
-
-impl Deref for CurrentCPU {
-    type Target = CPU;
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { Self::get_raw() }
-    }
-}
-
-impl DerefMut for CurrentCPU {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { Self::get_raw() }
-    }
-}
+impl !Sync for CPU {}
+impl !Send for CPU {}
 
 pub fn id() -> usize {
     assert!(!interrupt::is_enabled());
     unsafe { read_reg!(tp) as usize }
 }
 
-pub fn current() -> CurrentCPU {
-    CurrentCPU
+pub fn current() -> InterruptGuard<&'static mut CPU> {
+    InterruptGuard::with(|| unsafe { current_raw() })
 }
 
-pub fn process() -> Option<&'static SpinLockC<Process>> {
-    interrupt::off(|| current().state.assigned_process())
-}
+pub unsafe fn current_raw() -> &'static mut CPU {
+    assert!(!interrupt::is_enabled());
+    assert!(id() < NCPU);
 
-pub fn transition<R>(f: impl FnOnce(&mut CPUState<'static>) -> R) -> R {
-    interrupt::off(|| f(&mut current().state))
+    static mut CPUS: [CPU; NCPU] = [const { CPU::Ready }; _];
+    &mut CPUS[id()]
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn forkret() {
     static mut FIRST: bool = true;
 
-    transition(|state| state.complete_switch().unwrap());
+    current().complete_switch().unwrap();
 
     if FIRST {
         FIRST = false;
