@@ -45,7 +45,7 @@ void usertrap(void)
   struct proc p = myproc();
 
   // save user program counter.
-  (*p.trapframe)->epc = r_sepc();
+  p.trapframe->epc = r_sepc();
 
   if (r_scause() == 8)
   {
@@ -56,7 +56,7 @@ void usertrap(void)
 
     // sepc points to the ecall instruction,
     // but we want to return to the next instruction.
-    (*p.trapframe)->epc += 4;
+    p.trapframe->epc += 4;
 
     // an interrupt will change sstatus &c registers,
     // so don't enable until done with those registers.
@@ -102,10 +102,10 @@ void usertrapret(void)
 
   // set up trapframe values that user_trap_handler will need when
   // the process next re-enters the kernel.
-  (*p.trapframe)->kernel_satp = r_satp();         // kernel page table
-  (*p.trapframe)->kernel_sp = *p.kstack + PGSIZE; // process's kernel stack
-  (*p.trapframe)->kernel_trap = (uint64)usertrap;
-  (*p.trapframe)->kernel_hartid = r_tp(); // hartid for cpuid()
+  p.trapframe->kernel_satp = r_satp();         // kernel page table
+  p.trapframe->kernel_sp = *p.kstack + PGSIZE; // process's kernel stack
+  p.trapframe->kernel_trap = (uint64)usertrap;
+  p.trapframe->kernel_hartid = r_tp(); // hartid for cpuid()
 
   // set up the registers that trampoline.S's sret will use
   // to get to user space.
@@ -117,7 +117,7 @@ void usertrapret(void)
   w_sstatus(x);
 
   // set S Exception Program Counter to the saved user pc.
-  w_sepc((*p.trapframe)->epc);
+  w_sepc(p.trapframe->epc);
 
   // tell trampoline.S the user page table to switch to.
   uint64 satp = MAKE_SATP(*p.pagetable);

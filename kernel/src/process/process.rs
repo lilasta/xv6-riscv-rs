@@ -1,126 +1,179 @@
-use core::{
-    ffi::{c_char, c_void},
-    ptr::NonNull,
-};
+use core::{ffi::c_void, ptr::NonNull};
 
 use crate::{
     allocator::KernelAllocator,
     config::NOFILE,
-    process::{allocate_pagetable, table},
+    process::allocate_pagetable,
     riscv::paging::{PageTable, PGSIZE},
 };
 
-use super::{context::CPUContext, forkret, free_pagetable, trapframe::TrapFrame};
+use super::{
+    context::CPUContext, free_pagetable, kernel_stack::kstack_allocator, trapframe::TrapFrame,
+};
 
-#[repr(C)]
-#[derive(Debug, PartialEq, Eq)]
-pub enum ProcessState {
-    Unused,
-    Used,
-    Sleeping,
-    Runnable,
-    Running,
-    Zombie,
-}
-
-// Per-process state
 #[derive(Debug)]
-pub struct Process {
-    // p->lock must be held when using these:
-    pub state: ProcessState, // Process state
-    pub chan: usize,         // If non-zero, sleeping on chan
-    pub killed: i32,         // If non-zero, have been killed
-    pub xstate: i32,         // Exit status to be returned to parent's wait
-    pub pid: i32,            // Process ID
-
-    // wait_lock must be held when using this:
-    pub parent: *mut Process, // Parent process
-
-    // these are private to the process, so p->lock need not be held.
-    pub kstack: usize,                // Virtual address of kernel stack
-    pub sz: usize,                    // Size of process memory (bytes)
-    pub pagetable: Option<PageTable>, // User page table
-    pub trapframe: *mut TrapFrame,    // data page for trampoline.S
-    pub context: CPUContext,          // swtch() here to run process
-    pub ofile: [*mut c_void; NOFILE], // Open files
-    pub cwd: *mut c_void,             // Current directory
-    pub name: [c_char; 16],           // Process name (debugging)
+pub enum Process<M, C, T, X> {
+    Invalid,
+    Unused,
+    Runnable(M, C),
+    Running(M),
+    Sleeping(M, C, T),
+    Zombie(M, X),
 }
 
-impl Process {
-    pub const fn unused() -> Self {
-        Self {
-            state: ProcessState::Unused,
-            chan: 0,
-            killed: 0,
-            xstate: 0,
-            pid: 0,
-            parent: core::ptr::null_mut(),
-            kstack: 0,
+impl<M, C, T, X> Process<M, C, T, X> {
+    pub const fn is_unused(&self) -> bool {
+        matches!(self, Self::Unused)
+    }
+
+    pub const fn is_sleeping(&self) -> bool {
+        matches!(self, Self::Sleeping(_, _, _))
+    }
+
+    pub fn is_sleeping_on(&self, token: T) -> bool
+    where
+        T: PartialEq,
+    {
+        matches!(self, Self::Sleeping(_,_, on) if *on == token)
+    }
+
+    pub const fn is_runnable(&self) -> bool {
+        matches!(self, Self::Runnable(_, _))
+    }
+
+    pub const fn is_running(&self) -> bool {
+        matches!(self, Self::Running(_))
+    }
+
+    pub const fn is_zombie(&self) -> bool {
+        matches!(self, Self::Zombie(_, _))
+    }
+
+    fn transition<S, E>(&mut self, f: impl FnOnce(Self) -> (Self, Result<S, E>)) -> Result<S, E> {
+        let mut tmp = Self::Invalid;
+        core::mem::swap(self, &mut tmp);
+
+        let (mut this, res) = f(tmp);
+        core::mem::swap(self, &mut this);
+
+        res
+    }
+
+    pub fn setup(&mut self, metadata: M, context: C) -> Result<(), (M, C)> {
+        self.transition(|this| match this {
+            Self::Unused => (Self::Runnable(metadata, context), Ok(())),
+            other => (other, Err((metadata, context))),
+        })
+    }
+
+    pub fn run(&mut self) -> Result<C, ()> {
+        self.transition(|this| match this {
+            Self::Runnable(metadata, context) => (Self::Running(metadata), Ok(context)),
+            other => (other, Err(())),
+        })
+    }
+
+    pub fn sleep(&mut self, context: C, token: T) -> Result<(), C> {
+        self.transition(|this| match this {
+            Self::Running(metadata) => (Self::Sleeping(metadata, context, token), Ok(())),
+            other => (other, Err(context)),
+        })
+    }
+
+    pub fn wakeup(&mut self) -> Result<(), ()> {
+        self.transition(|this| match this {
+            Self::Sleeping(metadata, context, _) => (Self::Runnable(metadata, context), Ok(())),
+            other => (other, Err(())),
+        })
+    }
+
+    pub fn pause(&mut self, context: C) -> Result<(), C> {
+        self.transition(|this| match this {
+            Self::Running(metadata) => (Self::Runnable(metadata, context), Ok(())),
+            other => (other, Err(context)),
+        })
+    }
+
+    pub fn die(&mut self, exit_status: X) -> Result<(), ()> {
+        self.transition(|this| match this {
+            Self::Running(metadata) => (Self::Zombie(metadata, exit_status), Ok(())),
+            other => (other, Err(())),
+        })
+    }
+
+    pub fn clear(&mut self) -> Result<M, ()> {
+        self.transition(|this| match this {
+            Self::Running(metadata) => (Self::Unused, Ok(metadata)),
+            other => (other, Err(())),
+        })
+    }
+
+    pub const fn metadata(&self) -> Option<&M> {
+        match self {
+            Self::Invalid | Self::Unused => None,
+            Self::Runnable(metadata, _)
+            | Self::Running(metadata)
+            | Self::Sleeping(metadata, _, _)
+            | Self::Zombie(metadata, _) => Some(metadata),
+        }
+    }
+
+    pub const fn metadata_mut(&mut self) -> Option<&mut M> {
+        match self {
+            Self::Invalid | Self::Unused => None,
+            Self::Runnable(metadata, _)
+            | Self::Running(metadata)
+            | Self::Sleeping(metadata, _, _)
+            | Self::Zombie(metadata, _) => Some(metadata),
+        }
+    }
+
+    pub const fn context(&self) -> Option<&C> {
+        match self {
+            Self::Invalid | Self::Unused | Self::Running(_) | Self::Zombie(_, _) => None,
+            Self::Runnable(_, context) | Self::Sleeping(_, context, _) => Some(context),
+        }
+    }
+
+    pub const fn context_mut(&mut self) -> Option<&mut C> {
+        match self {
+            Self::Invalid | Self::Unused | Self::Running(_) | Self::Zombie(_, _) => None,
+            Self::Runnable(_, context) | Self::Sleeping(_, context, _) => Some(context),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ProcessContext {
+    pub kstack: usize,                 // Virtual address of kernel stack
+    pub sz: usize,                     // Size of process memory (bytes)
+    pub pagetable: PageTable,          // User page table
+    pub trapframe: NonNull<TrapFrame>, // data page for trampoline.S
+    pub context: CPUContext,           // swtch() here to run process
+    pub ofile: [*mut c_void; NOFILE],  // Open files
+    pub cwd: *mut c_void,              // Current directory
+}
+
+impl ProcessContext {
+    pub fn allocate(jump: extern "C" fn()) -> Result<Self, ()> {
+        let trapframe = KernelAllocator::get().allocate().ok_or(())?;
+        let pagetable = allocate_pagetable(trapframe.addr().get())?;
+
+        let kstack = kstack_allocator().allocate().ok_or(())?;
+
+        let mut context = CPUContext::zeroed();
+        context.ra = jump as u64;
+        context.sp = (jump as usize + PGSIZE) as u64;
+
+        Ok(Self {
+            kstack,
             sz: 0,
-            pagetable: None,
-            trapframe: core::ptr::null_mut(),
-            context: CPUContext::zeroed(),
+            pagetable,
+            trapframe,
+            context,
             ofile: [core::ptr::null_mut(); _],
             cwd: core::ptr::null_mut(),
-            name: [0; _],
-        }
-    }
-
-    // Look in the process table for an UNUSED proc.
-    // If found, initialize state required to run in the kernel,
-    // and return with p->lock held.
-    // If there are no free procs, or a memory allocation fails, return 0.
-    pub unsafe fn allocate(&mut self) {
-        self.pid = table::table().allocate_pid() as _;
-        self.state = ProcessState::Used;
-
-        // Allocate a trapframe page.
-        match KernelAllocator::get().allocate() {
-            Some(trapframe) => self.trapframe = trapframe.as_ptr(),
-            None => {
-                self.deallocate();
-                return;
-            }
-        }
-
-        // An empty user page table.
-        match allocate_pagetable(self.trapframe.addr()) {
-            Ok(pagetable) => self.pagetable = Some(pagetable),
-            Err(_) => {
-                self.deallocate();
-                return;
-            }
-        }
-
-        // Set up new context to start executing at forkret,
-        // which returns to user space.
-        self.context = CPUContext::zeroed();
-        self.context.ra = forkret as u64;
-        self.context.sp = (self.kstack + PGSIZE) as u64;
-    }
-
-    // free a proc structure and the data hanging from it,
-    // including user pages.
-    // p->lock must be held.
-    pub unsafe fn deallocate(&mut self) {
-        if !self.trapframe.is_null() {
-            KernelAllocator::get().deallocate(NonNull::new_unchecked(self.trapframe));
-            self.trapframe = core::ptr::null_mut();
-        }
-
-        if let Some(pagetable) = &self.pagetable {
-            free_pagetable(*pagetable, self.sz);
-        }
-
-        self.sz = 0;
-        self.pid = 0;
-        self.parent = core::ptr::null_mut();
-        self.name[0] = 0;
-        self.chan = 0;
-        self.killed = 0;
-        self.xstate = 0;
-        self.state = ProcessState::Unused;
+        })
     }
 
     pub fn resize_memory(&mut self, n: isize) -> Result<(), ()> {
@@ -131,18 +184,17 @@ impl Process {
         let old_size = self.sz;
         let new_size = self.sz.wrapping_add_signed(n);
         if n > 0 {
-            self.sz = self.pagetable.unwrap().grow(old_size, new_size)?;
+            self.sz = self.pagetable.grow(old_size, new_size)?;
         } else {
-            self.sz = self.pagetable.unwrap().shrink(old_size, new_size)?;
+            self.sz = self.pagetable.shrink(old_size, new_size)?;
         }
         return Ok(());
     }
+}
 
-    pub fn dump(&self) {
-        if self.state == ProcessState::Unused {
-            return;
-        }
-
-        crate::println!("{} {:?} {:?}", self.pid, self.state, self.name);
+impl Drop for ProcessContext {
+    fn drop(&mut self) {
+        KernelAllocator::get().deallocate(self.trapframe);
+        free_pagetable(self.pagetable, self.sz);
     }
 }

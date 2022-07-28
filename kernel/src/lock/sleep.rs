@@ -40,7 +40,7 @@ impl<T> Lock for SleepLock<T> {
 
         let mut inner = self.inner.lock();
         inner.locked = true;
-        inner.pid = process::current().unwrap().get().pid as usize;
+        inner.pid = process::current().unwrap().get().metadata().unwrap().pid;
         SpinLock::unlock(inner);
     }
 
