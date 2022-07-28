@@ -3,7 +3,7 @@ use core::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering::*},
 };
 
-use crate::{interrupt, process::cpu};
+use crate::{interrupt, process};
 
 use super::Lock;
 
@@ -31,7 +31,7 @@ impl<T> SpinLock<T> {
         assert!(!interrupt::is_enabled());
 
         // TODO: Orderingは正しいのか?
-        self.is_locked() && self.cpuid.load(Acquire) == cpu::id()
+        self.is_locked() && self.cpuid.load(Acquire) == process::cpuid()
     }
 }
 
@@ -71,7 +71,7 @@ impl<T> Lock for SpinLock<T> {
         core::sync::atomic::fence(Acquire);
 
         // Record info about lock acquisition for holding() and debugging.
-        self.cpuid.store(cpu::id(), Release);
+        self.cpuid.store(process::cpuid(), Release);
     }
 
     unsafe fn raw_unlock(&self) {

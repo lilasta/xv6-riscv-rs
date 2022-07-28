@@ -4,7 +4,7 @@ use core::{
     sync::atomic::{AtomicI32, AtomicU32, Ordering::*},
 };
 
-use crate::{interrupt, process::cpu};
+use crate::{interrupt, process};
 
 use super::Lock;
 
@@ -33,7 +33,7 @@ impl<T> SpinLockC<T> {
 
     pub fn is_held_by_current_cpu(&self) -> bool {
         assert!(!interrupt::is_enabled());
-        self.is_locked() && self.cpuid.load(Relaxed) == cpu::id() as _
+        self.is_locked() && self.cpuid.load(Relaxed) == process::cpuid() as _
     }
 }
 
@@ -73,7 +73,7 @@ impl<T> Lock for SpinLockC<T> {
         core::sync::atomic::fence(Acquire);
 
         // Record info about lock acquisition for holding() and debugging.
-        self.cpuid.store(cpu::id() as i32, Release);
+        self.cpuid.store(process::cpuid() as i32, Release);
     }
 
     unsafe fn raw_unlock(&self) {

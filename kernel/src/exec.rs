@@ -9,7 +9,7 @@ use crate::{
     fs::InodeLockGuard,
     lock::Lock,
     log::LogGuard,
-    process::{allocate_pagetable, cpu, free_pagetable},
+    process::{self, allocate_pagetable, free_pagetable},
     riscv::paging::{pg_roundup, PageTable, PGSIZE},
     vm::binding::copyout,
 };
@@ -46,7 +46,7 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
         return -1;
     }
 
-    let current_context = cpu::current().assigned_process().unwrap().get_mut();
+    let current_context = process::current().unwrap().get_mut();
     let Ok(mut pagetable) = allocate_pagetable(current_context.trapframe.addr()) else {
         return -1;
     };

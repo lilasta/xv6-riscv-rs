@@ -1,22 +1,22 @@
-pub mod context;
-pub mod cpu;
+mod context;
+mod cpu;
 pub mod kernel_stack;
 pub mod process;
 mod scheduler;
-pub mod table;
-pub mod trapframe;
+mod table;
+mod trapframe;
 
 use core::ffi::{c_char, c_void};
 
-use arrayvec::ArrayVec;
-
-use crate::config::NPROC;
+use crate::config::{NCPU, ROOTDEV};
+use crate::interrupt::InterruptGuard;
+use crate::lock::spin::SpinLock;
 use crate::lock::{Lock, LockGuard};
 use crate::log::LogGuard;
-use crate::riscv::enable_interrupt;
+use crate::riscv::{self, enable_interrupt};
 use crate::vm::binding::{copyin, copyout};
 use crate::vm::uvminit;
-use crate::{config::NOFILE, lock::spin_c::SpinLockC, riscv::paging::PageTable};
+use crate::{config::NOFILE, riscv::paging::PageTable};
 use crate::{cstr, interrupt};
 
 use crate::{
@@ -26,12 +26,49 @@ use crate::{
 };
 
 use self::context::CPUContext;
+use self::cpu::CPU;
 use self::process::{Process, ProcessState};
 use self::trapframe::TrapFrame;
 
-pub struct Scheduler {
-    runnables: ArrayVec<&'static SpinLockC<Process>, NPROC>,
-    zombies: ArrayVec<&'static SpinLockC<Process>, NPROC>,
+pub fn current() -> Option<&'static SpinLock<Process>> {
+    cpu().assigned_process()
+}
+
+pub fn cpuid() -> usize {
+    assert!(!interrupt::is_enabled());
+    unsafe { riscv::read_reg!(tp) as usize }
+}
+
+fn cpu() -> InterruptGuard<&'static mut CPU<*mut CPUContext, Process>> {
+    InterruptGuard::with(|| unsafe {
+        assert!(!interrupt::is_enabled());
+        assert!(cpuid() < NCPU);
+
+        static mut CPUS: [CPU<*mut CPUContext, Process>; NCPU] = [const { CPU::Ready }; _];
+        &mut CPUS[cpuid()]
+    })
+}
+
+pub unsafe extern "C" fn forkret() {
+    static mut FIRST: bool = true;
+
+    cpu().complete_switch().unwrap();
+
+    if FIRST {
+        FIRST = false;
+
+        extern "C" {
+            fn fsinit(dev: i32);
+        }
+
+        fsinit(ROOTDEV as _);
+    }
+
+    extern "C" {
+        fn usertrapret();
+    }
+
+    usertrapret();
 }
 
 pub unsafe fn setup_init_process() {
@@ -64,15 +101,6 @@ pub unsafe fn setup_init_process() {
     process.state = ProcessState::Runnable;
 }
 
-// Free user memory pages,
-// then free page-table pages.
-unsafe fn uvmfree(mut pagetable: PageTable, size: usize) {
-    if size > 0 {
-        pagetable.unmap(0, crate::riscv::paging::pg_roundup(size) / PGSIZE, true);
-    }
-    pagetable.deallocate();
-}
-
 pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
     let mut pagetable = PageTable::allocate()?;
 
@@ -84,9 +112,7 @@ pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
         .map(TRAMPOLINE, trampoline as usize, PGSIZE, PTE::R | PTE::X)
         .is_err()
     {
-        unsafe {
-            uvmfree(pagetable, 0);
-        }
+        pagetable.deallocate();
         return Err(());
     }
 
@@ -96,9 +122,7 @@ pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
         .is_err()
     {
         pagetable.unmap(TRAMPOLINE, 1, false);
-        unsafe {
-            uvmfree(pagetable, 0);
-        }
+        pagetable.deallocate();
         return Err(());
     }
 
@@ -108,14 +132,17 @@ pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
 pub fn free_pagetable(mut pagetable: PageTable, size: usize) {
     pagetable.unmap(TRAMPOLINE, 1, false);
     pagetable.unmap(TRAPFRAME, 1, false);
-    unsafe { uvmfree(pagetable, size) };
+    if size > 0 {
+        pagetable.unmap(0, crate::riscv::paging::pg_roundup(size) / PGSIZE, true);
+    }
+    pagetable.deallocate();
 }
 
 // Copy to either a user address, or kernel address,
 // depending on usr_dst.
 // Returns 0 on success, -1 on error.
 pub unsafe fn copyout_either(user_dst: bool, dst: usize, src: usize, len: usize) -> bool {
-    let proc_context = cpu::current().assigned_process().unwrap().get_mut();
+    let proc_context = current().unwrap().get_mut();
     if user_dst {
         copyout(proc_context.pagetable.unwrap(), dst, src, len) == 0
     } else {
@@ -128,7 +155,7 @@ pub unsafe fn copyout_either(user_dst: bool, dst: usize, src: usize, len: usize)
 // depending on usr_src.
 // Returns 0 on success, -1 on error.
 pub unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> bool {
-    let proc_context = cpu::current().assigned_process().unwrap().get_mut();
+    let proc_context = current().unwrap().get_mut();
     if user_src {
         copyin(proc_context.pagetable.unwrap(), dst, src, len) == 0
     } else {
@@ -146,7 +173,7 @@ pub fn sleep<L: Lock>(wakeup_token: usize, guard: &mut LockGuard<L>) {
         // (wakeup locks p->lock),
         // so it's okay to release lk.
 
-        let mut process = cpu::current().stop1().unwrap();
+        let mut process = cpu().stop1().unwrap();
         (*L::get_lock_ref(guard)).raw_unlock();
 
         // Go to sleep.
@@ -165,7 +192,7 @@ pub fn wakeup(token: usize) {
 }
 
 pub unsafe fn fork() -> Option<usize> {
-    let p = cpu::current().assigned_process()?;
+    let p = cpu().assigned_process()?;
     let process = p.get();
     let mut process_new = table::table().allocate_process()?;
 
@@ -198,7 +225,7 @@ pub unsafe fn fork() -> Option<usize> {
 
     let pid = process_new.pid;
 
-    let parent_ptr = &mut process_new.parent as *mut *mut _ as *mut *mut SpinLockC<Process>;
+    let parent_ptr = &mut process_new.parent as *mut *mut _ as *mut *mut SpinLock<Process>;
     let state_ptr = &mut process_new.state as *mut _;
     Lock::unlock_temporarily(&mut process_new, || {
         let _guard = (*table::wait_lock()).lock();
@@ -213,7 +240,7 @@ pub unsafe fn fork() -> Option<usize> {
 }
 
 pub unsafe fn exit(status: i32) {
-    let pl = cpu::current().assigned_process().unwrap();
+    let pl = cpu().assigned_process().unwrap();
     let process = pl.get_mut();
     assert!(process.pid != 1);
 
@@ -247,7 +274,7 @@ pub unsafe fn exit(status: i32) {
 
     wakeup(process.parent as usize);
 
-    let mut process = cpu::current().stop1().unwrap();
+    let mut process = cpu().stop1().unwrap();
     process.xstate = status;
     process.state = ProcessState::Zombie;
     drop(_guard);
@@ -266,40 +293,41 @@ pub extern "C" fn scheduler() {
             if process.state == ProcessState::Runnable {
                 process.state = ProcessState::Running;
 
+                let mut cpu_context = CPUContext::zeroed();
                 let process_context = &process.context as *const _;
-                let cpu_context = cpu::current().start(process).unwrap();
+                cpu().start(&mut cpu_context, process).unwrap();
 
-                unsafe { context::switch(cpu_context, process_context) };
+                unsafe { context::switch(&mut cpu_context, process_context) };
 
-                cpu::current().end().unwrap();
+                cpu().end().unwrap();
             }
         }
     }
 }
 
-pub fn sched(mut process: LockGuard<'static, SpinLockC<Process>>) {
+fn sched(mut process: LockGuard<'static, SpinLock<Process>>) {
     assert!(!interrupt::is_enabled());
     assert!(interrupt::get_depth() == 1);
     assert!(process.state != ProcessState::Running);
 
     let process_context = &mut process.context as *mut _;
-    let cpu_context = cpu::current().stop2(process).unwrap();
+    let cpu_context = cpu().stop2(process).unwrap();
 
     let intena = interrupt::is_enabled_before();
-    unsafe { context::switch(process_context, &cpu_context) };
+    unsafe { context::switch(process_context, &*cpu_context) };
     interrupt::set_enabled_before(intena);
 
-    cpu::current().complete_switch().unwrap();
+    cpu().complete_switch().unwrap();
 }
 
 pub fn pause() {
-    let mut process = cpu::current().stop1().unwrap();
+    let mut process = cpu().stop1().unwrap();
     process.state = ProcessState::Runnable;
     sched(process);
 }
 
 pub unsafe fn wait(addr: Option<usize>) -> Option<usize> {
-    let current = cpu::current().assigned_process()?;
+    let current = cpu().assigned_process()?;
     let mut _guard = (*table::wait_lock()).lock();
     loop {
         let mut havekids = false;
@@ -346,8 +374,6 @@ pub fn procdump() {
 #[repr(C)]
 #[derive(Debug)]
 pub struct ProcessGlue {
-    pub lock: *mut SpinLockC<()>,
-
     // p->lock must be held when using these:
     pub state: *mut ProcessState, // Process state
     pub chan: *mut usize,         // If non-zero, sleeping on chan
@@ -373,7 +399,6 @@ pub struct ProcessGlue {
 impl ProcessGlue {
     pub fn null() -> Self {
         Self {
-            lock: core::ptr::null_mut(),
             state: core::ptr::null_mut(),
             chan: core::ptr::null_mut(),
             killed: core::ptr::null_mut(),
@@ -392,12 +417,10 @@ impl ProcessGlue {
         }
     }
 
-    pub fn from_process(process: &SpinLockC<Process>) -> Self {
-        let lock_ptr = process as *const _ as *mut _;
+    pub fn from_process(process: &SpinLock<Process>) -> Self {
         let original = process as *const _ as *mut _;
         let process = unsafe { process.get_mut() };
         Self {
-            lock: lock_ptr,
             state: &mut process.state,
             chan: &mut process.chan,
             killed: &mut process.killed,
@@ -418,6 +441,8 @@ impl ProcessGlue {
 }
 
 mod binding {
+    use crate::lock::spin_c::SpinLockC;
+
     use super::*;
 
     #[no_mangle]
@@ -440,7 +465,7 @@ mod binding {
 
     #[no_mangle]
     unsafe extern "C" fn growproc(n: i32) -> i32 {
-        let p = cpu::current().assigned_process().unwrap().get_mut();
+        let p = current().unwrap().get_mut();
         match p.resize_memory(n as _) {
             Ok(_) => 0,
             Err(_) => -1,
@@ -465,12 +490,12 @@ mod binding {
 
     #[no_mangle]
     extern "C" fn cpuid() -> i32 {
-        cpu::id() as i32
+        super::cpuid() as i32
     }
 
     #[no_mangle]
     unsafe extern "C" fn myproc() -> ProcessGlue {
-        match cpu::current().assigned_process() {
+        match current() {
             Some(p) => ProcessGlue::from_process(p),
             None => ProcessGlue::null(),
         }
