@@ -1,6 +1,9 @@
 //! the kernel's page table.
 
+use core::ptr::NonNull;
+
 use crate::{
+    allocator::KernelAllocator,
     memory_layout::{symbol_addr, KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, UART0, VIRTIO0},
     process::kernel_stack::kstack_allocator,
     riscv::paging::{PageTable, PGSIZE, PTE},
@@ -62,17 +65,31 @@ fn make_pagetable_for_kernel() -> PageTable {
     pagetable
 }
 
-pub mod binding {
-    use core::{arch::riscv64::sfence_vma, ptr::NonNull};
+// Load the user initcode into address 0 of pagetable,
+// for the very first process.
+// sz must be less than a page.
+pub unsafe fn uvminit(mut pagetable: PageTable, src: *const u8, size: usize) {
+    assert!(size < PGSIZE);
 
-    use crate::{
-        allocator::KernelAllocator,
-        riscv::{
-            paging::{pg_rounddown, pg_roundup},
-            satp::make_satp,
-            write_csr,
-        },
-    };
+    let mem: NonNull<u8> = KernelAllocator::get().allocate().unwrap();
+    core::ptr::write_bytes(mem.as_ptr(), 0, PGSIZE);
+
+    pagetable
+        .map(
+            0,
+            mem.addr().get(),
+            PGSIZE,
+            PTE::W | PTE::R | PTE::X | PTE::U,
+        )
+        .unwrap();
+
+    core::ptr::copy_nonoverlapping(src, mem.as_ptr(), size);
+}
+
+pub mod binding {
+    use core::arch::riscv64::sfence_vma;
+
+    use crate::riscv::{paging::pg_rounddown, satp::make_satp, write_csr};
 
     use super::*;
 
@@ -89,36 +106,6 @@ pub mod binding {
     unsafe extern "C" fn kvminithart() {
         write_csr!(satp, make_satp(KERNEL_PAGETABLE.as_u64()));
         sfence_vma(0, 0);
-    }
-
-    // Load the user initcode into address 0 of pagetable,
-    // for the very first process.
-    // sz must be less than a page.
-    #[no_mangle]
-    pub unsafe extern "C" fn uvminit(mut pagetable: PageTable, src: *const u8, size: usize) {
-        assert!(size < PGSIZE);
-
-        let mem: NonNull<u8> = KernelAllocator::get().allocate().unwrap();
-        core::ptr::write_bytes(mem.as_ptr(), 0, PGSIZE);
-
-        pagetable
-            .map(
-                0,
-                mem.addr().get(),
-                PGSIZE,
-                PTE::W | PTE::R | PTE::X | PTE::U,
-            )
-            .unwrap();
-
-        core::ptr::copy_nonoverlapping(src, mem.as_ptr(), size);
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn uvmcopy(pagetable: PageTable, mut to: PageTable, size: usize) -> i32 {
-        match pagetable.copy(&mut to, size) {
-            Ok(_) => 0,
-            Err(_) => -1,
-        }
     }
 
     // Copy from kernel to user.
