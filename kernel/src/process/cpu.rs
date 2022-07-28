@@ -1,23 +1,16 @@
-use crate::{
-    config::{NCPU, ROOTDEV},
-    interrupt::{self, InterruptGuard},
-    lock::{spin_c::SpinLockC, Lock, LockGuard},
-    riscv::read_reg,
-};
-
-use super::{context::CPUContext, Process};
+use crate::lock::{spin::SpinLock, Lock, LockGuard};
 
 #[derive(Debug)]
-pub enum CPU {
+pub enum CPU<C, P: 'static> {
     Invalid,
     Ready,
-    Starting(CPUContext, LockGuard<'static, SpinLockC<Process>>),
-    Running(CPUContext, &'static SpinLockC<Process>),
-    Stopping1(CPUContext, &'static SpinLockC<Process>),
-    Stopping2(LockGuard<'static, SpinLockC<Process>>),
+    Starting(C, LockGuard<'static, SpinLock<P>>),
+    Running(C, &'static SpinLock<P>),
+    Stopping1(C, &'static SpinLock<P>),
+    Stopping2(LockGuard<'static, SpinLock<P>>),
 }
 
-impl CPU {
+impl<C, P> CPU<C, P> {
     pub const fn is_invalid(&self) -> bool {
         matches!(self, Self::Invalid)
     }
@@ -38,7 +31,7 @@ impl CPU {
         matches!(self, Self::Stopping1(_, _) | Self::Stopping2(_))
     }
 
-    pub fn assigned_process(&self) -> Option<&'static SpinLockC<Process>> {
+    pub const fn assigned_process(&self) -> Option<&'static SpinLock<P>> {
         match self {
             Self::Invalid => None,
             Self::Ready => None,
@@ -61,18 +54,13 @@ impl CPU {
 
     pub fn start(
         &mut self,
-        process: LockGuard<'static, SpinLockC<Process>>,
-    ) -> Result<*mut CPUContext, LockGuard<'static, SpinLockC<Process>>> {
+        context: C,
+        process: LockGuard<'static, SpinLock<P>>,
+    ) -> Result<(), LockGuard<'static, SpinLock<P>>> {
         self.transition(|this| match this {
-            Self::Ready => (Self::Starting(CPUContext::zeroed(), process), Ok(())),
+            Self::Ready => (Self::Starting(context, process), Ok(())),
             other => (other, Err(process)),
-        })?;
-
-        let Self::Starting(context, _) = self else {
-            unreachable!();
-        };
-
-        Ok(context)
+        })
     }
 
     pub fn complete_switch(&mut self) -> Result<(), ()> {
@@ -84,7 +72,7 @@ impl CPU {
         })
     }
 
-    pub fn stop1(&mut self) -> Result<LockGuard<'static, SpinLockC<Process>>, ()> {
+    pub fn stop1(&mut self) -> Result<LockGuard<'static, SpinLock<P>>, ()> {
         self.transition(|this| match this {
             Self::Running(context, process) => {
                 (Self::Stopping1(context, process), Ok(process.lock()))
@@ -95,61 +83,18 @@ impl CPU {
 
     pub fn stop2(
         &mut self,
-        process: LockGuard<'static, SpinLockC<Process>>,
-    ) -> Result<CPUContext, LockGuard<'static, SpinLockC<Process>>> {
+        process: LockGuard<'static, SpinLock<P>>,
+    ) -> Result<C, LockGuard<'static, SpinLock<P>>> {
         self.transition(|this| match this {
             Self::Stopping1(context, _) => (Self::Stopping2(process), Ok(context)),
             other => (other, Err(process)),
         })
     }
 
-    pub fn end(&mut self) -> Result<LockGuard<'static, SpinLockC<Process>>, ()> {
+    pub fn end(&mut self) -> Result<LockGuard<'static, SpinLock<P>>, ()> {
         self.transition(|this| match this {
             Self::Stopping2(process) => (Self::Ready, Ok(process)),
             other => (other, Err(())),
         })
     }
-}
-
-impl !Sync for CPU {}
-impl !Send for CPU {}
-
-pub fn id() -> usize {
-    assert!(!interrupt::is_enabled());
-    unsafe { read_reg!(tp) as usize }
-}
-
-pub fn current() -> InterruptGuard<&'static mut CPU> {
-    InterruptGuard::with(|| unsafe { current_raw() })
-}
-
-pub unsafe fn current_raw() -> &'static mut CPU {
-    assert!(!interrupt::is_enabled());
-    assert!(id() < NCPU);
-
-    static mut CPUS: [CPU; NCPU] = [const { CPU::Ready }; _];
-    &mut CPUS[id()]
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn forkret() {
-    static mut FIRST: bool = true;
-
-    current().complete_switch().unwrap();
-
-    if FIRST {
-        FIRST = false;
-
-        extern "C" {
-            fn fsinit(dev: i32);
-        }
-
-        fsinit(ROOTDEV as _);
-    }
-
-    extern "C" {
-        fn usertrapret();
-    }
-
-    usertrapret();
 }

@@ -4,11 +4,12 @@ use arrayvec::ArrayVec;
 
 use crate::{
     config::NPROC,
-    lock::{spin_c::SpinLockC, Lock, LockGuard},
+    lock::{spin::SpinLock, Lock, LockGuard},
     memory_layout::kstack,
+    process,
 };
 
-use super::{cpu, Process, ProcessState};
+use super::{Process, ProcessState};
 
 #[derive(Debug)]
 struct Parent {
@@ -19,16 +20,16 @@ struct Parent {
 #[repr(C)]
 #[derive(Debug)]
 pub struct ProcessTable {
-    procs: [SpinLockC<Process>; NPROC],
-    parent_maps: SpinLockC<ArrayVec<Parent, NPROC>>,
+    procs: [SpinLock<Process>; NPROC],
+    parent_maps: SpinLock<ArrayVec<Parent, NPROC>>,
     next_pid: AtomicUsize,
 }
 
 impl ProcessTable {
     pub const fn new() -> Self {
         Self {
-            procs: [const { SpinLockC::new(Process::unused()) }; _],
-            parent_maps: SpinLockC::new(ArrayVec::new_const()),
+            procs: [const { SpinLock::new(Process::unused()) }; _],
+            parent_maps: SpinLock::new(ArrayVec::new_const()),
             next_pid: AtomicUsize::new(1),
         }
     }
@@ -44,7 +45,7 @@ impl ProcessTable {
         self.next_pid.fetch_add(1, AcqRel)
     }
 
-    pub fn allocate_process(&mut self) -> Option<LockGuard<SpinLockC<Process>>> {
+    pub fn allocate_process(&mut self) -> Option<LockGuard<SpinLock<Process>>> {
         for process in self.procs.iter() {
             let mut process = process.lock();
             if process.state == ProcessState::Unused {
@@ -61,7 +62,7 @@ impl ProcessTable {
 
     pub fn wakeup(&mut self, token: usize) {
         for process in self.procs.iter_mut() {
-            if let Some(current) = cpu::current().assigned_process() {
+            if let Some(current) = process::current() {
                 if core::ptr::eq(process, current) {
                     continue;
                 }
@@ -105,7 +106,7 @@ impl ProcessTable {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &SpinLockC<Process>> {
+    pub fn iter(&self) -> impl Iterator<Item = &SpinLock<Process>> {
         self.procs.iter()
     }
 }
@@ -115,6 +116,6 @@ pub fn table() -> &'static mut ProcessTable {
     unsafe { &mut TABLE }
 }
 
-pub fn wait_lock() -> *mut SpinLockC<()> {
+pub fn wait_lock() -> *mut SpinLock<()> {
     &mut table().parent_maps as *mut _ as *mut _
 }

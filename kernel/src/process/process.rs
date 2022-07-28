@@ -10,7 +10,7 @@ use crate::{
     riscv::paging::{PageTable, PGSIZE},
 };
 
-use super::{context::CPUContext, cpu::forkret, free_pagetable, trapframe::TrapFrame};
+use super::{context::CPUContext, forkret, free_pagetable, trapframe::TrapFrame};
 
 #[repr(C)]
 #[derive(Debug, PartialEq, Eq)]

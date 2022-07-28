@@ -1,4 +1,4 @@
-use crate::process::{self, cpu};
+use crate::process;
 
 use super::{spin::SpinLock, Lock};
 
@@ -40,7 +40,7 @@ impl<T> Lock for SleepLock<T> {
 
         let mut inner = self.inner.lock();
         inner.locked = true;
-        inner.pid = cpu::current().assigned_process().unwrap().get().pid as usize;
+        inner.pid = process::current().unwrap().get().pid as usize;
         SpinLock::unlock(inner);
     }
 
