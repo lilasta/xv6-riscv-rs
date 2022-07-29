@@ -6,6 +6,7 @@ pub enum CPU<C, P: 'static> {
     Ready,
     Dispatching(C, LockGuard<'static, SpinLock<P>>),
     Running(C, &'static SpinLock<P>),
+    Pausing(C),
     Preempting(LockGuard<'static, SpinLock<P>>),
 }
 
@@ -55,12 +56,19 @@ impl<C, P> CPU<C, P> {
         })
     }
 
+    pub fn pause(&mut self) -> Result<LockGuard<'static, SpinLock<P>>, ()> {
+        self.transition(|this| match this {
+            Self::Running(context, process) => (Self::Pausing(context), Ok(process.lock())),
+            other => (other, Err(())),
+        })
+    }
+
     pub fn start_preemption(
         &mut self,
         process: LockGuard<'static, SpinLock<P>>,
     ) -> Result<C, LockGuard<'static, SpinLock<P>>> {
         self.transition(|this| match this {
-            Self::Running(context, _) => (Self::Preempting(process), Ok(context)),
+            Self::Pausing(context) => (Self::Preempting(process), Ok(context)),
             other => (other, Err(process)),
         })
     }
