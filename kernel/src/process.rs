@@ -13,6 +13,7 @@ use crate::interrupt::InterruptGuard;
 use crate::lock::spin::SpinLock;
 use crate::lock::{Lock, LockGuard};
 use crate::log::LogGuard;
+use crate::process::process::ProcessContext;
 use crate::riscv::{self, enable_interrupt};
 use crate::vm::binding::{copyin, copyout};
 use crate::vm::uvminit;
@@ -49,26 +50,28 @@ fn cpu() -> InterruptGuard<&'static mut CPU<*mut CPUContext, Process>> {
     })
 }
 
-pub unsafe extern "C" fn forkret() {
-    static mut FIRST: bool = true;
+pub extern "C" fn forkret() {
+    unsafe {
+        static mut FIRST: bool = true;
 
-    cpu().finish_dispatch().unwrap();
+        cpu().finish_dispatch().unwrap();
 
-    if FIRST {
-        FIRST = false;
+        if FIRST {
+            FIRST = false;
 
-        extern "C" {
-            fn fsinit(dev: i32);
+            extern "C" {
+                fn fsinit(dev: i32);
+            }
+
+            fsinit(ROOTDEV as _);
         }
 
-        fsinit(ROOTDEV as _);
-    }
+        extern "C" {
+            fn usertrapret();
+        }
 
-    extern "C" {
-        fn usertrapret();
+        usertrapret();
     }
-
-    usertrapret();
 }
 
 pub unsafe fn setup_init_process() {
@@ -81,24 +84,22 @@ pub unsafe fn setup_init_process() {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
 
-    let mut process = table::table().allocate_process().unwrap();
-    uvminit(
-        process.pagetable.unwrap(),
-        INITCODE.as_ptr(),
-        INITCODE.len(),
-    );
-    process.sz = PGSIZE;
+    let mut context = ProcessContext::allocate(forkret).unwrap();
+    uvminit(context.pagetable, INITCODE.as_ptr(), INITCODE.len());
+    context.sz = PGSIZE;
 
-    (*process.trapframe).epc = 0;
-    (*process.trapframe).sp = PGSIZE as _;
+    context.trapframe.as_mut().epc = 0;
+    context.trapframe.as_mut().sp = PGSIZE as _;
 
     // process.name = "initcode";
 
     extern "C" {
         fn namei(str: *const c_char) -> *mut c_void;
     }
-    process.cwd = namei(cstr!("/").as_ptr());
-    process.state = ProcessState::Runnable;
+    context.cwd = namei(cstr!("/").as_ptr());
+
+    let mut process = table::table().allocate_process().unwrap();
+    process.state = ProcessState::Runnable(context);
 }
 
 pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
@@ -142,9 +143,9 @@ pub fn free_pagetable(mut pagetable: PageTable, size: usize) {
 // depending on usr_dst.
 // Returns 0 on success, -1 on error.
 pub unsafe fn copyout_either(user_dst: bool, dst: usize, src: usize, len: usize) -> bool {
-    let proc_context = current().unwrap().get_mut();
+    let proc_context = current().unwrap().get_mut().context().unwrap();
     if user_dst {
-        copyout(proc_context.pagetable.unwrap(), dst, src, len) == 0
+        copyout(proc_context.pagetable, dst, src, len) == 0
     } else {
         core::ptr::copy(<*const u8>::from_bits(src), <*mut u8>::from_bits(dst), len);
         true
@@ -155,16 +156,16 @@ pub unsafe fn copyout_either(user_dst: bool, dst: usize, src: usize, len: usize)
 // depending on usr_src.
 // Returns 0 on success, -1 on error.
 pub unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> bool {
-    let proc_context = current().unwrap().get_mut();
+    let proc_context = current().unwrap().get_mut().context().unwrap();
     if user_src {
-        copyin(proc_context.pagetable.unwrap(), dst, src, len) == 0
+        copyin(proc_context.pagetable, dst, src, len) == 0
     } else {
         core::ptr::copy(<*const u8>::from_bits(src), <*mut u8>::from_bits(dst), len);
         true
     }
 }
 
-pub fn sleep<L: Lock>(wakeup_token: usize, guard: &mut LockGuard<L>) {
+pub fn sleep<L: Lock>(token: usize, guard: &mut LockGuard<L>) {
     // Must acquire p->lock in order to
     // change p->state and then call sched.
     // Once we hold p->lock, we can be
@@ -175,9 +176,7 @@ pub fn sleep<L: Lock>(wakeup_token: usize, guard: &mut LockGuard<L>) {
     let mut process = cpu().pause().unwrap();
     L::unlock_temporarily(guard, || {
         // Go to sleep.
-        process.chan = wakeup_token;
-        process.state = ProcessState::Sleeping;
-
+        process.state.sleep(token).unwrap();
         return_to_scheduler(process);
     })
 }
@@ -188,48 +187,54 @@ pub fn wakeup(token: usize) {
 
 pub unsafe fn fork() -> Option<usize> {
     let p = current()?;
-    let process = p.get();
+    let process = p.get_mut();
     let mut process_new = table::table().allocate_process()?;
+    let mut context_new = ProcessContext::allocate(forkret).ok()?;
 
+    let size = process.context().unwrap().sz;
     if let Err(_) = process
-        .pagetable
+        .context()
         .unwrap()
-        .copy(process_new.pagetable.as_mut().unwrap(), process.sz)
+        .pagetable
+        .copy(&mut context_new.pagetable, size)
     {
-        process_new.deallocate();
         return None;
     }
 
-    process_new.sz = process.sz;
-    *process_new.trapframe = (*process.trapframe).clone();
-    (*process_new.trapframe).a0 = 0;
+    context_new.sz = process.context().unwrap().sz;
+    *context_new.trapframe.as_mut() = process.context().unwrap().trapframe.as_ref().clone();
+    context_new.trapframe.as_mut().a0 = 0;
 
     extern "C" {
         fn filedup(f: *mut c_void) -> *mut c_void;
         fn idup(f: *mut c_void) -> *mut c_void;
     }
 
-    for (from, to) in process.ofile.iter().zip(process_new.ofile.iter_mut()) {
+    for (from, to) in process
+        .context()
+        .unwrap()
+        .ofile
+        .iter()
+        .zip(context_new.ofile.iter_mut())
+    {
         if !from.is_null() {
             *to = filedup(*from);
         }
     }
-    process_new.cwd = idup(process.cwd);
+    context_new.cwd = idup(process.context().unwrap().cwd);
 
     process_new.name = process.name;
 
     let pid = process_new.pid;
 
     let parent_ptr = &mut process_new.parent as *mut *mut _ as *mut *mut SpinLock<Process>;
-    let state_ptr = &mut process_new.state as *mut _;
     Lock::unlock_temporarily(&mut process_new, || {
         let _guard = (*table::wait_lock()).lock();
         *parent_ptr = p as *const _ as *mut _;
-        *state_ptr = ProcessState::Runnable;
         //table::table().register_parent(process.pid as _, pid as _);
     });
 
-    //process_new.state = ProcessState::Runnable;
+    process_new.state.setup(context_new).unwrap();
 
     Some(pid as _)
 }
@@ -237,14 +242,17 @@ pub unsafe fn fork() -> Option<usize> {
 pub unsafe fn exit(status: i32) {
     let pl = current().unwrap();
     let process = pl.get_mut();
+
     assert!(process.pid != 1);
+
+    let context = process.context().unwrap();
 
     extern "C" {
         fn fileclose(fd: *mut c_void);
         fn iput(i: *mut c_void);
     }
 
-    for fd in process.ofile.iter_mut() {
+    for fd in context.ofile.iter_mut() {
         if !fd.is_null() {
             fileclose(*fd);
             *fd = core::ptr::null_mut();
@@ -252,9 +260,8 @@ pub unsafe fn exit(status: i32) {
     }
 
     let _guard = LogGuard::new();
-    iput(process.cwd);
+    iput(context.cwd);
     drop(_guard);
-    process.cwd = core::ptr::null_mut();
 
     let _guard = (*table::wait_lock()).lock();
     //table::table().remove_parent(process.pid as usize);
@@ -270,8 +277,7 @@ pub unsafe fn exit(status: i32) {
     wakeup(process.parent as usize);
 
     let mut process = cpu().pause().unwrap();
-    process.xstate = status;
-    process.state = ProcessState::Zombie;
+    process.state.die(status).unwrap();
     drop(_guard);
 
     return_to_scheduler(process);
@@ -285,11 +291,11 @@ pub extern "C" fn scheduler() {
 
         for process in table::table().iter() {
             let mut process = process.lock();
-            if process.state == ProcessState::Runnable {
-                process.state = ProcessState::Running;
+            if process.state.is_runnable() {
+                process.state.run().unwrap();
 
                 let mut cpu_context = CPUContext::zeroed();
-                let process_context = &process.context as *const _;
+                let process_context = &process.context().unwrap().context as *const _;
                 cpu().start_dispatch(&mut cpu_context, process).unwrap();
 
                 unsafe { context::switch(&mut cpu_context, process_context) };
@@ -303,9 +309,9 @@ pub extern "C" fn scheduler() {
 fn return_to_scheduler(mut process: LockGuard<'static, SpinLock<Process>>) {
     assert!(!interrupt::is_enabled());
     assert!(interrupt::get_depth() == 1);
-    assert!(process.state != ProcessState::Running);
+    assert!(!process.state.is_running());
 
-    let process_context = &mut process.context as *mut _;
+    let process_context = &mut process.context().unwrap().context as *mut _;
     let cpu_context = cpu().start_preemption(process).unwrap();
 
     let intena = interrupt::is_enabled_before();
@@ -317,7 +323,7 @@ fn return_to_scheduler(mut process: LockGuard<'static, SpinLock<Process>>) {
 
 pub fn pause() {
     let mut process = cpu().pause().unwrap();
-    process.state = ProcessState::Runnable;
+    process.state.pause().unwrap();
     return_to_scheduler(process);
 }
 
@@ -331,14 +337,14 @@ pub unsafe fn wait(addr: Option<usize>) -> Option<usize> {
                 let mut process = process.lock();
                 havekids = true;
 
-                if process.state == ProcessState::Zombie {
+                if let ProcessState::Zombie(_, exit_status) = process.state {
                     let pid = process.pid;
                     if let Some(addr) = addr {
                         if copyout(
-                            current.get().pagetable.unwrap(),
+                            current.get_mut().context().unwrap().pagetable,
                             addr,
-                            &process.xstate as *const _ as usize,
-                            core::mem::size_of_val(&process.xstate),
+                            &exit_status as *const _ as usize,
+                            core::mem::size_of_val(&exit_status),
                         ) < 0
                         {
                             return None;
@@ -365,20 +371,31 @@ pub fn procdump() {
     }
 }
 
+#[repr(C)]
+#[derive(Debug)]
+pub enum ProcessStateGlue {
+    Unused,
+    Used,
+    Sleeping,
+    Runnable,
+    Running,
+    Zombie,
+}
+
 // Per-process state
 #[repr(C)]
 #[derive(Debug)]
 pub struct ProcessGlue {
     // p->lock must be held when using these:
-    pub state: *mut ProcessState, // Process state
-    pub killed: *mut i32,         // If non-zero, have been killed
-    pub pid: *mut i32,            // Process ID
+    pub state: ProcessStateGlue, // Process state
+    pub killed: *mut i32,        // If non-zero, have been killed
+    pub pid: *mut i32,           // Process ID
 
     // these are private to the process, so p->lock need not be held.
     pub kstack: *mut usize,                // Virtual address of kernel stack
     pub sz: *mut usize,                    // Size of process memory (bytes)
-    pub pagetable: *mut Option<PageTable>, // User page table
-    pub trapframe: *mut *mut TrapFrame,    // data page for trampoline.S
+    pub pagetable: *mut PageTable,         // User page table
+    pub trapframe: *mut TrapFrame,         // data page for trampoline.S
     pub ofile: *mut [*mut c_void; NOFILE], // Open files
     pub cwd: *mut *mut c_void,             // Current directory
     pub name: *mut [c_char; 16],           // Process name (debugging)
@@ -388,7 +405,7 @@ pub struct ProcessGlue {
 impl ProcessGlue {
     pub fn null() -> Self {
         Self {
-            state: core::ptr::null_mut(),
+            state: ProcessStateGlue::Unused,
             killed: core::ptr::null_mut(),
             pid: core::ptr::null_mut(),
             kstack: core::ptr::null_mut(),
@@ -405,16 +422,28 @@ impl ProcessGlue {
     pub fn from_process(process: &SpinLock<Process>) -> Self {
         let original = process as *const _ as *mut _;
         let process = unsafe { process.get_mut() };
+        let context = unsafe { &mut *(process.context().unwrap() as *mut ProcessContext) };
+
+        let state = match process.state {
+            ProcessState::Invalid => ProcessStateGlue::Unused,
+            ProcessState::Unused => ProcessStateGlue::Unused,
+            ProcessState::Used => ProcessStateGlue::Used,
+            ProcessState::Sleeping(_, _) => ProcessStateGlue::Sleeping,
+            ProcessState::Runnable(_) => ProcessStateGlue::Runnable,
+            ProcessState::Running(_) => ProcessStateGlue::Running,
+            ProcessState::Zombie(_, _) => ProcessStateGlue::Zombie,
+        };
+
         Self {
-            state: &mut process.state,
+            state,
             killed: &mut process.killed,
             pid: &mut process.pid,
-            kstack: &mut process.kstack,
-            sz: &mut process.sz,
-            pagetable: (&mut process.pagetable as *mut Option<_>).cast(),
-            trapframe: &mut process.trapframe,
-            ofile: &mut process.ofile,
-            cwd: &mut process.cwd,
+            kstack: &mut context.kstack,
+            sz: &mut context.sz,
+            pagetable: &mut context.pagetable,
+            trapframe: context.trapframe.as_ptr(),
+            ofile: &mut context.ofile,
+            cwd: &mut context.cwd,
             name: &mut process.name,
             original,
         }
@@ -446,7 +475,7 @@ mod binding {
 
     #[no_mangle]
     unsafe extern "C" fn growproc(n: i32) -> i32 {
-        let p = current().unwrap().get_mut();
+        let p = current().unwrap().get_mut().context().unwrap();
         match p.resize_memory(n as _) {
             Ok(_) => 0,
             Err(_) => -1,
