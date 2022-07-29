@@ -33,8 +33,6 @@ impl ProcessTable {
         }
     }
 
-    pub fn init(&mut self) {}
-
     pub fn allocate_pid(&self) -> usize {
         use core::sync::atomic::Ordering::AcqRel;
         self.next_pid.fetch_add(1, AcqRel)

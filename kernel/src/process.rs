@@ -12,7 +12,6 @@ use crate::config::{NCPU, ROOTDEV};
 use crate::interrupt::InterruptGuard;
 use crate::lock::spin::SpinLock;
 use crate::lock::{Lock, LockGuard};
-use crate::log::LogGuard;
 use crate::process::process::ProcessContext;
 use crate::riscv::{self, enable_interrupt};
 use crate::vm::binding::{copyin, copyout};
@@ -50,7 +49,7 @@ fn cpu() -> InterruptGuard<&'static mut CPU<*mut CPUContext, Process>> {
     })
 }
 
-pub extern "C" fn forkret() {
+extern "C" fn finish_dispatch() {
     unsafe {
         static mut FIRST: bool = true;
 
@@ -84,7 +83,7 @@ pub unsafe fn setup_init_process() {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
 
-    let mut context = ProcessContext::allocate(forkret).unwrap();
+    let mut context = ProcessContext::allocate(finish_dispatch).unwrap();
     uvminit(context.pagetable, INITCODE.as_ptr(), INITCODE.len());
     context.sz = PGSIZE;
 
@@ -189,7 +188,7 @@ pub unsafe fn fork() -> Option<usize> {
     let p = current()?;
     let process = p.get_mut();
     let mut process_new = table::table().allocate_process()?;
-    let mut context_new = ProcessContext::allocate(forkret).ok()?;
+    let mut context_new = ProcessContext::allocate(finish_dispatch).ok()?;
 
     let size = process.context().unwrap().sz;
     if let Err(_) = process
@@ -517,9 +516,7 @@ mod binding {
     }
 
     #[no_mangle]
-    extern "C" fn procinit() {
-        table::table().init();
-    }
+    extern "C" fn procinit() {}
 
     #[no_mangle]
     extern "C" fn wakeup(chan: usize) {
