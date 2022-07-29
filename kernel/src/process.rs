@@ -178,7 +178,7 @@ pub fn sleep<L: Lock>(wakeup_token: usize, guard: &mut LockGuard<L>) {
         process.chan = wakeup_token;
         process.state = ProcessState::Sleeping;
 
-        sched(process);
+        return_to_scheduler(process);
     })
 }
 
@@ -187,7 +187,7 @@ pub fn wakeup(token: usize) {
 }
 
 pub unsafe fn fork() -> Option<usize> {
-    let p = cpu().assigned_process()?;
+    let p = current()?;
     let process = p.get();
     let mut process_new = table::table().allocate_process()?;
 
@@ -235,7 +235,7 @@ pub unsafe fn fork() -> Option<usize> {
 }
 
 pub unsafe fn exit(status: i32) {
-    let pl = cpu().assigned_process().unwrap();
+    let pl = current().unwrap();
     let process = pl.get_mut();
     assert!(process.pid != 1);
 
@@ -274,7 +274,7 @@ pub unsafe fn exit(status: i32) {
     process.state = ProcessState::Zombie;
     drop(_guard);
 
-    sched(process);
+    return_to_scheduler(process);
     unreachable!("zombie exit");
 }
 
@@ -300,7 +300,7 @@ pub extern "C" fn scheduler() {
     }
 }
 
-fn sched(mut process: LockGuard<'static, SpinLock<Process>>) {
+fn return_to_scheduler(mut process: LockGuard<'static, SpinLock<Process>>) {
     assert!(!interrupt::is_enabled());
     assert!(interrupt::get_depth() == 1);
     assert!(process.state != ProcessState::Running);
@@ -318,11 +318,11 @@ fn sched(mut process: LockGuard<'static, SpinLock<Process>>) {
 pub fn pause() {
     let mut process = cpu().pause().unwrap();
     process.state = ProcessState::Runnable;
-    sched(process);
+    return_to_scheduler(process);
 }
 
 pub unsafe fn wait(addr: Option<usize>) -> Option<usize> {
-    let current = cpu().assigned_process()?;
+    let current = current()?;
     let mut _guard = (*table::wait_lock()).lock();
     loop {
         let mut havekids = false;
@@ -371,20 +371,14 @@ pub fn procdump() {
 pub struct ProcessGlue {
     // p->lock must be held when using these:
     pub state: *mut ProcessState, // Process state
-    pub chan: *mut usize,         // If non-zero, sleeping on chan
     pub killed: *mut i32,         // If non-zero, have been killed
-    pub xstate: *mut i32,         // Exit status to be returned to parent's wait
     pub pid: *mut i32,            // Process ID
-
-    // wait_lock must be held when using this:
-    pub parent: *mut *mut Process, // Parent process
 
     // these are private to the process, so p->lock need not be held.
     pub kstack: *mut usize,                // Virtual address of kernel stack
     pub sz: *mut usize,                    // Size of process memory (bytes)
     pub pagetable: *mut Option<PageTable>, // User page table
     pub trapframe: *mut *mut TrapFrame,    // data page for trampoline.S
-    pub context: *mut CPUContext,          // swtch() here to run process
     pub ofile: *mut [*mut c_void; NOFILE], // Open files
     pub cwd: *mut *mut c_void,             // Current directory
     pub name: *mut [c_char; 16],           // Process name (debugging)
@@ -395,16 +389,12 @@ impl ProcessGlue {
     pub fn null() -> Self {
         Self {
             state: core::ptr::null_mut(),
-            chan: core::ptr::null_mut(),
             killed: core::ptr::null_mut(),
-            xstate: core::ptr::null_mut(),
             pid: core::ptr::null_mut(),
-            parent: core::ptr::null_mut(),
             kstack: core::ptr::null_mut(),
             sz: core::ptr::null_mut(),
             pagetable: core::ptr::null_mut(),
             trapframe: core::ptr::null_mut(),
-            context: core::ptr::null_mut(),
             ofile: core::ptr::null_mut(),
             cwd: core::ptr::null_mut(),
             name: core::ptr::null_mut(),
@@ -417,16 +407,12 @@ impl ProcessGlue {
         let process = unsafe { process.get_mut() };
         Self {
             state: &mut process.state,
-            chan: &mut process.chan,
             killed: &mut process.killed,
-            xstate: &mut process.xstate,
             pid: &mut process.pid,
-            parent: &mut process.parent,
             kstack: &mut process.kstack,
             sz: &mut process.sz,
             pagetable: (&mut process.pagetable as *mut Option<_>).cast(),
             trapframe: &mut process.trapframe,
-            context: &mut process.context,
             ofile: &mut process.ofile,
             cwd: &mut process.cwd,
             name: &mut process.name,
