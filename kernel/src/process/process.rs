@@ -6,6 +6,7 @@ use core::{
 use crate::{
     allocator::KernelAllocator,
     config::NOFILE,
+    log::LogGuard,
     process::allocate_pagetable,
     riscv::paging::{PageTable, PGSIZE},
 };
@@ -213,6 +214,25 @@ impl ProcessContext {
             ofile: [core::ptr::null_mut(); _],
             cwd: core::ptr::null_mut(),
         })
+    }
+
+    // TODO: ProcessFiles
+    pub fn release_files(&mut self) {
+        extern "C" {
+            fn fileclose(fd: *mut c_void);
+            fn iput(i: *mut c_void);
+        }
+
+        for fd in self.ofile.iter_mut() {
+            if !fd.is_null() {
+                unsafe { fileclose(*fd) };
+                *fd = core::ptr::null_mut();
+            }
+        }
+
+        let _guard = LogGuard::new();
+        unsafe { iput(self.cwd) };
+        drop(_guard);
     }
 
     pub fn resize_memory(&mut self, n: isize) -> Result<(), ()> {

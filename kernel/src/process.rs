@@ -246,22 +246,7 @@ pub unsafe fn exit(status: i32) {
     assert!(process.pid != 1);
 
     let context = process.context().unwrap();
-
-    extern "C" {
-        fn fileclose(fd: *mut c_void);
-        fn iput(i: *mut c_void);
-    }
-
-    for fd in context.ofile.iter_mut() {
-        if !fd.is_null() {
-            fileclose(*fd);
-            *fd = core::ptr::null_mut();
-        }
-    }
-
-    let _guard = LogGuard::new();
-    iput(context.cwd);
-    drop(_guard);
+    context.release_files();
 
     let _guard = (*table::wait_lock()).lock();
     //table::table().remove_parent(process.pid as usize);
