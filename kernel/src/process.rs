@@ -172,7 +172,7 @@ pub fn sleep<L: Lock>(wakeup_token: usize, guard: &mut LockGuard<L>) {
     // (wakeup locks p->lock),
     // so it's okay to release lk.
 
-    let mut process = cpu().assigned_process().unwrap().lock();
+    let mut process = cpu().pause().unwrap();
     L::unlock_temporarily(guard, || {
         // Go to sleep.
         process.chan = wakeup_token;
@@ -269,7 +269,7 @@ pub unsafe fn exit(status: i32) {
 
     wakeup(process.parent as usize);
 
-    let mut process = cpu().assigned_process().unwrap().lock();
+    let mut process = cpu().pause().unwrap();
     process.xstate = status;
     process.state = ProcessState::Zombie;
     drop(_guard);
@@ -316,7 +316,7 @@ fn sched(mut process: LockGuard<'static, SpinLock<Process>>) {
 }
 
 pub fn pause() {
-    let mut process = cpu().assigned_process().unwrap().lock();
+    let mut process = cpu().pause().unwrap();
     process.state = ProcessState::Runnable;
     sched(process);
 }
