@@ -5,11 +5,10 @@ use arrayvec::ArrayVec;
 use crate::{
     config::NPROC,
     lock::{spin::SpinLock, Lock, LockGuard},
-    memory_layout::kstack,
     process,
 };
 
-use super::{Process, ProcessState};
+use super::Process;
 
 #[derive(Debug)]
 struct Parent {
@@ -34,11 +33,7 @@ impl ProcessTable {
         }
     }
 
-    pub fn init(&mut self) {
-        for (i, process) in self.procs.iter_mut().enumerate() {
-            unsafe { process.get_mut().kstack = kstack(i) };
-        }
-    }
+    pub fn init(&mut self) {}
 
     pub fn allocate_pid(&self) -> usize {
         use core::sync::atomic::Ordering::AcqRel;
@@ -48,13 +43,10 @@ impl ProcessTable {
     pub fn allocate_process(&mut self) -> Option<LockGuard<SpinLock<Process>>> {
         for process in self.procs.iter() {
             let mut process = process.lock();
-            if process.state == ProcessState::Unused {
-                unsafe { process.allocate() };
-                if process.state == ProcessState::Used {
-                    return Some(process);
-                } else {
-                    return None;
-                }
+            if process.state.is_unused() {
+                process.state.allocate().unwrap();
+                process.pid = self.allocate_pid() as _;
+                return Some(process);
             }
         }
         None
@@ -69,8 +61,8 @@ impl ProcessTable {
             }
 
             let mut process = process.lock();
-            if process.state == ProcessState::Sleeping && process.chan == token {
-                process.state = ProcessState::Runnable;
+            if process.state.is_sleeping_on(token) {
+                process.state.wakeup().unwrap();
             }
         }
     }
@@ -80,8 +72,8 @@ impl ProcessTable {
             let mut process = process.lock();
             if process.pid == pid as i32 {
                 process.killed = 1;
-                if process.state == ProcessState::Sleeping {
-                    process.state = ProcessState::Runnable;
+                if process.state.is_sleeping() {
+                    process.state.wakeup().unwrap();
                 }
                 return true;
             }

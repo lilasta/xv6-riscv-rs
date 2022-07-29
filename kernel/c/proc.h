@@ -88,7 +88,7 @@ enum procstate
 struct proc
 {
   // p->lock must be held when using these:
-  enum procstate *state; // Process state
+  enum procstate state; // Process state
   int *killed;           // If non-zero, have been killed
   int *pid;              // Process ID
 
@@ -96,7 +96,7 @@ struct proc
   uint64 *kstack;               // Virtual address of kernel stack
   uint64 *sz;                   // Size of process memory (bytes)
   pagetable_t *pagetable;       // User page table
-  struct trapframe **trapframe; // data page for trampoline.S
+  struct trapframe *trapframe; // data page for trampoline.S
   struct file **ofile;          // Open files
   struct inode **cwd;           // Current directory
   char *name;                   // Process name (debugging)

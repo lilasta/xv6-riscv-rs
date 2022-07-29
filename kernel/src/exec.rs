@@ -46,8 +46,8 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
         return -1;
     }
 
-    let current_context = process::current().unwrap().get_mut();
-    let Ok(mut pagetable) = allocate_pagetable(current_context.trapframe.addr()) else {
+    let current_context = process::current().unwrap().get_mut().context().unwrap();
+    let Ok(mut pagetable) = allocate_pagetable(current_context.trapframe.addr().get()) else {
         return -1;
     };
 
@@ -164,7 +164,7 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
     // arguments to user main(argc, argv)
     // argc is returned via the system call return
     // value, which goes in a0.
-    (*current_context.trapframe).a1 = sp as u64;
+    current_context.trapframe.as_mut().a1 = sp as u64;
 
     // Save program name for debugging.
     let _path = CStr::from_ptr(path);
@@ -172,10 +172,10 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
     //char* dummyname = "DUMMY"; // TODO
     //safestrcpy(p->name, last, sizeof(p->name));
 
-    let old_pagetable = core::mem::replace(current_context.pagetable.as_mut().unwrap(), pagetable);
+    let old_pagetable = core::mem::replace(&mut current_context.pagetable, pagetable);
     current_context.sz = sz;
-    (*current_context.trapframe).epc = elf.entry as u64;
-    (*current_context.trapframe).sp = sp as u64;
+    current_context.trapframe.as_mut().epc = elf.entry as u64;
+    current_context.trapframe.as_mut().sp = sp as u64;
     free_pagetable(old_pagetable, oldsz);
 
     // this ends up in a0, the first argument to main(argc, argv)
