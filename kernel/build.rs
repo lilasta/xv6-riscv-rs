@@ -11,7 +11,6 @@ const SRCS: &[&str] = &[
     "string.c",
     "main.c",
     "trap.c",
-    "syscall.c",
     "sysproc.c",
     "bio.c",
     "fs.c",
