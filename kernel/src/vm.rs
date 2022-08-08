@@ -177,7 +177,7 @@ pub mod binding {
     // until a '\0', or max.
     // Return 0 on success, -1 on error.
     #[no_mangle]
-    unsafe extern "C" fn copyinstr(
+    pub unsafe extern "C" fn copyinstr(
         pagetable: PageTable,
         mut dst: usize,
         mut src_va: usize,
