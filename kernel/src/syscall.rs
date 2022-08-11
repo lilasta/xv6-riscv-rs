@@ -1,7 +1,7 @@
 use core::mem::MaybeUninit;
 
 use crate::{
-    lock::Lock,
+    lock::{spin::SpinLock, Lock},
     process,
     vm::binding::{copyin, copyinstr},
 };
@@ -86,16 +86,16 @@ unsafe fn arg_raw(n: usize) -> u64 {
     }
 }
 
-pub unsafe fn arg_int(n: usize) -> i32 {
+pub unsafe fn arg_i32(n: usize) -> i32 {
     arg_raw(n) as _
 }
 
-pub unsafe fn arg_addr(n: usize) -> usize {
+pub unsafe fn arg_usize(n: usize) -> usize {
     arg_raw(n) as _
 }
 
 pub unsafe fn arg_string(n: usize, buf: usize, max: usize) -> Result<usize, i32> {
-    let addr = arg_addr(n);
+    let addr = arg_usize(n);
     read_string_from_process_memory(addr, buf, max)
 }
 
@@ -120,13 +120,13 @@ unsafe extern "C" fn fetchstr(addr: usize, buf: usize, max: i32) -> i32 {
 
 #[no_mangle]
 unsafe extern "C" fn argint(n: i32, ip: *mut i32) -> i32 {
-    *ip = arg_int(n as _);
+    *ip = arg_i32(n as _);
     0
 }
 
 #[no_mangle]
 unsafe extern "C" fn argaddr(n: i32, ip: *mut usize) -> i32 {
-    *ip = arg_addr(n as _);
+    *ip = arg_usize(n as _);
     0
 }
 
@@ -143,23 +143,15 @@ extern "C" {
     fn sys_close() -> u64;
     fn sys_dup() -> u64;
     fn sys_exec() -> u64;
-    fn sys_exit() -> u64;
-    fn sys_fork() -> u64;
     fn sys_fstat() -> u64;
-    fn sys_getpid() -> u64;
-    fn sys_kill() -> u64;
     fn sys_link() -> u64;
     fn sys_mkdir() -> u64;
     fn sys_mknod() -> u64;
     fn sys_open() -> u64;
     fn sys_pipe() -> u64;
     fn sys_read() -> u64;
-    fn sys_sbrk() -> u64;
-    fn sys_sleep() -> u64;
     fn sys_unlink() -> u64;
-    fn sys_wait() -> u64;
     fn sys_write() -> u64;
-    fn sys_uptime() -> u64;
 }
 
 static SYSCALLS: &[unsafe extern "C" fn() -> u64] = &[
@@ -176,4 +168,77 @@ unsafe extern "C" fn syscall() {
         Some(f) => f(),
         None => u64::MAX,
     };
+}
+
+static TICKS: SpinLock<u64> = SpinLock::new(0);
+
+#[no_mangle]
+unsafe extern "C" fn clockintr() {
+    let mut ticks = TICKS.lock();
+    *ticks += 1;
+    process::wakeup(&TICKS as *const _ as usize);
+}
+
+unsafe extern "C" fn sys_exit() -> u64 {
+    let n = arg_i32(0);
+    process::exit(n);
+    unreachable!()
+}
+
+unsafe extern "C" fn sys_getpid() -> u64 {
+    process::current().unwrap().get().pid as u64
+}
+
+unsafe extern "C" fn sys_fork() -> u64 {
+    match process::fork() {
+        Some(pid) => pid as u64,
+        None => u64::MAX,
+    }
+}
+
+unsafe extern "C" fn sys_wait() -> u64 {
+    let addr = match arg_usize(0) {
+        0 => None,
+        addr => Some(addr),
+    };
+
+    match process::wait(addr) {
+        Some(pid) => pid as u64,
+        None => u64::MAX,
+    }
+}
+
+unsafe extern "C" fn sys_sbrk() -> u64 {
+    let n = arg_i32(0) as isize;
+    match process::current()
+        .unwrap()
+        .get_mut()
+        .context()
+        .unwrap()
+        .resize_memory(n)
+    {
+        Ok(old) => old as u64,
+        Err(_) => u64::MAX,
+    }
+}
+
+unsafe extern "C" fn sys_kill() -> u64 {
+    process::kill(arg_usize(0)) as u64
+}
+
+unsafe extern "C" fn sys_sleep() -> u64 {
+    let time = arg_usize(0) as u64;
+    let mut ticks = TICKS.lock();
+    let ticks0 = *ticks;
+    while (*ticks - ticks0) < time {
+        if process::current().unwrap().get().killed != 0 {
+            return u64::MAX;
+        }
+        process::sleep(&TICKS as *const _ as usize, &mut ticks);
+    }
+    0
+}
+
+unsafe extern "C" fn sys_uptime() -> u64 {
+    *TICKS.lock()
 }
