@@ -235,19 +235,21 @@ impl ProcessContext {
         drop(_guard);
     }
 
-    pub fn resize_memory(&mut self, n: isize) -> Result<(), ()> {
-        if n == 0 {
-            return Ok(());
-        }
-
+    pub fn resize_memory(&mut self, n: isize) -> Result<usize, ()> {
         let old_size = self.sz;
         let new_size = self.sz.wrapping_add_signed(n);
+
+        if old_size == new_size {
+            return Ok(old_size);
+        }
+
         if n > 0 {
             self.sz = self.pagetable.grow(old_size, new_size)?;
         } else {
             self.sz = self.pagetable.shrink(old_size, new_size)?;
         }
-        return Ok(());
+
+        return Ok(old_size);
     }
 }
 

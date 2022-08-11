@@ -348,6 +348,10 @@ pub unsafe fn wait(addr: Option<usize>) -> Option<usize> {
     }
 }
 
+pub fn kill(pid: usize) -> bool {
+    table::table().kill(pid)
+}
+
 pub fn procdump() {
     crate::print!("\n");
     for process in table::table().iter() {
@@ -525,6 +529,6 @@ mod binding {
 
     #[no_mangle]
     extern "C" fn kill(pid: i32) -> i32 {
-        table::table().kill(pid as usize) as i32
+        super::kill(pid as usize) as i32
     }
 }

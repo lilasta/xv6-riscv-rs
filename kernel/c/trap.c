@@ -160,13 +160,7 @@ void kerneltrap()
   w_sstatus(sstatus);
 }
 
-void clockintr()
-{
-  acquire(&tickslock);
-  ticks++;
-  wakeup(&ticks);
-  release(&tickslock);
-}
+extern void clockintr();
 
 // check if it's an external interrupt or software interrupt,
 // and handle it.
