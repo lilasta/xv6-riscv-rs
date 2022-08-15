@@ -36,21 +36,21 @@ mod mmio_reg {
 
 // status register bits, from qemu virtio_config.h
 mod status {
-    pub const ACKNOWLEDGE: u8 = 1;
-    pub const DRIVER: u8 = 2;
-    pub const DRIVER_OK: u8 = 4;
-    pub const FEATURES_OK: u8 = 8;
+    pub const ACKNOWLEDGE: u32 = 1;
+    pub const DRIVER: u32 = 2;
+    pub const DRIVER_OK: u32 = 4;
+    pub const FEATURES_OK: u32 = 8;
 }
 
 // device feature bits
 mod feature {
-    pub const BLK_RO: u8 = 5; /* Disk is read-only */
-    pub const BLK_SCSI: u8 = 7; /* Supports scsi command passthru */
-    pub const BLK_CONFIG_WCE: u8 = 11; /* Writeback mode available in config */
-    pub const BLK_MQ: u8 = 12; /* support more than one vq */
-    pub const ANY_LAYOUT: u8 = 27;
-    pub const RING_INDIRECT_DESC: u8 = 28;
-    pub const RING_EVENT_IDX: u8 = 29;
+    pub const BLK_RO: u32 = 5; /* Disk is read-only */
+    pub const BLK_SCSI: u32 = 7; /* Supports scsi command passthru */
+    pub const BLK_CONFIG_WCE: u32 = 11; /* Writeback mode available in config */
+    pub const BLK_MQ: u32 = 12; /* support more than one vq */
+    pub const ANY_LAYOUT: u32 = 27;
+    pub const RING_INDIRECT_DESC: u32 = 28;
+    pub const RING_EVENT_IDX: u32 = 29;
 }
 
 mod descriptor {
@@ -61,37 +61,37 @@ mod descriptor {
     // a single descriptor, from the spec.
     #[repr(C)]
     pub struct Descriptor {
-        addr: u64,
-        len: u32,
-        flags: u16,
-        next: u16,
+        pub addr: u64,
+        pub len: u32,
+        pub flags: u16,
+        pub next: u16,
     }
 
-    const VRING_DESC_F_NEXT: u8 = 1; // chained with another descriptor
-    const VRING_DESC_F_WRITE: u8 = 2; // device writes (vs read)
+    pub const VRING_DESC_F_NEXT: u16 = 1; // chained with another descriptor
+    pub const VRING_DESC_F_WRITE: u16 = 2; // device writes (vs read)
 
     // the (entire) avail ring, from the spec.
     #[repr(C)]
     pub struct Avail {
-        flags: u16,                  // always zero
-        idx: u16,                    // driver will write ring[idx] next
-        ring: [u16; DESCRIPTOR_NUM], // descriptor numbers of chain heads
-        unused: u16,
+        pub flags: u16,                  // always zero
+        pub idx: u16,                    // driver will write ring[idx] next
+        pub ring: [u16; DESCRIPTOR_NUM], // descriptor numbers of chain heads
+        pub unused: u16,
     }
 
     // one entry in the "used" ring, with which the
     // device tells the driver about completed requests.
     #[repr(C)]
     pub struct UsedElem {
-        id: u32, // index of start of completed descriptor chain
-        len: u32,
+        pub id: u32, // index of start of completed descriptor chain
+        pub len: u32,
     }
 
     #[repr(C)]
     pub struct Used {
-        flags: u16, // always zero
-        idx: u16,   // device increments when it adds a ring[] entry
-        ring: [UsedElem; DESCRIPTOR_NUM],
+        pub flags: u16, // always zero
+        pub idx: u16,   // device increments when it adds a ring[] entry
+        pub ring: [UsedElem; DESCRIPTOR_NUM],
     }
 
     // these are specific to virtio block devices, e.g. disks,
@@ -107,9 +107,9 @@ mod descriptor {
     // the block, and a one-byte status.
     #[repr(C)]
     pub struct BlockRequest {
-        ty: BlockRequestType,
-        reserved: u32,
-        sector: u64,
+        pub ty: BlockRequestType,
+        pub reserved: u32,
+        pub sector: u64,
     }
 }
 

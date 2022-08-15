@@ -18,7 +18,6 @@ const SRCS: &[&str] = &[
     "file.c",
     "pipe.c",
     "sysfile.c",
-    "virtio_disk.c",
 ];
 
 const CFLAGS: &[&'static str] = &[
