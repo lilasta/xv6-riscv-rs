@@ -239,12 +239,12 @@ unsafe fn rw(mut buffer: NonNull<dyn Buffer>, write: bool) {
     idx.map(|i| disk.deallocate_descriptor(i));
 }
 
-pub fn read(buffer: NonNull<dyn Buffer>) {
-    unsafe { rw(buffer, false) };
+pub unsafe fn read(buffer: NonNull<dyn Buffer>) {
+    rw(buffer, false);
 }
 
-pub fn write(buffer: NonNull<dyn Buffer>) {
-    unsafe { rw(buffer, true) };
+pub unsafe fn write(buffer: NonNull<dyn Buffer>) {
+    rw(buffer, true);
 }
 
 pub unsafe fn interrupt_handler() {

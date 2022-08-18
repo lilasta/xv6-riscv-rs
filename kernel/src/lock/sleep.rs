@@ -15,6 +15,16 @@ pub struct SleepLock<T> {
 }
 
 impl<T> SleepLock<T> {
+    pub const fn new(value: T) -> Self {
+        Self {
+            inner: SpinLock::new(Inner {
+                locked: false,
+                value,
+                pid: 0,
+            }),
+        }
+    }
+
     fn wakeup_token(&self) -> usize {
         self as *const _ as usize
     }

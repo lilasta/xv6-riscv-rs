@@ -119,7 +119,6 @@ brelse(struct buf *b)
   if(!holdingsleep(&b->lock))
     panic("brelse");
 
-  releasesleep(&b->lock);
 
   acquire(&bcache.lock);
   b->refcnt--;
@@ -134,6 +133,7 @@ brelse(struct buf *b)
   }
   
   release(&bcache.lock);
+  releasesleep(&b->lock);
 }
 
 void

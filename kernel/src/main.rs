@@ -34,6 +34,7 @@
 
 mod allocator;
 mod bitmap;
+mod buffer;
 mod config;
 mod console;
 mod elf;
