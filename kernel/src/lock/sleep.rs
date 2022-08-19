@@ -6,7 +6,6 @@ use super::{spin::SpinLock, Lock};
 struct Inner<T> {
     pub locked: bool,
     pub value: T,
-    pub pid: usize,
 }
 
 #[derive(Debug)]
@@ -20,7 +19,6 @@ impl<T> SleepLock<T> {
             inner: SpinLock::new(Inner {
                 locked: false,
                 value,
-                pid: 0,
             }),
         }
     }
@@ -44,24 +42,15 @@ impl<T> Lock for SleepLock<T> {
     unsafe fn raw_lock(&self) {
         let mut inner = self.inner.lock();
         while inner.locked {
-            let token = self.wakeup_token();
-            process::sleep(token, &mut inner);
+            process::sleep(self.wakeup_token(), &mut inner);
         }
-
-        let mut inner = self.inner.lock();
         inner.locked = true;
-        inner.pid = process::current().unwrap().get().pid as usize;
-        SpinLock::unlock(inner);
     }
 
     unsafe fn raw_unlock(&self) {
         let mut inner = self.inner.lock();
         inner.locked = false;
-        inner.pid = 0;
 
-        let token = self.wakeup_token();
-        process::wakeup(token);
-
-        SpinLock::unlock(inner);
+        process::wakeup(self.wakeup_token());
     }
 }

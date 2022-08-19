@@ -71,12 +71,12 @@ install_trans(int recovering)
   int tail;
 
   for (tail = 0; tail < log.lh.n; tail++) {
-    struct buf *lbuf = bread(log.dev, log.start+tail+1); // read log block
-    struct buf *dbuf = bread(log.dev, log.lh.block[tail]); // read dst
-    memmove(dbuf->data, lbuf->data, BSIZE);  // copy block to dst
-    bwrite(dbuf);  // write dst to disk
+    struct buf lbuf = bread(log.dev, log.start+tail+1); // read log block
+    struct buf dbuf = bread(log.dev, log.lh.block[tail]); // read dst
+    memmove(dbuf.data, lbuf.data, BSIZE);  // copy block to dst
+    bwrite(&dbuf);  // write dst to disk
     if(recovering == 0)
-      bunpin(dbuf);
+      bunpin(&dbuf);
     brelse(lbuf);
     brelse(dbuf);
   }
@@ -86,8 +86,8 @@ install_trans(int recovering)
 static void
 read_head(void)
 {
-  struct buf *buf = bread(log.dev, log.start);
-  struct logheader *lh = (struct logheader *) (buf->data);
+  struct buf buf = bread(log.dev, log.start);
+  struct logheader *lh = (struct logheader *) (buf.data);
   int i;
   log.lh.n = lh->n;
   for (i = 0; i < log.lh.n; i++) {
@@ -102,14 +102,14 @@ read_head(void)
 static void
 write_head(void)
 {
-  struct buf *buf = bread(log.dev, log.start);
-  struct logheader *hb = (struct logheader *) (buf->data);
+  struct buf buf = bread(log.dev, log.start);
+  struct logheader *hb = (struct logheader *) (buf.data);
   int i;
   hb->n = log.lh.n;
   for (i = 0; i < log.lh.n; i++) {
     hb->block[i] = log.lh.block[i];
   }
-  bwrite(buf);
+  bwrite(&buf);
   brelse(buf);
 }
 
@@ -181,10 +181,10 @@ write_log(void)
   int tail;
 
   for (tail = 0; tail < log.lh.n; tail++) {
-    struct buf *to = bread(log.dev, log.start+tail+1); // log block
-    struct buf *from = bread(log.dev, log.lh.block[tail]); // cache block
-    memmove(to->data, from->data, BSIZE);
-    bwrite(to);  // write the log
+    struct buf to = bread(log.dev, log.start+tail+1); // log block
+    struct buf from = bread(log.dev, log.lh.block[tail]); // cache block
+    memmove(to.data, from.data, BSIZE);
+    bwrite(&to);  // write the log
     brelse(from);
     brelse(to);
   }

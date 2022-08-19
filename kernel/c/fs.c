@@ -30,10 +30,10 @@ struct superblock sb;
 static void
 readsb(int dev, struct superblock *sb)
 {
-  struct buf *bp;
+  struct buf bp;
 
   bp = bread(dev, 1);
-  memmove(sb, bp->data, sizeof(*sb));
+  memmove(sb, bp.data, sizeof(*sb));
   brelse(bp);
 }
 
@@ -50,11 +50,11 @@ fsinit(int dev) {
 static void
 bzero(int dev, int bno)
 {
-  struct buf *bp;
+  struct buf bp;
 
   bp = bread(dev, bno);
-  memset(bp->data, 0, BSIZE);
-  log_write(bp);
+  memset(bp.data, 0, BSIZE);
+  log_write(&bp);
   brelse(bp);
 }
 
@@ -65,16 +65,15 @@ static uint
 balloc(uint dev)
 {
   int b, bi, m;
-  struct buf *bp;
+  struct buf bp;
 
-  bp = 0;
   for(b = 0; b < sb.size; b += BPB){
     bp = bread(dev, BBLOCK(b, sb));
     for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
       m = 1 << (bi % 8);
-      if((bp->data[bi/8] & m) == 0){  // Is block free?
-        bp->data[bi/8] |= m;  // Mark block in use.
-        log_write(bp);
+      if((bp.data[bi/8] & m) == 0){  // Is block free?
+        bp.data[bi/8] |= m;  // Mark block in use.
+        log_write(&bp);
         brelse(bp);
         bzero(dev, b + bi);
         return b + bi;
@@ -89,16 +88,16 @@ balloc(uint dev)
 static void
 bfree(int dev, uint b)
 {
-  struct buf *bp;
+  struct buf bp;
   int bi, m;
 
   bp = bread(dev, BBLOCK(b, sb));
   bi = b % BPB;
   m = 1 << (bi % 8);
-  if((bp->data[bi/8] & m) == 0)
+  if((bp.data[bi/8] & m) == 0)
     panic("freeing free block");
-  bp->data[bi/8] &= ~m;
-  log_write(bp);
+  bp.data[bi/8] &= ~m;
+  log_write(&bp);
   brelse(bp);
 }
 
@@ -196,16 +195,16 @@ struct inode*
 ialloc(uint dev, short type)
 {
   int inum;
-  struct buf *bp;
+  struct buf bp;
   struct dinode *dip;
 
   for(inum = 1; inum < sb.ninodes; inum++){
     bp = bread(dev, IBLOCK(inum, sb));
-    dip = (struct dinode*)bp->data + inum%IPB;
+    dip = (struct dinode*)bp.data + inum%IPB;
     if(dip->type == 0){  // a free inode
       memset(dip, 0, sizeof(*dip));
       dip->type = type;
-      log_write(bp);   // mark it allocated on the disk
+      log_write(&bp);   // mark it allocated on the disk
       brelse(bp);
       return iget(dev, inum);
     }
@@ -221,18 +220,18 @@ ialloc(uint dev, short type)
 void
 iupdate(struct inode *ip)
 {
-  struct buf *bp;
+  struct buf bp;
   struct dinode *dip;
 
   bp = bread(ip->dev, IBLOCK(ip->inum, sb));
-  dip = (struct dinode*)bp->data + ip->inum%IPB;
+  dip = (struct dinode*)bp.data + ip->inum%IPB;
   dip->type = ip->type;
   dip->major = ip->major;
   dip->minor = ip->minor;
   dip->nlink = ip->nlink;
   dip->size = ip->size;
   memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
-  log_write(bp);
+  log_write(&bp);
   brelse(bp);
 }
 
@@ -288,7 +287,7 @@ idup(struct inode *ip)
 void
 ilock(struct inode *ip)
 {
-  struct buf *bp;
+  struct buf bp;
   struct dinode *dip;
 
   if(ip == 0 || ip->ref < 1)
@@ -298,7 +297,7 @@ ilock(struct inode *ip)
 
   if(ip->valid == 0){
     bp = bread(ip->dev, IBLOCK(ip->inum, sb));
-    dip = (struct dinode*)bp->data + ip->inum%IPB;
+    dip = (struct dinode*)bp.data + ip->inum%IPB;
     ip->type = dip->type;
     ip->major = dip->major;
     ip->minor = dip->minor;
@@ -378,7 +377,7 @@ static uint
 bmap(struct inode *ip, uint bn)
 {
   uint addr, *a;
-  struct buf *bp;
+  struct buf bp;
 
   if(bn < NDIRECT){
     if((addr = ip->addrs[bn]) == 0)
@@ -392,10 +391,10 @@ bmap(struct inode *ip, uint bn)
     if((addr = ip->addrs[NDIRECT]) == 0)
       ip->addrs[NDIRECT] = addr = balloc(ip->dev);
     bp = bread(ip->dev, addr);
-    a = (uint*)bp->data;
+    a = (uint*)bp.data;
     if((addr = a[bn]) == 0){
       a[bn] = addr = balloc(ip->dev);
-      log_write(bp);
+      log_write(&bp);
     }
     brelse(bp);
     return addr;
@@ -410,7 +409,7 @@ void
 itrunc(struct inode *ip)
 {
   int i, j;
-  struct buf *bp;
+  struct buf bp;
   uint *a;
 
   for(i = 0; i < NDIRECT; i++){
@@ -422,7 +421,7 @@ itrunc(struct inode *ip)
 
   if(ip->addrs[NDIRECT]){
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
-    a = (uint*)bp->data;
+    a = (uint*)bp.data;
     for(j = 0; j < NINDIRECT; j++){
       if(a[j])
         bfree(ip->dev, a[j]);
@@ -456,7 +455,7 @@ int
 readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
 {
   uint tot, m;
-  struct buf *bp;
+  struct buf bp;
 
   if(off > ip->size || off + n < off)
     return 0;
@@ -466,7 +465,7 @@ readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
   for(tot=0; tot<n; tot+=m, off+=m, dst+=m){
     bp = bread(ip->dev, bmap(ip, off/BSIZE));
     m = min(n - tot, BSIZE - off%BSIZE);
-    if(either_copyout(user_dst, dst, bp->data + (off % BSIZE), m) == -1) {
+    if(either_copyout(user_dst, dst, bp.data + (off % BSIZE), m) == -1) {
       brelse(bp);
       tot = -1;
       break;
@@ -487,7 +486,7 @@ int
 writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
 {
   uint tot, m;
-  struct buf *bp;
+  struct buf bp;
 
   if(off > ip->size || off + n < off)
     return -1;
@@ -497,11 +496,11 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
   for(tot=0; tot<n; tot+=m, off+=m, src+=m){
     bp = bread(ip->dev, bmap(ip, off/BSIZE));
     m = min(n - tot, BSIZE - off%BSIZE);
-    if(either_copyin(bp->data + (off % BSIZE), user_src, src, m) == -1) {
+    if(either_copyin(bp.data + (off % BSIZE), user_src, src, m) == -1) {
       brelse(bp);
       break;
     }
-    log_write(bp);
+    log_write(&bp);
     brelse(bp);
   }
 
