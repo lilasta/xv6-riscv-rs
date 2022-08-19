@@ -17,6 +17,11 @@ struct Cache {
 
 impl Cache {
     fn init(&mut self) {
+        for (i, link) in self.links.iter_mut().enumerate() {
+            link.index = i;
+            link.ref_count = 0;
+        }
+
         unsafe {
             let first = NonNull::new_unchecked(&mut self.links[0]);
             self.head = first;
@@ -65,16 +70,13 @@ impl Cache {
         })
     }
 
-    pub fn get(&'static mut self, dev: usize, block: usize) -> Option<BufferGuard> {
+    pub fn get(&mut self, dev: usize, block: usize) -> Option<(usize, &SleepLock<Buffer>)> {
         for mut link in self.iter() {
             unsafe {
                 let buf = &self.buffers[link.as_ref().index];
                 if buf.get().device_number == dev && buf.get().block_number == block {
                     link.as_mut().ref_count += 1;
-                    return Some(BufferGuard {
-                        index: link.as_ref().index,
-                        buffer: buf.lock(),
-                    });
+                    return Some((link.as_ref().index, buf));
                 }
             }
         }
@@ -88,10 +90,7 @@ impl Cache {
                     buf.get_mut().device_number = dev;
                     buf.get_mut().block_number = block;
                     buf.get_mut().is_valid = false;
-                    return Some(BufferGuard {
-                        index: link.as_ref().index,
-                        buffer: buf.lock(),
-                    });
+                    return Some((link.as_ref().index, buf));
                 }
             }
         }
@@ -188,27 +187,29 @@ impl virtio::disk::Buffer for Buffer {
     }
 }
 
-struct BufferGuard {
+struct BufferGuard<'a> {
     index: usize,
-    buffer: LockGuard<'static, SleepLock<Buffer>>,
+    buffer: LockGuard<'a, SleepLock<Buffer>>,
 }
 
-impl Drop for BufferGuard {
+impl<'a> Drop for BufferGuard<'a> {
     fn drop(&mut self) {
         let mut cache = cache().lock();
-        let head_current = cache.head;
-        let tail_current = cache.tail;
 
-        let link = &mut cache.links[self.index];
+        let link = unsafe { &mut *(&mut cache.links[self.index] as *mut Link) };
 
         link.ref_count -= 0;
 
         if link.ref_count == 0 {
             unsafe {
+                if cache.head.as_ptr() == link {
+                    cache.head = link.next;
+                }
+
                 link.next.as_mut().prev = link.prev;
                 link.prev.as_mut().next = link.next;
-                link.next = head_current;
-                link.prev = tail_current;
+                link.next = cache.head;
+                link.prev = cache.tail;
 
                 let me = NonNull::new_unchecked(link);
                 cache.head.as_mut().prev = me;
@@ -245,8 +246,74 @@ fn unpin(buf: &BufferGuard) {
 mod bindings {
     use super::*;
 
+    #[repr(C)]
     struct BufferC {
         data: *mut u8,
-        original: BufferGuard,
+        index: u64,
+        blockno: u32,
+        original: *const SleepLock<Buffer>,
+    }
+
+    #[no_mangle]
+    extern "C" fn binit() {}
+
+    #[no_mangle]
+    unsafe extern "C" fn bread(dev: u32, block: u32) -> BufferC {
+        let mut cache = cache().lock();
+        let (index, buf) = cache.get(dev as _, block as _).unwrap();
+        let buf = &*(buf as *const SleepLock<_>);
+        drop(cache);
+
+        let mut buf = BufferGuard {
+            index,
+            buffer: buf.lock(),
+        };
+
+        Buffer::read(&mut buf.buffer);
+
+        let ret = BufferC {
+            data: buf.buffer.data.as_mut_ptr(),
+            index: buf.index as _,
+            blockno: buf.buffer.block_number as _,
+            original: LockGuard::as_ptr(&buf.buffer).cast(),
+        };
+
+        core::mem::forget(buf);
+
+        ret
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn bwrite(buf: *mut BufferC) {
+        Buffer::write((*(*buf).original).get_mut())
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn brelse(buf: BufferC) {
+        let guard = BufferGuard {
+            index: buf.index as _,
+            buffer: LockGuard::from_ptr(buf.original),
+        };
+        drop(guard);
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn bpin(buf: *mut BufferC) {
+        let mut guard = BufferGuard {
+            index: (*buf).index as _,
+            buffer: LockGuard::from_ptr((*buf).original),
+        };
+        pin(&mut guard);
+        core::mem::forget(guard);
+    }
+
+    #[no_mangle]
+    unsafe extern "C" fn bunpin(buf: *mut BufferC) {
+        let mut guard = BufferGuard {
+            index: (*buf).index as _,
+            buffer: LockGuard::from_ptr((*buf).original),
+        };
+        unpin(&mut guard);
+        core::mem::forget(guard);
     }
 }

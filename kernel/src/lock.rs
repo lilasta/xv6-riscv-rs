@@ -59,6 +59,16 @@ impl<'a, L: Lock> LockGuard<'a, L> {
     pub const unsafe fn new(lock: &'a L) -> Self {
         Self { lock }
     }
+
+    #[deprecated]
+    pub const unsafe fn as_ptr(self: &Self) -> *const L {
+        self.lock
+    }
+
+    #[deprecated]
+    pub const unsafe fn from_ptr(ptr: *const L) -> Self {
+        Self { lock: &*ptr }
+    }
 }
 
 impl<'a, L: Lock> Deref for LockGuard<'a, L> {
