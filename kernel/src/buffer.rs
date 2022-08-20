@@ -303,15 +303,8 @@ mod bindings {
     extern "C" fn binit() {}
 
     #[no_mangle]
-    unsafe extern "C" fn bread(dev: u32, block: u32) -> BufferC {
-        let mut cache = cache().lock();
-        let buf = cache.get(dev as _, block as _).unwrap();
-        let buf = &*(buf as *const SleepLock<_>);
-        drop(cache);
-
-        let mut buf = BufferGuard(buf.lock());
-
-        Buffer::read(&mut buf);
+    unsafe extern "C" fn bread(device: u32, block: u32) -> BufferC {
+        let mut buf = get(device as _, block as _).unwrap();
 
         let ret = BufferC {
             data: buf.data.as_mut_ptr(),
