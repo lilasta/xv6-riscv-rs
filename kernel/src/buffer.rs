@@ -198,23 +198,27 @@ impl<'a> Drop for BufferGuard<'a> {
 
         let link = unsafe { &mut *(&mut cache.links[self.index] as *mut Link) };
 
-        link.ref_count -= 0;
+        link.ref_count -= 1;
 
         if link.ref_count == 0 {
             unsafe {
+                let me = NonNull::new_unchecked(link);
+
                 if cache.head.as_ptr() == link {
                     cache.head = link.next;
+                    cache.tail = me;
+                } else if cache.tail.as_ptr() == link {
+                    // do nothing
+                } else {
+                    link.next.as_mut().prev = link.prev;
+                    link.prev.as_mut().next = link.next;
+                    link.next = cache.head;
+                    link.prev = cache.tail;
+
+                    cache.head.as_mut().prev = me;
+                    cache.tail.as_mut().next = me;
+                    cache.tail = me;
                 }
-
-                link.next.as_mut().prev = link.prev;
-                link.prev.as_mut().next = link.next;
-                link.next = cache.head;
-                link.prev = cache.tail;
-
-                let me = NonNull::new_unchecked(link);
-                cache.head.as_mut().prev = me;
-                cache.tail.as_mut().next = me;
-                cache.tail = me;
             }
         }
     }
@@ -228,19 +232,22 @@ fn cache() -> &'static SpinLock<Cache> {
         tail: NonNull::dangling(),
     });
     static INIT: SpinLock<bool> = SpinLock::new(false);
-    let is_initialized = INIT.lock();
+
+    let mut is_initialized = INIT.lock();
     if !*is_initialized {
+        *is_initialized = true;
         CACHE.lock().init();
     }
+
     &CACHE
 }
 
-fn pin(buf: &BufferGuard) {
-    cache().lock().links[buf.index].ref_count += 1;
+fn pin(guard: &BufferGuard) {
+    cache().lock().links[guard.index].ref_count += 1;
 }
 
-fn unpin(buf: &BufferGuard) {
-    cache().lock().links[buf.index].ref_count -= 1;
+fn unpin(guard: &BufferGuard) {
+    cache().lock().links[guard.index].ref_count -= 1;
 }
 
 mod bindings {
