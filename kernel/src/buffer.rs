@@ -294,7 +294,6 @@ mod bindings {
     #[repr(C)]
     struct BufferC {
         data: *mut u8,
-        index: u64,
         blockno: u32,
         original: *const SleepLock<Buffer>,
     }
@@ -308,9 +307,8 @@ mod bindings {
 
         let ret = BufferC {
             data: buf.data.as_mut_ptr(),
-            index: buf.cache_index as _,
-            blockno: buf.block_number as _,
-            original: LockGuard::as_ptr(&buf.0).cast(),
+            blockno: block,
+            original: LockGuard::as_ptr(&buf.0),
         };
 
         core::mem::forget(buf);
