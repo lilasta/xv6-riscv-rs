@@ -7,6 +7,7 @@ mod table;
 mod trapframe;
 
 use core::ffi::{c_char, c_void};
+use core::mem::MaybeUninit;
 
 use crate::config::{NCPU, ROOTDEV};
 use crate::interrupt::InterruptGuard;
@@ -30,8 +31,40 @@ use self::cpu::CPU;
 use self::process::{Process, ProcessState};
 use self::trapframe::TrapFrame;
 
-pub fn current() -> Option<&'static SpinLock<Process>> {
+fn current() -> Option<&'static SpinLock<Process>> {
     cpu().assigned_process()
+}
+
+pub unsafe fn read_memory<T>(addr: usize) -> Option<T> {
+    let process = context().unwrap();
+    if addr >= process.sz || addr + core::mem::size_of::<T>() > process.sz {
+        return None;
+    }
+
+    let dst = MaybeUninit::uninit();
+    if copyin(
+        process.pagetable,
+        dst.as_ptr() as usize,
+        addr,
+        core::mem::size_of::<T>(),
+    ) != 0
+    {
+        return None;
+    }
+
+    Some(dst.assume_init())
+}
+
+pub fn id() -> Option<usize> {
+    Some(unsafe { current()?.get().pid as usize })
+}
+
+pub fn context() -> Option<&'static mut ProcessContext> {
+    unsafe { current()?.get_mut().context() }
+}
+
+pub fn is_killed() -> Option<bool> {
+    Some(unsafe { current()?.get().killed != 0 })
 }
 
 pub fn cpuid() -> usize {

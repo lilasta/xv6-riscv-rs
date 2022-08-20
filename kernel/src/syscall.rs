@@ -1,9 +1,7 @@
-use core::mem::MaybeUninit;
-
 use crate::{
     lock::{spin::SpinLock, Lock},
     process,
-    vm::binding::{copyin, copyinstr},
+    vm::binding::copyinstr,
 };
 
 pub enum SystemCall {
@@ -30,26 +28,6 @@ pub enum SystemCall {
     Close = 21,
 }
 
-pub unsafe fn read_from_process_memory<T>(addr: usize) -> Option<T> {
-    let process = process::current().unwrap().get_mut().context().unwrap();
-    if addr >= process.sz || addr + core::mem::size_of::<T>() > process.sz {
-        return None;
-    }
-
-    let dst = MaybeUninit::uninit();
-    if copyin(
-        process.pagetable,
-        dst.as_ptr() as usize,
-        addr,
-        core::mem::size_of::<T>(),
-    ) != 0
-    {
-        return None;
-    }
-
-    Some(dst.assume_init())
-}
-
 pub unsafe fn read_string_from_process_memory(
     addr: usize,
     buf: usize,
@@ -64,7 +42,7 @@ pub unsafe fn read_string_from_process_memory(
         i
     }
 
-    let process = process::current().unwrap().get_mut().context().unwrap();
+    let process = process::context().unwrap();
     let err = copyinstr(process.pagetable, buf, addr, max);
     if err < 0 {
         Err(err)
@@ -74,7 +52,7 @@ pub unsafe fn read_string_from_process_memory(
 }
 
 unsafe fn arg_raw(n: usize) -> u64 {
-    let process = process::current().unwrap().get_mut().context().unwrap();
+    let process = process::context().unwrap();
     match n {
         0 => process.trapframe.as_ref().a0,
         1 => process.trapframe.as_ref().a1,
@@ -101,7 +79,7 @@ pub unsafe fn arg_string(n: usize, buf: usize, max: usize) -> Result<usize, i32>
 
 #[no_mangle]
 unsafe extern "C" fn fetchaddr(addr: usize, ip: *mut u64) -> i32 {
-    match read_from_process_memory(addr) {
+    match process::read_memory(addr) {
         Some(v) => {
             *ip = v;
             0
@@ -162,7 +140,7 @@ static SYSCALLS: &[unsafe extern "C" fn() -> u64] = &[
 
 #[no_mangle]
 unsafe extern "C" fn syscall() {
-    let process = process::current().unwrap().get_mut().context().unwrap();
+    let process = process::context().unwrap();
     let index = process.trapframe.as_ref().a7 - 1;
     process.trapframe.as_mut().a0 = match SYSCALLS.get(index as usize) {
         Some(f) => f(),
@@ -186,7 +164,7 @@ unsafe extern "C" fn sys_exit() -> u64 {
 }
 
 unsafe extern "C" fn sys_getpid() -> u64 {
-    process::current().unwrap().get().pid as u64
+    process::id().unwrap() as u64
 }
 
 unsafe extern "C" fn sys_fork() -> u64 {
@@ -210,13 +188,7 @@ unsafe extern "C" fn sys_wait() -> u64 {
 
 unsafe extern "C" fn sys_sbrk() -> u64 {
     let n = arg_i32(0) as isize;
-    match process::current()
-        .unwrap()
-        .get_mut()
-        .context()
-        .unwrap()
-        .resize_memory(n)
-    {
+    match process::context().unwrap().resize_memory(n) {
         Ok(old) => old as u64,
         Err(_) => u64::MAX,
     }
@@ -231,7 +203,7 @@ unsafe extern "C" fn sys_sleep() -> u64 {
     let mut ticks = TICKS.lock();
     let ticks0 = *ticks;
     while (*ticks - ticks0) < time {
-        if process::current().unwrap().get().killed != 0 {
+        if process::is_killed() == Some(true) {
             return u64::MAX;
         }
         process::sleep(&TICKS as *const _ as usize, &mut ticks);

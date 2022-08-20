@@ -48,7 +48,7 @@ where
         }
     }
 
-    pub fn set(&mut self, index: usize, value: bool) -> Result<(), ()> {
+    pub const fn set(&mut self, index: usize, value: bool) -> Result<(), ()> {
         if index < BITS {
             if value {
                 self.bitmap[byte_index(index)] |= bit_mask(index);

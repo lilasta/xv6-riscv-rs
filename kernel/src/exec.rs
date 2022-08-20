@@ -7,9 +7,8 @@ use crate::{
     config::MAXARG,
     elf::{ELFHeader, ProgramHeader},
     fs::InodeLockGuard,
-    lock::Lock,
     log::LogGuard,
-    process::{self, allocate_pagetable, free_pagetable},
+    process::{self, allocate_pagetable, free_pagetable, process::ProcessContext},
     riscv::paging::{pg_roundup, PageTable, PGSIZE},
     vm::binding::copyout,
 };
@@ -19,7 +18,11 @@ extern "C" {
     fn readi(ip: *mut c_void, user_dst: i32, dst: usize, off: u32, n: u32) -> i32;
 }
 
-pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
+pub unsafe fn execute(
+    current_context: &mut ProcessContext,
+    path: *const c_char,
+    argv: *const *const c_char,
+) -> i32 {
     let _logguard = LogGuard::new();
 
     let ip = namei(path);
@@ -46,7 +49,6 @@ pub unsafe fn execute(path: *const c_char, argv: *const *const c_char) -> i32 {
         return -1;
     }
 
-    let current_context = process::current().unwrap().get_mut().context().unwrap();
     let Ok(mut pagetable) = allocate_pagetable(current_context.trapframe.addr().get()) else {
         return -1;
     };
@@ -212,7 +214,10 @@ mod binding {
 
     #[no_mangle]
     unsafe extern "C" fn exec(path: *const c_char, argv: *const *const c_char) -> i32 {
-        execute(path, argv)
+        match process::context() {
+            Some(context) => execute(context, path, argv),
+            None => -1,
+        }
     }
 
     #[no_mangle]
