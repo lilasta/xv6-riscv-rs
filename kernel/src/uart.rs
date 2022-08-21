@@ -66,12 +66,12 @@ impl TransmitBuffer {
 
     pub const fn queue(&mut self, value: u8) {
         self.buf[self.w % Self::SIZE] = value;
-        self.w += 1;
+        self.w += 1; // TODO: Overflow?
     }
 
     pub const fn dequeue(&mut self) -> u8 {
         let value = self.buf[self.r % Self::SIZE];
-        self.r += 1;
+        self.r += 1; // TODO: Overflow?
         value
     }
 }
