@@ -16,22 +16,25 @@ pub mod disk;
 // from qemu virtio_mmio.h
 mod mmio_reg {
     pub const MAGIC_VALUE: usize = 0x000; // 0x74726976
-    pub const VERSION: usize = 0x004; // version; 1 is legacy
+    pub const VERSION: usize = 0x004; // version; should be 2
     pub const DEVICE_ID: usize = 0x008; // device type; 1 is net, 2 is disk
     pub const VENDOR_ID: usize = 0x00c; // 0x554d4551
     pub const DEVICE_FEATURES: usize = 0x010;
     pub const DRIVER_FEATURES: usize = 0x020;
-    pub const GUEST_PAGE_SIZE: usize = 0x028; // page size for PFN, write-only
     pub const QUEUE_SEL: usize = 0x030; // select queue, write-only
     pub const QUEUE_NUM_MAX: usize = 0x034; // max size of current queue, read-only
     pub const QUEUE_NUM: usize = 0x038; // size of current queue, write-only
-    pub const QUEUE_ALIGN: usize = 0x03c; // used ring alignment, write-only
-    pub const QUEUE_PFN: usize = 0x040; // physical page number for queue, read/write
     pub const QUEUE_READY: usize = 0x044; // ready bit
     pub const QUEUE_NOTIFY: usize = 0x050; // write-only
     pub const INTERRUPT_STATUS: usize = 0x060; // read-only
     pub const INTERRUPT_ACK: usize = 0x064; // write-only
     pub const STATUS: usize = 0x070; // read/write
+    pub const QUEUE_DESC_LOW: usize = 0x080; // physical address for descriptor table, write-only
+    pub const QUEUE_DESC_HIGH: usize = 0x084;
+    pub const DRIVER_DESC_LOW: usize = 0x090; // physical address for available ring, write-only
+    pub const DRIVER_DESC_HIGH: usize = 0x094;
+    pub const DEVICE_DESC_LOW: usize = 0x0a0; // physical address for used ring, write-only
+    pub const DEVICE_DESC_HIGH: usize = 0x0a4;
 }
 
 // status register bits, from qemu virtio_config.h

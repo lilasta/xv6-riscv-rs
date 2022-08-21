@@ -261,8 +261,8 @@ fn cache() -> &'static SpinLock<Cache> {
 
     let mut is_initialized = INIT.lock();
     if !*is_initialized {
-        *is_initialized = true;
         CACHE.lock().init();
+        *is_initialized = true;
     }
 
     &CACHE
