@@ -114,7 +114,7 @@ impl Console {
 
                 // store for consumption by consoleread().
                 self.buf[self.edit_index % Self::INPUT_BUF_LEN] = c;
-                self.edit_index += 1;
+                self.edit_index += 1; // TODO: Overflow?
 
                 if c == ('\n' as u8)
                     || c == ctrl('D')
@@ -150,7 +150,7 @@ impl<'a, L: Lock<Target = Console>> LockGuard<'a, L> {
             }
 
             let c = self.buf[self.read_index % Console::INPUT_BUF_LEN];
-            self.read_index += 1;
+            self.read_index += 1; // TODO: Overflow?
 
             // end-of-file
             if c == ctrl('D') {

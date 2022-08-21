@@ -43,7 +43,7 @@ pub struct Disk {
 
     // our own book-keeping.
     free: Bitmap<DESCRIPTOR_NUM>, // is a descriptor free?
-    used_index: usize,            // we've looked this far in used[2..NUM].
+    used_index: u16,              // we've looked this far in used[2..NUM].
 
     // track info about in-flight operations,
     // for use when completion interrupt arrives.
@@ -237,7 +237,10 @@ unsafe fn rw(mut buffer: NonNull<dyn Buffer>, write: bool) {
     disk.avail.as_mut().ring[disk.avail.as_ref().idx as usize % DESCRIPTOR_NUM] = idx[0] as u16;
 
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-    disk.avail.as_mut().idx += 1;
+    {
+        let index = &mut disk.avail.as_mut().idx;
+        *index = index.wrapping_add(1);
+    }
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
     write_reg(mmio_reg::QUEUE_NOTIFY, 0); // value is queue number
@@ -275,17 +278,17 @@ pub unsafe fn interrupt_handler() {
 
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
-    while disk.used_index != disk.used.as_ref().idx as usize {
+    while disk.used_index != disk.used.as_ref().idx {
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
-        let id = disk.used.as_ref().ring[disk.used_index % DESCRIPTOR_NUM].id;
+        let id = disk.used.as_ref().ring[disk.used_index as usize % DESCRIPTOR_NUM].id;
         assert!(disk.info[id as usize].assume_init_ref().status == 0);
 
         let mut buf = disk.info[id as usize].assume_init_ref().buffer;
         buf.as_mut().finish();
         process::wakeup(buf.cast::<u8>().addr().get());
 
-        disk.used_index += 1;
+        disk.used_index = disk.used_index.wrapping_add(1);
     }
 }
 
@@ -295,45 +298,4 @@ extern "C" fn virtio_disk_init() {}
 #[no_mangle]
 extern "C" fn virtio_disk_intr() {
     unsafe { interrupt_handler() }
-}
-
-#[repr(C)]
-struct BufferC {
-    data: [u8; 1024],
-    disk: i32,
-    dev: u32,
-    blockno: u32,
-    valid: i32,
-}
-
-impl Buffer for BufferC {
-    fn block_number(&self) -> usize {
-        self.blockno as _
-    }
-
-    fn size(&self) -> usize {
-        1024
-    }
-
-    fn addr(&self) -> usize {
-        self.data.as_ptr().addr()
-    }
-
-    fn start(&mut self) {
-        self.disk = 1;
-    }
-
-    fn finish(&mut self) {
-        self.disk = 0;
-    }
-
-    fn is_finished(&self) -> bool {
-        self.disk == 0
-    }
-}
-
-#[no_mangle]
-unsafe extern "C" fn virtio_disk_rw(buf: *mut BufferC, write: i32) {
-    let buf = &mut *buf;
-    rw(NonNull::new_unchecked(buf), write == 1);
 }
