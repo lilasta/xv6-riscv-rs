@@ -9,6 +9,8 @@
 
 use core::arch::global_asm;
 
+use crate::memory_layout::TRAPFRAME;
+
 global_asm!(
     r#"
 .section trampsec
@@ -19,13 +21,16 @@ trampoline:
 user_trap_handler:
     # trap.cの処理によって、この処理がstvec(割り込みハンドラ)に設定される。
     # ユーザー空間からの割り込みを処理する。
-    # スーパーバイザモードではあるが、ユーザページテーブルを用いる。
-    #
-    # sscratchは、プロセスのp->trapframeがユーザ空間にマップされる場所、TRAPFRAMEを指す。
-    #
+    # スーパーバイザモードではあるが、ユーザページテーブルを用いる
 
-    # a0とsscratch(TRAPFRAME)を交換する
-    csrrw a0, sscratch, a0
+    # save user a0 in sscratch so
+    # a0 can be used to get at TRAPFRAME.
+    csrw sscratch, a0
+
+    # each process has a separate p->trapframe memory area,
+    # but it's mapped to the same virtual address
+    # (TRAPFRAME) in every process.
+    li a0, {trapframe}
 
     # TRAPFRAMEにユーザのレジスタを格納
     sd ra, 40(a0)
@@ -91,21 +96,17 @@ user_trap_handler:
 
 .global kernel_to_user
 kernel_to_user:
-    # kernel_to_user(TRAPFRAME, pagetable)
+    # kernel_to_user(pagetable)
     # カーネルからユーザへ切り替える。
     # usertrapretによって呼び出される。
     # 引数:
-    # a0: TRAPFRAME, in user page table.
-    # a1: user page table, for satp.
+    # a0: user page table, for satp.
 
     # switch to the user page table.
-    csrw satp, a1
+    csrw satp, a0
     sfence.vma zero, zero
 
-    # put the saved user a0 in sscratch, so we
-    # can swap it with our a0 (TRAPFRAME) in the last step.
-    ld t0, 112(a0)
-    csrw sscratch, t0
+    li a0, {trapframe}
 
     # restore all but a0 from TRAPFRAME
     ld ra, 40(a0)
@@ -139,13 +140,14 @@ kernel_to_user:
     ld t5, 272(a0)
     ld t6, 280(a0)
 
-    # restore user a0, and save TRAPFRAME in sscratch
-    csrrw a0, sscratch, a0
+    # restore user a0
+    ld a0, 112(a0)
 
     # return to user mode and user pc.
     # usertrapret() set up sstatus and sepc.
     sret
-"#
+"#,
+    trapframe = const TRAPFRAME
 );
 
 extern "C" {
