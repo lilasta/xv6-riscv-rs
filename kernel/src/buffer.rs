@@ -147,11 +147,24 @@ impl Buffer {
         }
     }
 
-    fn data<T>(&mut self) -> &mut MaybeUninit<T> {
-        assert!(BSIZE >= core::mem::size_of::<T>());
+    pub fn as_uninit<T>(&self) -> Option<&MaybeUninit<T>> {
+        if core::mem::size_of::<T>() > BSIZE {
+            return None;
+        }
+
+        let ptr = self.data.as_ptr();
+        let ptr = ptr.cast::<MaybeUninit<T>>();
+        Some(unsafe { &*ptr })
+    }
+
+    pub fn as_uninit_mut<T>(&mut self) -> Option<&mut MaybeUninit<T>> {
+        if core::mem::size_of::<T>() > BSIZE {
+            return None;
+        }
+
         let ptr = self.data.as_mut_ptr();
         let ptr = ptr.cast::<MaybeUninit<T>>();
-        unsafe { &mut *ptr }
+        Some(unsafe { &mut *ptr })
     }
 
     fn read(this: &mut Self) {
