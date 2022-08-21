@@ -40,6 +40,23 @@ where
         require_bytes(BITS)
     }
 
+    pub fn allocate(&mut self) -> Option<usize> {
+        for i in 0..self.bits() {
+            if self.get(i) == Some(false) {
+                self.set(i, true).unwrap();
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    pub const fn deallocate(&mut self, index: usize) -> Result<(), ()> {
+        match self.get(index) {
+            Some(true) => self.set(index, false),
+            _ => Err(()),
+        }
+    }
+
     pub const fn get(&self, index: usize) -> Option<bool> {
         if index < BITS {
             Some(self.bitmap[byte_index(index)] & bit_mask(index) != 0)
