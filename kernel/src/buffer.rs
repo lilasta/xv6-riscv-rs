@@ -78,32 +78,40 @@ impl Cache {
         })
     }
 
-    pub fn get(&mut self, dev: usize, block: usize) -> Option<&SleepLock<Buffer>> {
+    pub fn get_or_allocate(
+        &mut self,
+        device: usize,
+        block: usize,
+    ) -> Option<(&SleepLock<Buffer>, bool)> {
         for mut link in self.iter() {
-            unsafe {
-                let buf = &self.buffers[link.as_ref().index];
-                if buf.get().device_number == dev && buf.get().block_number == block {
-                    link.as_mut().ref_count += 1;
-                    return Some(buf);
-                }
+            let link = unsafe { link.as_mut() };
+            let buffer = self.buffers.get(link.index)?;
+
+            if unsafe { buffer.get().device_number == device && buffer.get().block_number == block }
+            {
+                link.ref_count += 1;
+                return Some((buffer, false));
             }
         }
 
         for mut link in self.iter_rev() {
-            unsafe {
-                if link.as_ref().ref_count == 0 {
-                    link.as_mut().ref_count = 1;
+            let link = unsafe { link.as_mut() };
+            if link.ref_count == 0 {
+                link.ref_count = 1;
 
-                    let buf = &self.buffers[link.as_ref().index];
-                    buf.get_mut().device_number = dev;
-                    buf.get_mut().block_number = block;
-                    buf.get_mut().is_valid = false;
+                let buffer = self.buffers.get(link.index)?;
 
-                    return Some(buf);
+                // TODO: 初期化忘れそうだから駄目
+                unsafe {
+                    let buffer = buffer.get_mut();
+                    buffer.device_number = device;
+                    buffer.block_number = block;
+                    buffer.modified = false;
                 }
+
+                return Some((buffer, true));
             }
         }
-
         None
     }
 }
@@ -131,7 +139,7 @@ pub struct Buffer {
     device_number: usize,
     block_number: usize,
     on_rw: bool,
-    is_valid: bool,
+    modified: bool,
     data: [u8; BSIZE],
 }
 
@@ -142,13 +150,17 @@ impl Buffer {
             device_number: 0,
             block_number: 0,
             on_rw: false,
-            is_valid: false,
+            modified: false,
             data: [0; _],
         }
     }
 
-    pub fn as_uninit<T>(&self) -> Option<&MaybeUninit<T>> {
-        if core::mem::size_of::<T>() > BSIZE {
+    pub const fn mark_modified(&mut self) {
+        self.modified = true;
+    }
+
+    pub const fn as_uninit<T>(&self) -> Option<&MaybeUninit<T>> {
+        if core::mem::size_of::<T>() > self.data.len() {
             return None;
         }
 
@@ -157,61 +169,14 @@ impl Buffer {
         Some(unsafe { &*ptr })
     }
 
-    pub fn as_uninit_mut<T>(&mut self) -> Option<&mut MaybeUninit<T>> {
-        if core::mem::size_of::<T>() > BSIZE {
+    pub const fn as_uninit_mut<T>(&mut self) -> Option<&mut MaybeUninit<T>> {
+        if core::mem::size_of::<T>() > self.data.len() {
             return None;
         }
 
         let ptr = self.data.as_mut_ptr();
         let ptr = ptr.cast::<MaybeUninit<T>>();
         Some(unsafe { &mut *ptr })
-    }
-
-    fn read(this: &mut Self) {
-        if !this.is_valid {
-            unsafe {
-                let ptr = NonNull::new_unchecked(this);
-                virtio::disk::read(ptr);
-            }
-            this.is_valid = true;
-        }
-    }
-
-    fn write(this: &mut Self) {
-        unsafe {
-            let ptr = NonNull::new_unchecked(this);
-            virtio::disk::write(ptr);
-        }
-    }
-
-    fn release(this: &mut Self) {
-        let mut cache = cache().lock();
-
-        let link = unsafe { &mut *(&mut cache.links[this.cache_index] as *mut Link) };
-
-        link.ref_count -= 1;
-
-        if link.ref_count == 0 {
-            unsafe {
-                let me = NonNull::new_unchecked(link);
-
-                if cache.head.as_ptr() == link {
-                    cache.head = link.next;
-                    cache.tail = me;
-                } else if cache.tail.as_ptr() == link {
-                    // do nothing
-                } else {
-                    link.next.as_mut().prev = link.prev;
-                    link.prev.as_mut().next = link.next;
-                    link.next = cache.head;
-                    link.prev = cache.tail;
-
-                    cache.head.as_mut().prev = me;
-                    cache.tail.as_mut().next = me;
-                    cache.tail = me;
-                }
-            }
-        }
     }
 }
 
@@ -259,7 +224,43 @@ impl<'a> DerefMut for BufferGuard<'a> {
 
 impl<'a> Drop for BufferGuard<'a> {
     fn drop(&mut self) {
-        Buffer::release(&mut self.0);
+        let mut cache = cache().lock();
+
+        let link = unsafe { &mut *(&mut cache.links[self.cache_index] as *mut Link) };
+
+        link.ref_count -= 1;
+
+        if link.ref_count == 0 {
+            unsafe {
+                let me = NonNull::new_unchecked(link);
+
+                if cache.head.as_ptr() == link {
+                    cache.head = link.next;
+                    cache.tail = me;
+                } else if cache.tail.as_ptr() == link {
+                    // do nothing
+                } else {
+                    link.next.as_mut().prev = link.prev;
+                    link.prev.as_mut().next = link.next;
+                    link.next = cache.head;
+                    link.prev = cache.tail;
+
+                    cache.head.as_mut().prev = me;
+                    cache.tail.as_mut().next = me;
+                    cache.tail = me;
+                }
+            }
+
+            Lock::unlock(cache);
+
+            // Lazy writing
+            if self.modified {
+                unsafe {
+                    let ptr = NonNull::new_unchecked(self.deref_mut());
+                    virtio::disk::write(ptr);
+                }
+            }
+        }
     }
 }
 
@@ -283,12 +284,18 @@ fn cache() -> &'static SpinLock<Cache> {
 
 pub fn get(device: usize, block: usize) -> Option<BufferGuard<'static>> {
     let mut cache = cache().lock();
-    let buffer = cache.get(device, block)?;
+    let (buffer, is_allocated) = cache.get_or_allocate(device, block)?;
     let buffer = unsafe { &*(buffer as *const SleepLock<_>) };
     drop(cache);
 
     let mut buffer = BufferGuard(buffer.lock());
-    Buffer::read(&mut buffer);
+
+    if is_allocated {
+        unsafe {
+            let ptr = NonNull::new_unchecked(&mut *buffer);
+            virtio::disk::read(ptr);
+        }
+    }
 
     Some(buffer)
 }
@@ -331,7 +338,7 @@ mod bindings {
 
     #[no_mangle]
     unsafe extern "C" fn bwrite(buf: *mut BufferC) {
-        Buffer::write((*(*buf).original).get_mut())
+        (*(*buf).original).get_mut().mark_modified()
     }
 
     #[no_mangle]
