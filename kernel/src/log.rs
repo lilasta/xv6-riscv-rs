@@ -37,6 +37,13 @@ fn read_header(device: usize, block: usize) -> Option<LogHeader> {
     Some(header.clone())
 }
 
+fn write_header(device: usize, block: usize, header: &LogHeader) -> Result<(), ()> {
+    let mut buffer = buffer::get(device, block).ok_or(())?;
+    let uninit = buffer.as_uninit_mut::<LogHeader>().ok_or(())?;
+    uninit.write(header.clone());
+    Ok(())
+}
+
 pub struct Log {
     start: usize,
     size: usize,
