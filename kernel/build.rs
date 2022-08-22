@@ -55,7 +55,10 @@ fn main() {
 fn print_rerun() {
     let paths = std::fs::read_dir("c").unwrap();
     for path in paths {
-        println!("cargo:rerun-if-changed=c/{:?}", path.unwrap().file_name());
+        println!(
+            "cargo:rerun-if-changed=c/{}",
+            path.unwrap().file_name().to_str().unwrap()
+        );
     }
 }
 
