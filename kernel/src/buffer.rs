@@ -13,16 +13,22 @@ use crate::{
 
 const BSIZE: usize = 1024;
 
+#[derive(PartialEq, Eq)]
+struct BufferKey {
+    device: usize,
+    block: usize,
+}
+
 pub struct Buffer<const SIZE: usize> {
-    on_rw: bool,
+    in_use: bool,
     modified: bool,
     data: [u8; SIZE],
 }
 
 impl<const SIZE: usize> Buffer<SIZE> {
-    const fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self {
-            on_rw: false,
+            in_use: false,
             modified: false,
             data: [0; _],
         }
@@ -69,15 +75,15 @@ impl virtio::disk::Buffer for BufferGuard {
     }
 
     fn start(&mut self) {
-        self.buffer.on_rw = true;
+        self.buffer.in_use = true;
     }
 
     fn finish(&mut self) {
-        self.buffer.on_rw = false;
+        self.buffer.in_use = false;
     }
 
     fn is_finished(&self) -> bool {
-        !self.buffer.on_rw
+        !self.buffer.in_use
     }
 }
 
@@ -112,12 +118,6 @@ impl Drop for BufferGuard {
     }
 }
 
-#[derive(PartialEq, Eq)]
-struct BufferKey {
-    device: usize,
-    block: usize,
-}
-
 fn cache() -> LockGuard<'static, SpinLock<CacheRc<BufferKey, NBUF>>> {
     static CACHE: SpinLock<CacheRc<BufferKey, NBUF>> = SpinLock::new(CacheRc::uninit());
     static INIT: SpinLock<bool> = SpinLock::new(false);
@@ -136,7 +136,7 @@ pub fn get(device: usize, block: usize) -> Option<BufferGuard> {
     static BUFFERS: [SleepLock<Buffer<BSIZE>>; NBUF] =
         [const { SleepLock::new(Buffer::empty()) }; _];
 
-    let (index, is_allocated) = cache().get(BufferKey { device, block })?;
+    let (index, is_new) = cache().get(BufferKey { device, block })?;
 
     let mut buffer = BufferGuard {
         buffer: ManuallyDrop::new(BUFFERS[index].lock()),
@@ -144,7 +144,7 @@ pub fn get(device: usize, block: usize) -> Option<BufferGuard> {
         cache_index: index,
     };
 
-    if is_allocated {
+    if is_new {
         unsafe {
             virtio::disk::read(NonNull::new_unchecked(&mut buffer));
         }
