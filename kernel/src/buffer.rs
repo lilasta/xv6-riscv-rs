@@ -180,9 +180,11 @@ impl Buffer {
     }
 }
 
-impl virtio::disk::Buffer for Buffer {
+pub struct BufferGuard(LockGuard<'static, SleepLock<Buffer>>);
+
+impl virtio::disk::Buffer for BufferGuard {
     fn block_number(&self) -> usize {
-        self.block_number
+        self.0.block_number
     }
 
     fn size(&self) -> usize {
@@ -190,25 +192,23 @@ impl virtio::disk::Buffer for Buffer {
     }
 
     fn addr(&self) -> usize {
-        self.data.as_ptr().addr()
+        self.0.data.as_ptr().addr()
     }
 
     fn start(&mut self) {
-        self.on_rw = true;
+        self.0.on_rw = true;
     }
 
     fn finish(&mut self) {
-        self.on_rw = false;
+        self.0.on_rw = false;
     }
 
     fn is_finished(&self) -> bool {
-        !self.on_rw
+        !self.0.on_rw
     }
 }
 
-pub struct BufferGuard<'a>(LockGuard<'a, SleepLock<Buffer>>);
-
-impl<'a> Deref for BufferGuard<'a> {
+impl Deref for BufferGuard {
     type Target = Buffer;
 
     fn deref(&self) -> &Self::Target {
@@ -216,13 +216,13 @@ impl<'a> Deref for BufferGuard<'a> {
     }
 }
 
-impl<'a> DerefMut for BufferGuard<'a> {
+impl DerefMut for BufferGuard {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<'a> Drop for BufferGuard<'a> {
+impl Drop for BufferGuard {
     fn drop(&mut self) {
         let mut cache = cache().lock();
 
@@ -256,8 +256,7 @@ impl<'a> Drop for BufferGuard<'a> {
             // Lazy writing
             if self.modified {
                 unsafe {
-                    let ptr = NonNull::new_unchecked(self.deref_mut());
-                    virtio::disk::write(ptr);
+                    virtio::disk::write(NonNull::new_unchecked(self));
                 }
             }
         }
@@ -282,7 +281,7 @@ fn cache() -> &'static SpinLock<Cache> {
     &CACHE
 }
 
-pub fn get(device: usize, block: usize) -> Option<BufferGuard<'static>> {
+pub fn get(device: usize, block: usize) -> Option<BufferGuard> {
     let mut cache = cache().lock();
     let (buffer, is_allocated) = cache.get_or_allocate(device, block)?;
     let buffer = unsafe { &*(buffer as *const SleepLock<_>) };
@@ -292,8 +291,7 @@ pub fn get(device: usize, block: usize) -> Option<BufferGuard<'static>> {
 
     if is_allocated {
         unsafe {
-            let ptr = NonNull::new_unchecked(&mut *buffer);
-            virtio::disk::read(ptr);
+            virtio::disk::read(NonNull::new_unchecked(&mut buffer));
         }
     }
 
