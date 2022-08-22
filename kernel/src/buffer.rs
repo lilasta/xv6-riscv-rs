@@ -1,6 +1,7 @@
 use core::{
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
+    pin::Pin,
     ptr::NonNull,
 };
 
@@ -12,18 +13,26 @@ use crate::{
 
 const BSIZE: usize = 1024;
 
-struct Cache {
-    buffers: [SleepLock<Buffer>; NBUF],
-    links: [Link; NBUF],
+struct Cache<const N: usize> {
+    buffers: [SleepLock<Buffer>; N],
+    links: [Link; N],
     head: NonNull<Link>,
     tail: NonNull<Link>,
 }
 
-impl Cache {
-    fn init(&mut self) {
+impl<const N: usize> Cache<N> {
+    const fn uninit() -> Self {
+        Self {
+            buffers: [const { SleepLock::new(Buffer::none()) }; _],
+            links: [const { Link::dangling() }; _],
+            head: NonNull::dangling(),
+            tail: NonNull::dangling(),
+        }
+    }
+
+    fn init(mut self: Pin<&mut Self>) {
         for (i, link) in self.links.iter_mut().enumerate() {
             link.index = i;
-            link.ref_count = 0;
         }
 
         for (i, buf) in self.buffers.iter().enumerate() {
@@ -37,10 +46,10 @@ impl Cache {
             self.links[0].next = first;
             self.links[0].prev = first;
 
-            for link in self.links.iter_mut().skip(1) {
-                let ptr = NonNull::new_unchecked(link);
-                link.prev = self.tail;
-                link.next = self.head;
+            for i in 1..N {
+                let ptr = NonNull::new_unchecked(&mut self.links[i]);
+                self.links[i].prev = self.tail;
+                self.links[i].next = self.head;
                 self.head.as_mut().prev = ptr;
                 self.tail.as_mut().next = ptr;
                 self.tail = ptr;
@@ -113,6 +122,16 @@ impl Cache {
             }
         }
         None
+    }
+
+    pub const fn pin(&mut self, index: usize) -> Option<()> {
+        self.links.get_mut(index)?.ref_count += 1;
+        Some(())
+    }
+
+    pub const fn unpin(&mut self, index: usize) -> Option<()> {
+        self.links.get_mut(index)?.ref_count -= 1;
+        Some(())
     }
 }
 
@@ -263,8 +282,8 @@ impl Drop for BufferGuard {
     }
 }
 
-fn cache() -> &'static SpinLock<Cache> {
-    static CACHE: SpinLock<Cache> = SpinLock::new(Cache {
+fn cache() -> &'static SpinLock<Cache<NBUF>> {
+    static CACHE: SpinLock<Cache<NBUF>> = SpinLock::new(Cache {
         buffers: [const { SleepLock::new(Buffer::none()) }; _],
         links: [const { Link::dangling() }; _],
         head: NonNull::dangling(),
@@ -274,7 +293,9 @@ fn cache() -> &'static SpinLock<Cache> {
 
     let mut is_initialized = INIT.lock();
     if !*is_initialized {
-        CACHE.lock().init();
+        let mut cache = CACHE.lock();
+        let cache = Pin::new(&mut *cache);
+        cache.init();
         *is_initialized = true;
     }
 
@@ -299,11 +320,11 @@ pub fn get(device: usize, block: usize) -> Option<BufferGuard> {
 }
 
 pub fn pin(buffer: &Buffer) {
-    cache().lock().links[buffer.cache_index].ref_count += 1;
+    cache().lock().pin(buffer.cache_index);
 }
 
 pub fn unpin(buffer: &Buffer) {
-    cache().lock().links[buffer.cache_index].ref_count -= 1;
+    cache().lock().unpin(buffer.cache_index);
 }
 
 mod bindings {
