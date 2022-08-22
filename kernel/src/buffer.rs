@@ -129,6 +129,37 @@ impl<const N: usize> Cache<N> {
         self.links.get_mut(index)?.ref_count -= 1;
         Some(())
     }
+
+    pub fn release(&mut self, index: usize) -> Option<bool> {
+        let link = self.links.get_mut(index)?;
+
+        link.ref_count -= 1;
+
+        if link.ref_count == 0 {
+            let me = unsafe { NonNull::new_unchecked(link) };
+
+            if self.head.as_ptr() == link {
+                self.head = link.next;
+                self.tail = me;
+            } else if self.tail.as_ptr() == link {
+                // do nothing
+            } else {
+                unsafe {
+                    link.next.as_mut().prev = link.prev;
+                    link.prev.as_mut().next = link.next;
+                    link.next = self.head;
+                    link.prev = self.tail;
+
+                    self.head.as_mut().prev = me;
+                    self.tail.as_mut().next = me;
+                    self.tail = me;
+                }
+            }
+            Some(true)
+        } else {
+            Some(false)
+        }
+    }
 }
 
 struct Link {
@@ -166,10 +197,6 @@ impl Buffer {
             modified: false,
             data: [0; _],
         }
-    }
-
-    pub const fn mark_modified(&mut self) {
-        self.modified = true;
     }
 
     pub const fn as_uninit<T>(&self) -> Option<&MaybeUninit<T>> {
@@ -234,46 +261,17 @@ impl Deref for BufferGuard {
 
 impl DerefMut for BufferGuard {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        self.buffer.modified = true;
         &mut self.buffer
     }
 }
 
 impl Drop for BufferGuard {
     fn drop(&mut self) {
-        let mut cache = cache().lock();
-
-        let link = unsafe { &mut *(&mut cache.links[self.cache_index] as *mut Link) };
-
-        link.ref_count -= 1;
-
-        if link.ref_count == 0 {
+        let is_deallocated = cache().lock().release(self.cache_index).unwrap();
+        if is_deallocated && self.modified {
             unsafe {
-                let me = NonNull::new_unchecked(link);
-
-                if cache.head.as_ptr() == link {
-                    cache.head = link.next;
-                    cache.tail = me;
-                } else if cache.tail.as_ptr() == link {
-                    // do nothing
-                } else {
-                    link.next.as_mut().prev = link.prev;
-                    link.prev.as_mut().next = link.next;
-                    link.next = cache.head;
-                    link.prev = cache.tail;
-
-                    cache.head.as_mut().prev = me;
-                    cache.tail.as_mut().next = me;
-                    cache.tail = me;
-                }
-            }
-
-            Lock::unlock(cache);
-
-            // Lazy writing
-            if self.modified {
-                unsafe {
-                    virtio::disk::write(NonNull::new_unchecked(self));
-                }
+                virtio::disk::write(NonNull::new_unchecked(self));
             }
         }
     }
@@ -338,10 +336,10 @@ mod bindings {
 
     #[no_mangle]
     unsafe extern "C" fn bread(device: u32, block: u32) -> BufferC {
-        let mut buf = get(device as _, block as _).unwrap();
+        let buf = get(device as _, block as _).unwrap();
 
         let ret = BufferC {
-            data: buf.data.as_mut_ptr(),
+            data: buf.data.as_ptr().cast_mut(),
             blockno: block,
             cache_index: buf.cache_index,
             original: LockGuard::as_ptr(&buf.buffer),
@@ -354,7 +352,7 @@ mod bindings {
 
     #[no_mangle]
     unsafe extern "C" fn bwrite(buf: *mut BufferC) {
-        (*(*buf).original).get_mut().mark_modified()
+        (*(*buf).original).get_mut().modified = true;
     }
 
     #[no_mangle]
