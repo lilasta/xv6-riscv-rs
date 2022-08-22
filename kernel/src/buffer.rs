@@ -53,31 +53,31 @@ impl<const N: usize> Cache<N> {
         }
     }
 
-    fn iter(&self) -> impl Iterator<Item = NonNull<Link>> {
+    fn iter(&self) -> impl Iterator<Item = &mut Link> {
         let mut next = Some(self.head);
         let end = self.tail;
 
         core::iter::from_fn(move || {
-            let current = next?;
+            let current = unsafe { next?.as_mut() };
             if next == Some(end) {
                 next = None
             } else {
-                next = unsafe { Some(current.as_ref().next) };
+                next = Some(current.next);
             }
             Some(current)
         })
     }
 
-    fn iter_rev(&self) -> impl Iterator<Item = NonNull<Link>> {
+    fn iter_rev(&self) -> impl Iterator<Item = &mut Link> {
         let mut next = Some(self.tail);
         let end = self.head;
 
         core::iter::from_fn(move || {
-            let current = next?;
+            let current = unsafe { next?.as_mut() };
             if next == Some(end) {
                 next = None
             } else {
-                next = unsafe { Some(current.as_ref().prev) };
+                next = Some(current.prev);
             }
             Some(current)
         })
@@ -88,29 +88,30 @@ impl<const N: usize> Cache<N> {
         device: usize,
         block: usize,
     ) -> Option<(usize, &SleepLock<Buffer>, bool)> {
-        for mut link in self.iter() {
-            let link = unsafe { link.as_mut() };
-            let buffer = self.buffers.get(link.index)?;
-
-            if unsafe { buffer.get().device_number == device && buffer.get().block_number == block }
+        for link in self.iter() {
+            if link.ref_count > 0
+                && link.device_number == Some(device)
+                && link.block_number == Some(block)
             {
                 link.ref_count += 1;
-                return Some((link.index, buffer, false));
+                return Some((link.index, &self.buffers[link.index], false));
             }
         }
 
-        for mut link in self.iter_rev() {
-            let link = unsafe { link.as_mut() };
+        for link in self.iter_rev() {
             if link.ref_count == 0 {
-                link.ref_count = 1;
+                assert!(link.device_number.is_none());
+                assert!(link.block_number.is_none());
 
-                let buffer = self.buffers.get(link.index)?;
+                link.ref_count = 1;
+                link.device_number = Some(device);
+                link.block_number = Some(block);
+
+                let buffer = &self.buffers[link.index];
 
                 // TODO: 初期化忘れそうだから駄目
                 unsafe {
                     let buffer = buffer.get_mut();
-                    buffer.device_number = device;
-                    buffer.block_number = block;
                     buffer.modified = false;
                 }
 
@@ -136,6 +137,9 @@ impl<const N: usize> Cache<N> {
         link.ref_count -= 1;
 
         if link.ref_count == 0 {
+            link.block_number = None;
+            link.device_number = None;
+
             let me = unsafe { NonNull::new_unchecked(link) };
 
             if self.head.as_ptr() == link {
@@ -165,6 +169,8 @@ impl<const N: usize> Cache<N> {
 struct Link {
     index: usize,
     ref_count: usize,
+    device_number: Option<usize>,
+    block_number: Option<usize>,
     next: NonNull<Self>,
     prev: NonNull<Self>,
 }
@@ -174,6 +180,8 @@ impl Link {
         Self {
             index: 0,
             ref_count: 0,
+            device_number: None,
+            block_number: None,
             next: NonNull::dangling(),
             prev: NonNull::dangling(),
         }
@@ -181,8 +189,6 @@ impl Link {
 }
 
 pub struct Buffer {
-    device_number: usize,
-    block_number: usize,
     on_rw: bool,
     modified: bool,
     data: [u8; BSIZE],
@@ -191,8 +197,6 @@ pub struct Buffer {
 impl Buffer {
     const fn none() -> Self {
         Self {
-            device_number: 0,
-            block_number: 0,
             on_rw: false,
             modified: false,
             data: [0; _],
@@ -222,12 +226,13 @@ impl Buffer {
 
 pub struct BufferGuard {
     buffer: LockGuard<'static, SleepLock<Buffer>>,
+    block_number: usize,
     cache_index: usize,
 }
 
 impl virtio::disk::Buffer for BufferGuard {
     fn block_number(&self) -> usize {
-        self.buffer.block_number
+        self.block_number
     }
 
     fn size(&self) -> usize {
@@ -268,12 +273,14 @@ impl DerefMut for BufferGuard {
 
 impl Drop for BufferGuard {
     fn drop(&mut self) {
-        let is_deallocated = cache().lock().release(self.cache_index).unwrap();
-        if is_deallocated && self.modified {
+        if self.modified {
+            self.modified = false;
             unsafe {
                 virtio::disk::write(NonNull::new_unchecked(self));
             }
         }
+
+        cache().lock().release(self.cache_index).unwrap();
     }
 }
 
@@ -300,6 +307,7 @@ pub fn get(device: usize, block: usize) -> Option<BufferGuard> {
 
     let mut buffer = BufferGuard {
         buffer: buffer.lock(),
+        block_number: block,
         cache_index: index,
     };
 
@@ -326,7 +334,7 @@ mod bindings {
     #[repr(C)]
     struct BufferC {
         data: *mut u8,
-        blockno: u32,
+        block_index: usize,
         cache_index: usize,
         original: *const SleepLock<Buffer>,
     }
@@ -340,7 +348,7 @@ mod bindings {
 
         let ret = BufferC {
             data: buf.data.as_ptr().cast_mut(),
-            blockno: block,
+            block_index: block as _,
             cache_index: buf.cache_index,
             original: LockGuard::as_ptr(&buf.buffer),
         };
@@ -359,6 +367,7 @@ mod bindings {
     unsafe extern "C" fn brelse(buf: BufferC) {
         let guard = BufferGuard {
             buffer: LockGuard::from_ptr(buf.original),
+            block_number: buf.block_index,
             cache_index: buf.cache_index,
         };
         drop(guard);
@@ -368,6 +377,7 @@ mod bindings {
     unsafe extern "C" fn bpin(buf: *mut BufferC) {
         let guard = BufferGuard {
             buffer: LockGuard::from_ptr((*buf).original),
+            block_number: (*buf).block_index,
             cache_index: (*buf).cache_index,
         };
         pin(&guard);
@@ -378,6 +388,7 @@ mod bindings {
     unsafe extern "C" fn bunpin(buf: *mut BufferC) {
         let guard = BufferGuard {
             buffer: LockGuard::from_ptr((*buf).original),
+            block_number: (*buf).block_index,
             cache_index: (*buf).cache_index,
         };
         unpin(&guard);
