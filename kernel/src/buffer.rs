@@ -35,10 +35,6 @@ impl<const N: usize> Cache<N> {
             link.index = i;
         }
 
-        for (i, buf) in self.buffers.iter().enumerate() {
-            unsafe { buf.get_mut().cache_index = i };
-        }
-
         unsafe {
             let first = NonNull::new_unchecked(&mut self.links[0]);
             self.head = first;
@@ -91,7 +87,7 @@ impl<const N: usize> Cache<N> {
         &mut self,
         device: usize,
         block: usize,
-    ) -> Option<(&SleepLock<Buffer>, bool)> {
+    ) -> Option<(usize, &SleepLock<Buffer>, bool)> {
         for mut link in self.iter() {
             let link = unsafe { link.as_mut() };
             let buffer = self.buffers.get(link.index)?;
@@ -99,7 +95,7 @@ impl<const N: usize> Cache<N> {
             if unsafe { buffer.get().device_number == device && buffer.get().block_number == block }
             {
                 link.ref_count += 1;
-                return Some((buffer, false));
+                return Some((link.index, buffer, false));
             }
         }
 
@@ -118,7 +114,7 @@ impl<const N: usize> Cache<N> {
                     buffer.modified = false;
                 }
 
-                return Some((buffer, true));
+                return Some((link.index, buffer, true));
             }
         }
         None
@@ -154,7 +150,6 @@ impl Link {
 }
 
 pub struct Buffer {
-    cache_index: usize,
     device_number: usize,
     block_number: usize,
     on_rw: bool,
@@ -165,7 +160,6 @@ pub struct Buffer {
 impl Buffer {
     const fn none() -> Self {
         Self {
-            cache_index: 0,
             device_number: 0,
             block_number: 0,
             on_rw: false,
@@ -199,31 +193,34 @@ impl Buffer {
     }
 }
 
-pub struct BufferGuard(LockGuard<'static, SleepLock<Buffer>>);
+pub struct BufferGuard {
+    buffer: LockGuard<'static, SleepLock<Buffer>>,
+    cache_index: usize,
+}
 
 impl virtio::disk::Buffer for BufferGuard {
     fn block_number(&self) -> usize {
-        self.0.block_number
+        self.buffer.block_number
     }
 
     fn size(&self) -> usize {
-        BSIZE
+        self.buffer.data.len()
     }
 
     fn addr(&self) -> usize {
-        self.0.data.as_ptr().addr()
+        self.buffer.data.as_ptr().addr()
     }
 
     fn start(&mut self) {
-        self.0.on_rw = true;
+        self.buffer.on_rw = true;
     }
 
     fn finish(&mut self) {
-        self.0.on_rw = false;
+        self.buffer.on_rw = false;
     }
 
     fn is_finished(&self) -> bool {
-        !self.0.on_rw
+        !self.buffer.on_rw
     }
 }
 
@@ -231,13 +228,13 @@ impl Deref for BufferGuard {
     type Target = Buffer;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.buffer
     }
 }
 
 impl DerefMut for BufferGuard {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.buffer
     }
 }
 
@@ -283,12 +280,7 @@ impl Drop for BufferGuard {
 }
 
 fn cache() -> &'static SpinLock<Cache<NBUF>> {
-    static CACHE: SpinLock<Cache<NBUF>> = SpinLock::new(Cache {
-        buffers: [const { SleepLock::new(Buffer::none()) }; _],
-        links: [const { Link::dangling() }; _],
-        head: NonNull::dangling(),
-        tail: NonNull::dangling(),
-    });
+    static CACHE: SpinLock<Cache<NBUF>> = SpinLock::new(Cache::uninit());
     static INIT: SpinLock<bool> = SpinLock::new(false);
 
     let mut is_initialized = INIT.lock();
@@ -304,11 +296,14 @@ fn cache() -> &'static SpinLock<Cache<NBUF>> {
 
 pub fn get(device: usize, block: usize) -> Option<BufferGuard> {
     let mut cache = cache().lock();
-    let (buffer, is_allocated) = cache.get_or_allocate(device, block)?;
+    let (index, buffer, is_allocated) = cache.get_or_allocate(device, block)?;
     let buffer = unsafe { &*(buffer as *const SleepLock<_>) };
     drop(cache);
 
-    let mut buffer = BufferGuard(buffer.lock());
+    let mut buffer = BufferGuard {
+        buffer: buffer.lock(),
+        cache_index: index,
+    };
 
     if is_allocated {
         unsafe {
@@ -319,12 +314,12 @@ pub fn get(device: usize, block: usize) -> Option<BufferGuard> {
     Some(buffer)
 }
 
-pub fn pin(buffer: &Buffer) {
-    cache().lock().pin(buffer.cache_index);
+pub fn pin(guard: &BufferGuard) {
+    cache().lock().pin(guard.cache_index);
 }
 
-pub fn unpin(buffer: &Buffer) {
-    cache().lock().unpin(buffer.cache_index);
+pub fn unpin(guard: &BufferGuard) {
+    cache().lock().unpin(guard.cache_index);
 }
 
 mod bindings {
@@ -334,6 +329,7 @@ mod bindings {
     struct BufferC {
         data: *mut u8,
         blockno: u32,
+        cache_index: usize,
         original: *const SleepLock<Buffer>,
     }
 
@@ -347,7 +343,8 @@ mod bindings {
         let ret = BufferC {
             data: buf.data.as_mut_ptr(),
             blockno: block,
-            original: LockGuard::as_ptr(&buf.0),
+            cache_index: buf.cache_index,
+            original: LockGuard::as_ptr(&buf.buffer),
         };
 
         core::mem::forget(buf);
@@ -362,20 +359,29 @@ mod bindings {
 
     #[no_mangle]
     unsafe extern "C" fn brelse(buf: BufferC) {
-        let guard = BufferGuard(LockGuard::from_ptr(buf.original));
+        let guard = BufferGuard {
+            buffer: LockGuard::from_ptr(buf.original),
+            cache_index: buf.cache_index,
+        };
         drop(guard);
     }
 
     #[no_mangle]
     unsafe extern "C" fn bpin(buf: *mut BufferC) {
-        let guard = BufferGuard(LockGuard::from_ptr((*buf).original));
+        let guard = BufferGuard {
+            buffer: LockGuard::from_ptr((*buf).original),
+            cache_index: (*buf).cache_index,
+        };
         pin(&guard);
         core::mem::forget(guard);
     }
 
     #[no_mangle]
     unsafe extern "C" fn bunpin(buf: *mut BufferC) {
-        let guard = BufferGuard(LockGuard::from_ptr((*buf).original));
+        let guard = BufferGuard {
+            buffer: LockGuard::from_ptr((*buf).original),
+            cache_index: (*buf).cache_index,
+        };
         unpin(&guard);
         core::mem::forget(guard);
     }
