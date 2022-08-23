@@ -21,20 +21,58 @@
 //   ...
 // Log appends are synchronous.
 
-use crate::{buffer, config::LOGSIZE};
+use crate::{
+    buffer::{self, BSIZE},
+    config::LOGSIZE,
+};
+
+const _: () = {
+    assert!(core::mem::size_of::<LogHeader>() <= BSIZE);
+};
 
 #[repr(C)]
-#[derive(Clone)]
 pub struct LogHeader {
     n: u32,
     block: [u32; LOGSIZE],
 }
 
-fn read_header(device: usize, block: usize) -> Option<LogHeader> {
+fn read_header(device: usize, block: usize, header: &mut LogHeader) -> Option<()> {
     let buffer = buffer::get(device, block)?;
     let uninit = buffer.as_uninit::<LogHeader>()?;
-    let header = unsafe { uninit.assume_init_ref() };
-    Some(header.clone())
+    unsafe { core::ptr::copy_nonoverlapping(uninit.as_ptr(), header, 1) };
+    Some(())
+}
+
+fn write_header(device: usize, block: usize, header: &LogHeader) -> Option<()> {
+    let mut buffer = buffer::get(device, block)?;
+    let uninit = buffer.as_uninit_mut::<LogHeader>()?;
+    unsafe { core::ptr::copy_nonoverlapping(header, uninit.as_mut_ptr(), 1) };
+    Some(())
+}
+
+fn install_blocks(log: &mut Log, recovering: bool) {
+    for tail in 0..(log.header.n as usize) {
+        let logged = buffer::get(log.device, log.start + tail + 1).unwrap();
+        let mut dst = buffer::get(log.device, log.header.block[tail] as usize).unwrap();
+
+        unsafe {
+            let src = logged.as_ptr::<u8>().unwrap();
+            let dst = dst.as_mut_ptr::<u8>().unwrap();
+            core::ptr::copy(src, dst, BSIZE);
+        }
+
+        if !recovering {
+            buffer::unpin(&dst);
+        }
+    }
+
+    log.header.n = 0;
+}
+
+fn recover(log: &mut Log) {
+    read_header(log.device, log.start, &mut log.header).unwrap();
+    install_blocks(log, true);
+    write_header(log.device, log.start, &log.header).unwrap();
 }
 
 pub struct Log {
