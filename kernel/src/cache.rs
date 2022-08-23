@@ -114,7 +114,7 @@ impl<K, const N: usize> Cache<K, N> {
         None
     }
 
-    pub fn release(&mut self, index: usize) -> Option<()> {
+    pub fn remove(&mut self, index: usize) -> Option<()> {
         if index >= self.links.len() {
             return None;
         }
@@ -173,7 +173,7 @@ impl<K, const N: usize> CacheRc<K, N> {
             0 => unreachable!(),
             1 => {
                 *count = 0;
-                self.cache.release(index).unwrap();
+                self.cache.remove(index).unwrap();
                 Some(true)
             }
             _ => {
