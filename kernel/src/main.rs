@@ -5,6 +5,7 @@
 #![feature(asm_const)]
 #![feature(arbitrary_self_types)]
 #![feature(const_convert)]
+#![feature(const_for)]
 #![feature(const_maybe_uninit_uninit_array)]
 #![feature(const_mut_refs)]
 #![feature(const_nonnull_new)]

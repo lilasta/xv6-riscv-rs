@@ -138,16 +138,7 @@ impl Drop for BufferGuard {
 }
 
 fn cache() -> LockGuard<'static, SpinLock<CacheRc<BufferKey, NBUF>>> {
-    static CACHE: SpinLock<CacheRc<BufferKey, NBUF>> = SpinLock::new(CacheRc::uninit());
-    static INIT: SpinLock<bool> = SpinLock::new(false);
-
-    let mut is_initialized = INIT.lock();
-    if !*is_initialized {
-        let mut cache = CACHE.lock();
-        cache.init();
-        *is_initialized = true;
-    }
-
+    static CACHE: SpinLock<CacheRc<BufferKey, NBUF>> = SpinLock::new(CacheRc::new());
     CACHE.lock()
 }
 
