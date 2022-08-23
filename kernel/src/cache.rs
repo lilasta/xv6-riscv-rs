@@ -1,132 +1,142 @@
-use core::ptr::NonNull;
-
 struct Link<K> {
     index: usize,
+    next: usize,
+    prev: usize,
     key: Option<K>,
-    next: NonNull<Self>,
-    prev: NonNull<Self>,
 }
 
 impl<K> Link<K> {
     const fn dangling() -> Self {
         Self {
             index: 0,
+            next: 0,
+            prev: 0,
             key: None,
-            next: NonNull::dangling(),
-            prev: NonNull::dangling(),
         }
     }
 }
 
 pub struct Cache<K, const N: usize> {
     links: [Link<K>; N],
-    head: NonNull<Link<K>>,
-    tail: NonNull<Link<K>>,
+    head: usize,
+    tail: usize,
 }
 
 impl<K, const N: usize> Cache<K, N> {
-    pub const fn uninit() -> Self {
-        Self {
+    pub const fn new() -> Self {
+        let mut this = Self {
             links: [const { Link::dangling() }; _],
-            head: NonNull::dangling(),
-            tail: NonNull::dangling(),
+            head: 0,
+            tail: 0,
+        };
+
+        let mut i = 0;
+        while i < N {
+            this.links[i].index = i;
+            i += 1;
         }
+
+        this.head = 0;
+        this.tail = 0;
+        this.links[0].next = 0;
+        this.links[0].prev = 0;
+
+        let mut i = 1;
+        while i < N {
+            this.links[i].prev = this.tail;
+            this.links[i].next = this.head;
+            this.links[this.head].prev = i;
+            this.links[this.tail].next = i;
+            this.tail = i;
+            i += 1;
+        }
+
+        this
     }
 
-    pub fn init(&mut self) {
-        for (i, link) in self.links.iter_mut().enumerate() {
-            link.index = i;
-        }
-
-        unsafe {
-            let first = NonNull::new_unchecked(&mut self.links[0]);
-            self.head = first;
-            self.tail = first;
-            self.links[0].next = first;
-            self.links[0].prev = first;
-
-            for i in 1..N {
-                let ptr = NonNull::new_unchecked(&mut self.links[i]);
-                self.links[i].prev = self.tail;
-                self.links[i].next = self.head;
-                self.head.as_mut().prev = ptr;
-                self.tail.as_mut().next = ptr;
-                self.tail = ptr;
-            }
-        }
-    }
-
-    fn iter(&self) -> impl Iterator<Item = &mut Link<K>> {
-        let mut next = Some(self.head);
-        let end = self.tail;
-
-        core::iter::from_fn(move || {
-            let current = unsafe { next?.as_mut() };
-            if next == Some(end) {
-                next = None
+    fn indexes<'a>(&'a self) -> impl 'a + Iterator<Item = usize> {
+        core::iter::successors(Some(self.head), |current| {
+            if *current == self.tail {
+                None
             } else {
-                next = Some(current.next);
+                Some(self.links[*current].next)
             }
-            Some(current)
         })
     }
 
-    fn iter_rev(&self) -> impl Iterator<Item = &mut Link<K>> {
-        let mut next = Some(self.tail);
-        let end = self.head;
-
-        core::iter::from_fn(move || {
-            let current = unsafe { next?.as_mut() };
-            if next == Some(end) {
-                next = None
+    fn indexes_rev<'a>(&'a self) -> impl 'a + Iterator<Item = usize> {
+        core::iter::successors(Some(self.tail), |current| {
+            if *current == self.head {
+                None
             } else {
-                next = Some(current.prev);
+                Some(self.links[*current].prev)
             }
-            Some(current)
         })
+    }
+
+    fn find(&self, key: &K) -> Option<usize>
+    where
+        K: PartialEq,
+    {
+        for i in self.indexes() {
+            if self.links[i].key.as_ref() == Some(key) {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn find_unused(&self) -> Option<usize>
+    where
+        K: PartialEq,
+    {
+        for i in self.indexes_rev() {
+            if self.links[i].key.is_none() {
+                return Some(i);
+            }
+        }
+        None
     }
 
     pub fn get(&mut self, key: K) -> Option<(usize, bool)>
     where
         K: PartialEq,
     {
-        for link in self.iter() {
-            if link.key.as_ref() == Some(&key) {
-                return Some((link.index, false));
-            }
+        if let Some(i) = self.find(&key) {
+            return Some((i, false));
         }
 
-        for link in self.iter_rev() {
-            if link.key.is_none() {
-                link.key = Some(key);
-                return Some((link.index, true));
-            }
+        if let Some(i) = self.find_unused() {
+            self.links[i].key = Some(key);
+            return Some((i, true));
         }
 
         None
     }
 
     pub fn release(&mut self, index: usize) -> Option<()> {
-        let link = self.links.get_mut(index)?;
-        link.key = None;
+        if index >= self.links.len() {
+            return None;
+        }
 
-        let this = unsafe { NonNull::new_unchecked(link) };
-        if self.head.as_ptr() == link {
-            self.head = link.next;
-            self.tail = this;
-        } else if self.tail.as_ptr() == link {
+        self.links[index].key = None;
+
+        if self.head == index {
+            self.head = self.links[index].next;
+            self.tail = index;
+        } else if self.tail == index {
             // do nothing
         } else {
-            unsafe {
-                link.next.as_mut().prev = link.prev;
-                link.prev.as_mut().next = link.next;
-                link.next = self.head;
-                link.prev = self.tail;
+            let Link { next, prev, .. } = self.links[index];
 
-                self.head.as_mut().prev = this;
-                self.tail.as_mut().next = this;
-                self.tail = this;
-            }
+            self.links[next].prev = prev;
+            self.links[prev].next = next;
+            self.links[index].next = self.head;
+            self.links[index].prev = self.tail;
+
+            self.links[self.head].prev = index;
+            self.links[self.tail].next = index;
+            self.tail = index;
         }
 
         Some(())
@@ -140,16 +150,12 @@ pub struct CacheRc<K, const N: usize> {
 }
 
 impl<K, const N: usize> CacheRc<K, N> {
-    pub const fn uninit() -> Self {
+    pub const fn new() -> Self {
         Self {
-            cache: Cache::uninit(),
+            cache: Cache::new(),
             counts: [0; N],
             pinned: [false; N],
         }
-    }
-
-    pub fn init(&mut self) {
-        self.cache.init()
     }
 
     pub fn get(&mut self, key: K) -> Option<(usize, bool)>
