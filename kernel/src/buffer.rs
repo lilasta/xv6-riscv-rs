@@ -104,9 +104,8 @@ impl DerefMut for BufferGuard {
 
 impl Drop for BufferGuard {
     fn drop(&mut self) {
-        let will_be_deallocated = cache().reference_count(self.cache_index) == Some(1);
-        if self.modified && will_be_deallocated {
-            self.modified = false;
+        if self.buffer.modified {
+            self.buffer.modified = false;
             unsafe {
                 virtio::disk::write(NonNull::new_unchecked(self));
             }
@@ -138,7 +137,7 @@ pub fn get(device: usize, block: usize) -> Option<BufferGuard> {
 
     let (index, is_new) = cache().get(BufferKey { device, block })?;
 
-    let mut buffer = BufferGuard {
+    let mut guard = BufferGuard {
         buffer: ManuallyDrop::new(BUFFERS[index].lock()),
         block_number: block,
         cache_index: index,
@@ -146,12 +145,12 @@ pub fn get(device: usize, block: usize) -> Option<BufferGuard> {
 
     if is_new {
         unsafe {
-            virtio::disk::read(NonNull::new_unchecked(&mut buffer));
+            virtio::disk::read(NonNull::new_unchecked(&mut guard));
         }
-        buffer.modified = false;
+        guard.buffer.modified = false;
     }
 
-    Some(buffer)
+    Some(guard)
 }
 
 pub fn pin(guard: &BufferGuard) {
