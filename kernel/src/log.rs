@@ -23,7 +23,9 @@
 
 use crate::{
     buffer::{self, BSIZE},
-    config::LOGSIZE,
+    config::{LOGSIZE, MAXOPBLOCKS},
+    lock::{spin::SpinLock, Lock},
+    process,
 };
 
 const _: () = {
@@ -31,9 +33,30 @@ const _: () = {
 };
 
 #[repr(C)]
-pub struct LogHeader {
+pub struct SuperBlock {
+    magic: u32,      // Must be FSMAGIC
+    size: u32,       // Size of file system image (blocks)
+    nblocks: u32,    // Number of data blocks
+    ninodes: u32,    // Number of inodes.
+    nlog: u32,       // Number of log blocks
+    logstart: u32,   // Block number of first log block
+    inodestart: u32, // Block number of first inode block
+    bmapstart: u32,  // Block number of first free map block
+}
+
+#[repr(C)]
+struct LogHeader {
     n: u32,
     block: [u32; LOGSIZE],
+}
+
+impl LogHeader {
+    pub const fn empty() -> Self {
+        Self {
+            n: 0,
+            block: [0; _],
+        }
+    }
 }
 
 fn read_header(device: usize, block: usize, header: &mut LogHeader) -> Option<()> {
@@ -79,22 +102,68 @@ pub struct Log {
     start: usize,
     size: usize,
     outstanding: usize,
-    committing: usize,
+    committing: bool,
     device: usize,
     header: LogHeader,
 }
+
+impl Log {
+    pub const fn uninit() -> Self {
+        Self {
+            start: 0,
+            size: 0,
+            outstanding: 0,
+            committing: false,
+            device: 0,
+            header: LogHeader::empty(),
+        }
+    }
+}
+
+static LOG: SpinLock<Log> = SpinLock::new(Log::uninit());
 
 pub struct LogGuard;
 
 impl LogGuard {
     pub fn new() -> Self {
-        extern "C" {
-            fn begin_op();
-        }
-        unsafe {
-            begin_op();
-        }
+        Self::begin();
         Self
+    }
+
+    fn begin() {
+        let mut log = LOG.lock();
+        loop {
+            if log.committing {
+                process::sleep(core::ptr::addr_of!(LOG).addr(), &mut log);
+            } else if log.header.n as usize + (log.outstanding + 1) * MAXOPBLOCKS > LOGSIZE {
+                process::sleep(core::ptr::addr_of!(LOG).addr(), &mut log);
+            } else {
+                log.outstanding += 1;
+                return;
+            }
+        }
+    }
+
+    fn end() {
+        let mut log = LOG.lock();
+        assert!(!log.committing);
+
+        let mut do_commit = false;
+        log.outstanding -= 1;
+        if log.outstanding == 0 {
+            do_commit = true;
+            log.committing = true;
+        } else {
+            process::wakeup(core::ptr::addr_of!(LOG).addr());
+        }
+
+        if do_commit {
+            // call commit w/o holding locks, since not allowed
+            // to sleep with locks.
+            Lock::unlock_temporarily(&mut log, commit);
+            log.committing = false;
+            process::wakeup(core::ptr::addr_of!(LOG).addr());
+        }
     }
 }
 
