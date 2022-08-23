@@ -11,7 +11,7 @@ use crate::{
     virtio,
 };
 
-const BSIZE: usize = 1024;
+pub const BSIZE: usize = 1024;
 
 #[derive(PartialEq, Eq)]
 struct BufferKey {
@@ -32,6 +32,26 @@ impl<const SIZE: usize> Buffer<SIZE> {
             modified: false,
             data: [0; _],
         }
+    }
+
+    pub const fn size(&self) -> usize {
+        SIZE
+    }
+
+    pub const fn as_ptr<T>(&self) -> Option<*const T> {
+        if core::mem::size_of::<T>() > self.data.len() {
+            return None;
+        }
+
+        Some(self.data.as_ptr().cast())
+    }
+
+    pub const fn as_mut_ptr<T>(&mut self) -> Option<*mut T> {
+        if core::mem::size_of::<T>() > self.data.len() {
+            return None;
+        }
+
+        Some(self.data.as_mut_ptr().cast())
     }
 
     pub const fn as_uninit<T>(&self) -> Option<&MaybeUninit<T>> {
