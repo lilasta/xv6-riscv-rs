@@ -22,10 +22,11 @@
 // Log appends are synchronous.
 
 use crate::{
-    buffer::{self, BSIZE},
+    buffer::{self, BufferGuard, BSIZE},
     config::{LOGSIZE, MAXOPBLOCKS},
     lock::{spin::SpinLock, Lock},
     process,
+    virtio::disk::Buffer,
 };
 
 const _: () = {
@@ -120,6 +121,10 @@ impl Log {
     }
 }
 
+fn commit() {
+    todo!()
+}
+
 static LOG: SpinLock<Log> = SpinLock::new(Log::uninit());
 
 pub struct LogGuard;
@@ -128,6 +133,30 @@ impl LogGuard {
     pub fn new() -> Self {
         Self::begin();
         Self
+    }
+
+    pub fn write(&self, buf: &BufferGuard) {
+        let mut log = LOG.lock();
+
+        assert!((log.header.n as usize) < LOGSIZE);
+        assert!((log.header.n as usize) < log.size - 1);
+        assert!(log.outstanding == 0);
+
+        let is_new = log
+            .header
+            .block
+            .iter()
+            .take(log.header.n as usize)
+            .find(|b| **b as usize == buf.block_number())
+            .is_none();
+
+        if is_new {
+            buffer::pin(buf);
+
+            let i = log.header.n as usize;
+            log.header.block[i] = buf.block_number() as u32;
+            log.header.n += 1;
+        }
     }
 
     fn begin() {
@@ -169,11 +198,6 @@ impl LogGuard {
 
 impl Drop for LogGuard {
     fn drop(&mut self) {
-        extern "C" {
-            fn end_op();
-        }
-        unsafe {
-            end_op();
-        }
+        Self::end();
     }
 }
