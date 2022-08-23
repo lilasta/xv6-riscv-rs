@@ -136,6 +136,7 @@ impl<K, const N: usize> Cache<K, N> {
 pub struct CacheRc<K, const N: usize> {
     cache: Cache<K, N>,
     counts: [usize; N],
+    pinned: [bool; N],
 }
 
 impl<K, const N: usize> CacheRc<K, N> {
@@ -143,6 +144,7 @@ impl<K, const N: usize> CacheRc<K, N> {
         Self {
             cache: Cache::uninit(),
             counts: [0; N],
+            pinned: [false; N],
         }
     }
 
@@ -175,13 +177,29 @@ impl<K, const N: usize> CacheRc<K, N> {
         }
     }
 
+    // TODO: PinGuard?
     pub const fn pin(&mut self, index: usize) -> Option<()> {
-        *self.counts.get_mut(index)? += 1;
+        let count = self.counts.get_mut(index)?;
+        let pin = self.pinned.get_mut(index)?;
+
+        assert!(*pin == false);
+
+        *count += 1;
+        *pin = true;
+
         Some(())
     }
 
     pub const fn unpin(&mut self, index: usize) -> Option<()> {
-        *self.counts.get_mut(index)? -= 1;
+        let count = self.counts.get_mut(index)?;
+        let pin = self.pinned.get_mut(index)?;
+
+        assert!(*count > 1);
+        assert!(*pin == true);
+
+        *count -= 1;
+        *pin = false;
+
         Some(())
     }
 
