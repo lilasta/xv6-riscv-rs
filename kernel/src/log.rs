@@ -167,7 +167,7 @@ impl LogGuard {
 
         assert!((log.header.n as usize) < LOGSIZE);
         assert!((log.header.n as usize) < log.size - 1);
-        assert!(log.outstanding == 0);
+        assert!(log.outstanding > 0);
 
         let is_new = log
             .header
@@ -227,4 +227,27 @@ impl Drop for LogGuard {
     fn drop(&mut self) {
         Self::end();
     }
+}
+
+pub fn get() -> LogGuard {
+    LogGuard::new()
+}
+
+#[no_mangle]
+unsafe extern "C" fn initlog(dev: u32, sb: *mut SuperBlock) {
+    let mut log = LOG.lock();
+    log.start = (*sb).logstart as usize;
+    log.size = (*sb).nlog as usize;
+    log.device = dev as usize;
+    recover(&mut log);
+}
+
+#[no_mangle]
+extern "C" fn begin_op() {
+    LogGuard::begin();
+}
+
+#[no_mangle]
+extern "C" fn end_op() {
+    LogGuard::end();
 }

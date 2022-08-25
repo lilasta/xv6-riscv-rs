@@ -192,8 +192,20 @@ pub fn unpin(guard: &BufferGuard) {
 mod bindings {
     use super::*;
 
+    #[no_mangle]
+    unsafe extern "C" fn log_write(buf: *mut BufferC) {
+        let log = crate::log::LogGuard;
+        let guard = Undroppable::new(BufferGuard {
+            buffer: ManuallyDrop::new(LockGuard::from_ptr((*buf).original)),
+            block_number: (*buf).block_index,
+            cache_index: (*buf).cache_index,
+        });
+        log.write(&guard);
+        core::mem::forget(guard);
+    }
+
     #[repr(C)]
-    struct BufferC {
+    pub struct BufferC {
         data: *mut u8,
         block_index: usize,
         cache_index: usize,
