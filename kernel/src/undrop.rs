@@ -4,6 +4,7 @@ use core::ops::{Deref, DerefMut};
 pub struct Undroppable<T>(T);
 
 impl<T> Undroppable<T> {
+    /// コンパイル時にパニックを発生させるための定数
     const PANIC: () = panic!("Undroppable!");
 
     pub const fn new(value: T) -> Self {
@@ -30,7 +31,9 @@ impl<T> const DerefMut for Undroppable<T> {
 }
 
 impl<T> const Drop for Undroppable<T> {
+    ///
     fn drop(&mut self) {
+        // SAFETY: constコンテキストでは巻き戻しが行われないので、二重パニックの心配はありません。
         Self::PANIC
     }
 }
