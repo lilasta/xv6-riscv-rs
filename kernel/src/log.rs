@@ -24,7 +24,7 @@
 use crate::{
     buffer::{self, BufferGuard, BSIZE},
     config::{LOGSIZE, MAXOPBLOCKS},
-    lock::{spin::SpinLock, Lock},
+    lock::{spin::SpinLock, Lock, LockGuard},
     process,
     virtio::disk::Buffer,
 };
@@ -60,43 +60,64 @@ impl LogHeader {
     }
 }
 
-fn read_header(device: usize, block: usize, header: &mut LogHeader) -> Option<()> {
-    let buffer = buffer::get(device, block)?;
-    let uninit = buffer.as_uninit::<LogHeader>()?;
-    unsafe { core::ptr::copy_nonoverlapping(uninit.as_ptr(), header, 1) };
+fn read_header(log: &mut LockGuard<SpinLock<Log>>) -> Option<()> {
+    let buf = buffer::get_with_unlock(log.device, log.start, log)?;
+    unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), &mut log.header, 1) };
+    buffer::release_with_unlock(buf, log);
     Some(())
 }
 
-fn write_header(device: usize, block: usize, header: &LogHeader) -> Option<()> {
-    let mut buffer = buffer::get(device, block)?;
-    let uninit = buffer.as_uninit_mut::<LogHeader>()?;
-    unsafe { core::ptr::copy_nonoverlapping(header, uninit.as_mut_ptr(), 1) };
+fn write_header(log: &mut LockGuard<SpinLock<Log>>) -> Option<()> {
+    let mut buf = buffer::get_with_unlock(log.device, log.start, log)?;
+    unsafe { core::ptr::copy_nonoverlapping(&log.header, buf.as_mut_ptr(), 1) };
+    buffer::release_with_unlock(buf, log);
     Some(())
 }
 
-fn install_blocks(log: &mut Log, recovering: bool) {
+fn install_blocks(log: &mut LockGuard<SpinLock<Log>>, recovering: bool) {
     for tail in 0..(log.header.n as usize) {
-        let logged = buffer::get(log.device, log.start + tail + 1).unwrap();
-        let mut dst = buffer::get(log.device, log.header.block[tail] as usize).unwrap();
+        let from = buffer::get_with_unlock(log.device, log.start + tail + 1, log).unwrap();
+        let mut to =
+            buffer::get_with_unlock(log.device, log.header.block[tail] as usize, log).unwrap();
 
         unsafe {
-            let src = logged.as_ptr::<u8>().unwrap();
-            let dst = dst.as_mut_ptr::<u8>().unwrap();
+            let src = from.as_ptr::<u8>();
+            let dst = to.as_mut_ptr::<u8>();
             core::ptr::copy(src, dst, BSIZE);
         }
 
         if !recovering {
-            buffer::unpin(&dst);
+            buffer::unpin(&to);
         }
+
+        buffer::release_with_unlock(from, log);
+        buffer::release_with_unlock(to, log);
     }
 
     log.header.n = 0;
 }
 
-fn recover(log: &mut Log) {
-    read_header(log.device, log.start, &mut log.header).unwrap();
+fn write_log(log: &mut LockGuard<SpinLock<Log>>) {
+    for tail in 0..(log.header.n as usize) {
+        let mut to = buffer::get_with_unlock(log.device, log.start + tail + 1, log).unwrap();
+        let from =
+            buffer::get_with_unlock(log.device, log.header.block[tail] as usize, log).unwrap();
+
+        unsafe {
+            let src = from.as_ptr::<u8>();
+            let dst = to.as_mut_ptr::<u8>();
+            core::ptr::copy(src, dst, BSIZE);
+        }
+
+        buffer::release_with_unlock(from, log);
+        buffer::release_with_unlock(to, log);
+    }
+}
+
+fn recover(log: &mut LockGuard<SpinLock<Log>>) {
+    read_header(log).unwrap();
     install_blocks(log, true);
-    write_header(log.device, log.start, &log.header).unwrap();
+    write_header(log).unwrap();
 }
 
 pub struct Log {
@@ -121,8 +142,14 @@ impl Log {
     }
 }
 
-fn commit() {
-    todo!()
+fn commit(log: &mut LockGuard<SpinLock<Log>>) {
+    if log.header.n > 0 {
+        write_log(log);
+        write_header(log);
+        install_blocks(log, false);
+        log.header.n = 0;
+        write_header(log);
+    }
 }
 
 static LOG: SpinLock<Log> = SpinLock::new(Log::uninit());
@@ -189,7 +216,7 @@ impl LogGuard {
         if do_commit {
             // call commit w/o holding locks, since not allowed
             // to sleep with locks.
-            Lock::unlock_temporarily(&mut log, commit);
+            commit(&mut log);
             log.committing = false;
             process::wakeup(core::ptr::addr_of!(LOG).addr());
         }

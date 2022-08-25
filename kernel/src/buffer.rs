@@ -8,10 +8,19 @@ use crate::{
     cache::CacheRc,
     config::NBUF,
     lock::{sleep::SleepLock, spin::SpinLock, Lock, LockGuard},
+    undrop::Undroppable,
     virtio,
 };
 
 pub const BSIZE: usize = 1024;
+
+pub const fn check_buffer_size<T, const SIZE: usize>() -> Option<usize> {
+    if core::mem::size_of::<T>() > SIZE {
+        None
+    } else {
+        Some(0)
+    }
+}
 
 #[derive(PartialEq, Eq)]
 struct BufferKey {
@@ -38,40 +47,36 @@ impl<const SIZE: usize> Buffer<SIZE> {
         SIZE
     }
 
-    pub const fn as_ptr<T>(&self) -> Option<*const T> {
-        if core::mem::size_of::<T>() > self.data.len() {
-            return None;
-        }
-
-        Some(self.data.as_ptr().cast())
+    pub const fn as_ptr<T>(&self) -> *const T
+    where
+        [(); check_buffer_size::<T, SIZE>().unwrap()]:,
+    {
+        self.data.as_ptr().cast()
     }
 
-    pub const fn as_mut_ptr<T>(&mut self) -> Option<*mut T> {
-        if core::mem::size_of::<T>() > self.data.len() {
-            return None;
-        }
-
-        Some(self.data.as_mut_ptr().cast())
+    pub const fn as_mut_ptr<T>(&mut self) -> *mut T
+    where
+        [(); check_buffer_size::<T, SIZE>().unwrap()]:,
+    {
+        self.data.as_mut_ptr().cast()
     }
 
-    pub const fn as_uninit<T>(&self) -> Option<&MaybeUninit<T>> {
-        if core::mem::size_of::<T>() > self.data.len() {
-            return None;
-        }
-
+    pub const fn as_uninit<T>(&self) -> &MaybeUninit<T>
+    where
+        [(); check_buffer_size::<T, SIZE>().unwrap()]:,
+    {
         let ptr = self.data.as_ptr();
         let ptr = ptr.cast::<MaybeUninit<T>>();
-        Some(unsafe { &*ptr })
+        unsafe { &*ptr }
     }
 
-    pub const fn as_uninit_mut<T>(&mut self) -> Option<&mut MaybeUninit<T>> {
-        if core::mem::size_of::<T>() > self.data.len() {
-            return None;
-        }
-
+    pub const fn as_uninit_mut<T>(&mut self) -> &mut MaybeUninit<T>
+    where
+        [(); check_buffer_size::<T, SIZE>().unwrap()]:,
+    {
         let ptr = self.data.as_mut_ptr();
         let ptr = ptr.cast::<MaybeUninit<T>>();
-        Some(unsafe { &mut *ptr })
+        unsafe { &mut *ptr }
     }
 }
 
@@ -122,46 +127,58 @@ impl DerefMut for BufferGuard {
     }
 }
 
-impl Drop for BufferGuard {
-    fn drop(&mut self) {
-        if self.buffer.modified {
-            self.buffer.modified = false;
-            unsafe {
-                virtio::disk::write(NonNull::new_unchecked(self));
-            }
-        }
-
-        unsafe { ManuallyDrop::drop(&mut self.buffer) };
-
-        cache().release(self.cache_index).unwrap();
-    }
-}
-
 fn cache() -> LockGuard<'static, SpinLock<CacheRc<BufferKey, NBUF>>> {
     static CACHE: SpinLock<CacheRc<BufferKey, NBUF>> = SpinLock::new(CacheRc::new());
     CACHE.lock()
 }
 
-pub fn get(device: usize, block: usize) -> Option<BufferGuard> {
+pub fn get(device: usize, block: usize) -> Option<Undroppable<BufferGuard>> {
     static BUFFERS: [SleepLock<Buffer<BSIZE>>; NBUF] =
         [const { SleepLock::new(Buffer::empty()) }; _];
 
     let (index, is_new) = cache().get(BufferKey { device, block })?;
 
-    let mut guard = BufferGuard {
+    let mut guard = Undroppable::new(BufferGuard {
         buffer: ManuallyDrop::new(BUFFERS[index].lock()),
         block_number: block,
         cache_index: index,
-    };
+    });
 
     if is_new {
         unsafe {
-            virtio::disk::read(NonNull::new_unchecked(&mut guard));
+            virtio::disk::read(NonNull::new_unchecked(&mut *guard));
         }
         guard.buffer.modified = false;
     }
 
     Some(guard)
+}
+
+pub fn get_with_unlock<L: Lock>(
+    device: usize,
+    block: usize,
+    lock: &mut LockGuard<L>,
+) -> Option<Undroppable<BufferGuard>> {
+    Lock::unlock_temporarily(lock, || get(device, block))
+}
+
+pub fn release(mut buffer: Undroppable<BufferGuard>) {
+    if buffer.buffer.modified {
+        buffer.buffer.modified = false;
+        unsafe {
+            virtio::disk::write(NonNull::new_unchecked(&mut *buffer));
+        }
+    }
+
+    unsafe { ManuallyDrop::drop(&mut buffer.buffer) };
+
+    cache().release(buffer.cache_index).unwrap();
+
+    Undroppable::forget(buffer);
+}
+
+pub fn release_with_unlock<L: Lock>(buffer: Undroppable<BufferGuard>, lock: &mut LockGuard<L>) {
+    Lock::unlock_temporarily(lock, || release(buffer));
 }
 
 pub fn pin(guard: &BufferGuard) {
@@ -209,32 +226,32 @@ mod bindings {
 
     #[no_mangle]
     unsafe extern "C" fn brelse(buf: BufferC) {
-        let guard = BufferGuard {
+        let guard = Undroppable::new(BufferGuard {
             buffer: ManuallyDrop::new(LockGuard::from_ptr(buf.original)),
             block_number: buf.block_index,
             cache_index: buf.cache_index,
-        };
-        drop(guard);
+        });
+        release(guard);
     }
 
     #[no_mangle]
     unsafe extern "C" fn bpin(buf: *mut BufferC) {
-        let guard = BufferGuard {
+        let guard = Undroppable::new(BufferGuard {
             buffer: ManuallyDrop::new(LockGuard::from_ptr((*buf).original)),
             block_number: (*buf).block_index,
             cache_index: (*buf).cache_index,
-        };
+        });
         pin(&guard);
         core::mem::forget(guard);
     }
 
     #[no_mangle]
     unsafe extern "C" fn bunpin(buf: *mut BufferC) {
-        let guard = BufferGuard {
+        let guard = Undroppable::new(BufferGuard {
             buffer: ManuallyDrop::new(LockGuard::from_ptr((*buf).original)),
             block_number: (*buf).block_index,
             cache_index: (*buf).cache_index,
-        };
+        });
         unpin(&guard);
         core::mem::forget(guard);
     }
