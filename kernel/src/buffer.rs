@@ -201,7 +201,8 @@ mod bindings {
             cache_index: (*buf).cache_index,
         });
         log.write(&guard);
-        core::mem::forget(guard);
+        Undroppable::forget(guard);
+        core::mem::forget(log);
     }
 
     #[repr(C)]

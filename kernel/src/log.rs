@@ -60,16 +60,122 @@ impl LogHeader {
     }
 }
 
+static LOG: SpinLock<Log> = SpinLock::new(Log::uninit());
+
+pub struct Log {
+    start: usize,
+    size: usize,
+    outstanding: usize,
+    committing: bool,
+    device: usize,
+    header: LogHeader,
+}
+
+impl Log {
+    pub const fn uninit() -> Self {
+        Self {
+            start: 0,
+            size: 0,
+            outstanding: 0,
+            committing: false,
+            device: 0,
+            header: LogHeader::empty(),
+        }
+    }
+}
+
+fn commit(log: &mut LockGuard<SpinLock<Log>>) {
+    if log.header.n > 0 {
+        write_log(log);
+        write_header(log);
+        install_blocks(log, false);
+        write_header(log);
+    }
+}
+
+pub struct LogGuard;
+
+impl LogGuard {
+    pub fn new() -> Self {
+        Self::begin();
+        Self
+    }
+
+    pub fn write(&self, buf: &BufferGuard) {
+        let mut log = LOG.lock();
+
+        assert!((log.header.n as usize) < LOGSIZE);
+        assert!((log.header.n as usize) < log.size - 1);
+        assert!(log.outstanding > 0);
+
+        let len = log.header.n as usize;
+        let block = buf.block_number() as u32;
+        if !log.header.block[0..len].contains(&block) {
+            buffer::pin(buf);
+
+            log.header.block[len] = block;
+            log.header.n += 1;
+        }
+    }
+
+    fn begin() {
+        let mut log = LOG.lock();
+        loop {
+            if log.committing {
+                process::sleep(core::ptr::addr_of!(LOG).addr(), &mut log);
+            } else if log.header.n as usize + (log.outstanding + 1) * MAXOPBLOCKS > LOGSIZE {
+                process::sleep(core::ptr::addr_of!(LOG).addr(), &mut log);
+            } else {
+                log.outstanding += 1;
+                return;
+            }
+        }
+    }
+
+    fn end() {
+        let mut log = LOG.lock();
+        assert!(!log.committing);
+
+        log.outstanding -= 1;
+
+        let mut do_commit = false;
+        if log.outstanding == 0 {
+            do_commit = true;
+            log.committing = true;
+        } else {
+            process::wakeup(core::ptr::addr_of!(LOG).addr());
+        }
+
+        if do_commit {
+            // call commit w/o holding locks, since not allowed
+            // to sleep with locks.
+            commit(&mut log);
+            log.committing = false;
+            process::wakeup(core::ptr::addr_of!(LOG).addr());
+        }
+    }
+}
+
+impl Drop for LogGuard {
+    fn drop(&mut self) {
+        Self::end();
+    }
+}
+
+pub fn get() -> LogGuard {
+    LogGuard::new()
+}
+
 fn read_header(log: &mut LockGuard<SpinLock<Log>>) -> Option<()> {
     let buf = buffer::get_with_unlock(log.device, log.start, log)?;
-    unsafe { core::ptr::copy_nonoverlapping(buf.as_ptr(), &mut log.header, 1) };
+    unsafe { core::ptr::copy(buf.as_ptr(), &mut log.header, 1) };
     buffer::release_with_unlock(buf, log);
     Some(())
 }
 
 fn write_header(log: &mut LockGuard<SpinLock<Log>>) -> Option<()> {
     let mut buf = buffer::get_with_unlock(log.device, log.start, log)?;
-    unsafe { core::ptr::copy_nonoverlapping(&log.header, buf.as_mut_ptr(), 1) };
+    unsafe { core::ptr::copy(&log.header, buf.as_mut_ptr(), 1) };
     buffer::release_with_unlock(buf, log);
     Some(())
 }
@@ -114,132 +220,16 @@ fn write_log(log: &mut LockGuard<SpinLock<Log>>) {
     }
 }
 
-fn recover(log: &mut LockGuard<SpinLock<Log>>) {
-    read_header(log).unwrap();
-    install_blocks(log, true);
-    write_header(log).unwrap();
-}
-
-pub struct Log {
-    start: usize,
-    size: usize,
-    outstanding: usize,
-    committing: bool,
-    device: usize,
-    header: LogHeader,
-}
-
-impl Log {
-    pub const fn uninit() -> Self {
-        Self {
-            start: 0,
-            size: 0,
-            outstanding: 0,
-            committing: false,
-            device: 0,
-            header: LogHeader::empty(),
-        }
-    }
-}
-
-fn commit(log: &mut LockGuard<SpinLock<Log>>) {
-    if log.header.n > 0 {
-        write_log(log);
-        write_header(log);
-        install_blocks(log, false);
-        log.header.n = 0;
-        write_header(log);
-    }
-}
-
-static LOG: SpinLock<Log> = SpinLock::new(Log::uninit());
-
-pub struct LogGuard;
-
-impl LogGuard {
-    pub fn new() -> Self {
-        Self::begin();
-        Self
-    }
-
-    pub fn write(&self, buf: &BufferGuard) {
-        let mut log = LOG.lock();
-
-        assert!((log.header.n as usize) < LOGSIZE);
-        assert!((log.header.n as usize) < log.size - 1);
-        assert!(log.outstanding > 0);
-
-        let is_new = log
-            .header
-            .block
-            .iter()
-            .take(log.header.n as usize)
-            .find(|b| **b as usize == buf.block_number())
-            .is_none();
-
-        if is_new {
-            buffer::pin(buf);
-
-            let i = log.header.n as usize;
-            log.header.block[i] = buf.block_number() as u32;
-            log.header.n += 1;
-        }
-    }
-
-    fn begin() {
-        let mut log = LOG.lock();
-        loop {
-            if log.committing {
-                process::sleep(core::ptr::addr_of!(LOG).addr(), &mut log);
-            } else if log.header.n as usize + (log.outstanding + 1) * MAXOPBLOCKS > LOGSIZE {
-                process::sleep(core::ptr::addr_of!(LOG).addr(), &mut log);
-            } else {
-                log.outstanding += 1;
-                return;
-            }
-        }
-    }
-
-    fn end() {
-        let mut log = LOG.lock();
-        assert!(!log.committing);
-
-        let mut do_commit = false;
-        log.outstanding -= 1;
-        if log.outstanding == 0 {
-            do_commit = true;
-            log.committing = true;
-        } else {
-            process::wakeup(core::ptr::addr_of!(LOG).addr());
-        }
-
-        if do_commit {
-            // call commit w/o holding locks, since not allowed
-            // to sleep with locks.
-            commit(&mut log);
-            log.committing = false;
-            process::wakeup(core::ptr::addr_of!(LOG).addr());
-        }
-    }
-}
-
-impl Drop for LogGuard {
-    fn drop(&mut self) {
-        Self::end();
-    }
-}
-
-pub fn get() -> LogGuard {
-    LogGuard::new()
-}
-
 #[no_mangle]
 unsafe extern "C" fn initlog(dev: u32, sb: *mut SuperBlock) {
     let mut log = LOG.lock();
     log.start = (*sb).logstart as usize;
     log.size = (*sb).nlog as usize;
     log.device = dev as usize;
-    recover(&mut log);
+
+    read_header(&mut log).unwrap();
+    install_blocks(&mut log, true);
+    write_header(&mut log).unwrap();
 }
 
 #[no_mangle]
