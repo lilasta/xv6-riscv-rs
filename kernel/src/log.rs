@@ -24,6 +24,7 @@
 use crate::{
     buffer::{self, BufferGuard, BSIZE},
     config::{LOGSIZE, MAXOPBLOCKS},
+    fs::SuperBlock,
     lock::{spin::SpinLock, Lock, LockGuard},
     process,
     virtio::disk::Buffer,
@@ -32,18 +33,6 @@ use crate::{
 const _: () = {
     assert!(core::mem::size_of::<LogHeader>() <= BSIZE);
 };
-
-#[repr(C)]
-pub struct SuperBlock {
-    magic: u32,      // Must be FSMAGIC
-    size: u32,       // Size of file system image (blocks)
-    nblocks: u32,    // Number of data blocks
-    ninodes: u32,    // Number of inodes.
-    nlog: u32,       // Number of log blocks
-    logstart: u32,   // Block number of first log block
-    inodestart: u32, // Block number of first inode block
-    bmapstart: u32,  // Block number of first free map block
-}
 
 #[repr(C)]
 struct LogHeader {
