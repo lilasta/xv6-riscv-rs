@@ -78,6 +78,10 @@ impl<const SIZE: usize> Buffer<SIZE> {
         let ptr = ptr.cast::<MaybeUninit<T>>();
         unsafe { &mut *ptr }
     }
+
+    pub const fn write_zeros(&mut self) {
+        unsafe { core::ptr::write_bytes(self.data.as_mut_ptr(), 0, self.size()) };
+    }
 }
 
 pub struct BufferGuard {
