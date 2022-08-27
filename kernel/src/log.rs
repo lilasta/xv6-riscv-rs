@@ -210,7 +210,7 @@ fn write_log(log: &mut LockGuard<SpinLock<Log>>) {
 }
 
 #[no_mangle]
-unsafe extern "C" fn initlog(dev: u32, sb: *mut SuperBlock) {
+pub unsafe extern "C" fn initlog(dev: u32, sb: *const SuperBlock) {
     let mut log = LOG.lock();
     log.start = (*sb).logstart as usize;
     log.size = (*sb).nlog as usize;
