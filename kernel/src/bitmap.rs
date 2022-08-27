@@ -78,14 +78,3 @@ where
         }
     }
 }
-
-#[test]
-fn test_length_1() {
-    let mut bitmap = Bitmap::<1>::new();
-    assert!(bitmap.get(0) == Some(false));
-    assert!(bitmap.get(1) == None);
-    assert!(bitmap.set(0, false).is_ok());
-    assert!(bitmap.set(0, true).is_ok());
-    assert!(bitmap.set(1, true).is_err());
-    assert!(bitmap.get(0) == Some(true));
-}
