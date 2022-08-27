@@ -6,10 +6,14 @@ use core::{
 use crate::{
     bitmap::Bitmap,
     buffer::{self, BSIZE},
-    log::LogGuard,
+    config::NINODE,
+    lock::spin::SpinLock,
+    log::{initlog, LogGuard},
 };
 
 const FSMAGIC: u32 = 0x10203040;
+
+struct Inode {}
 
 #[repr(C)]
 pub struct SuperBlock {
@@ -25,6 +29,7 @@ pub struct SuperBlock {
 
 pub struct FileSystem {
     superblock: SuperBlock,
+    inodes: SpinLock<[Inode; NINODE]>,
 }
 
 impl FileSystem {
@@ -68,6 +73,21 @@ impl FileSystem {
         }
         None
     }
+
+    pub fn deallocate_block(&self, device: usize, block: usize, log: &LogGuard) {
+        let mut bitmap_buf = buffer::get(device, self.bitmap_at(block)).unwrap();
+        let bitmap = unsafe {
+            bitmap_buf
+                .as_uninit_mut::<Bitmap<{ Self::BITMAP_SIZE }>>()
+                .assume_init_mut()
+        };
+
+        bitmap.deallocate(block % Self::BITMAP_SIZE).unwrap();
+
+        log.write(&bitmap_buf);
+
+        buffer::release(bitmap_buf);
+    }
 }
 
 fn fsinit(device: usize) -> FileSystem {
@@ -80,13 +100,25 @@ fn fsinit(device: usize) -> FileSystem {
 
     let superblock = read_superblock(device).unwrap();
     assert!(superblock.magic == FSMAGIC);
-    // initlog(device, superblock);
+    unsafe { initlog(device as u32, &superblock) };
     todo!()
 }
 
 extern "C" {
     fn ilock(ip: *mut c_void);
     fn iunlockput(ip: *mut c_void);
+}
+
+const NDIRECT: usize = 12;
+
+#[repr(C)]
+struct DiskInode {
+    kind: u16,
+    major: u16,
+    minor: u16,
+    nlink: u16,
+    size: u32,
+    addrs: [u32; NDIRECT + 1],
 }
 
 pub struct InodeLockGuard {
