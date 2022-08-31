@@ -1,5 +1,6 @@
 use core::{
     ffi::c_void,
+    mem::MaybeUninit,
     ops::{Deref, DerefMut},
 };
 
@@ -7,11 +8,13 @@ use crate::{
     bitmap::Bitmap,
     buffer::{self, BSIZE},
     config::NINODE,
-    lock::spin::SpinLock,
+    lock::{sleep::SleepLock, spin::SpinLock, Lock},
     log::{initlog, LogGuard},
 };
 
 const FSMAGIC: u32 = 0x10203040;
+
+static mut FS: MaybeUninit<FileSystem> = MaybeUninit::uninit();
 
 struct Inode {}
 
@@ -29,14 +32,14 @@ pub struct SuperBlock {
 
 pub struct FileSystem {
     superblock: SuperBlock,
-    inodes: SpinLock<[Inode; NINODE]>,
+    //inodes: SpinLock<[SleepLock<Inode>; NINODE]>,
 }
 
 impl FileSystem {
     const BITMAP_SIZE: usize = BSIZE * 8;
 
     const fn bitmap_at(&self, index: usize) -> usize {
-        self.superblock.bmapstart as usize + index
+        self.superblock.bmapstart as usize + index / Self::BITMAP_SIZE
     }
 
     pub fn allocate_block(&self, device: usize, log: &LogGuard) -> Option<usize> {
@@ -52,7 +55,8 @@ impl FileSystem {
             match bitmap.allocate() {
                 Some(index) if (bitmap_at + index) >= self.superblock.size as usize => {
                     bitmap.deallocate(index).unwrap();
-                    continue;
+                    buffer::release(bitmap_buf);
+                    return None;
                 }
                 Some(index) => {
                     log.write(&mut bitmap_buf);
@@ -67,6 +71,7 @@ impl FileSystem {
                     return Some(block);
                 }
                 None => {
+                    buffer::release(bitmap_buf);
                     continue;
                 }
             }
@@ -90,7 +95,8 @@ impl FileSystem {
     }
 }
 
-fn fsinit(device: usize) -> FileSystem {
+#[no_mangle]
+extern "C" fn fsinit(device: u32) {
     fn read_superblock(device: usize) -> Option<SuperBlock> {
         let buf = buffer::get(device, 1)?;
         let val = unsafe { buf.as_uninit().assume_init_read() };
@@ -98,10 +104,38 @@ fn fsinit(device: usize) -> FileSystem {
         Some(val)
     }
 
-    let superblock = read_superblock(device).unwrap();
+    let superblock = read_superblock(device as usize).unwrap();
     assert!(superblock.magic == FSMAGIC);
     unsafe { initlog(device as u32, &superblock) };
-    todo!()
+
+    unsafe { FS.write(FileSystem { superblock }) };
+}
+
+#[no_mangle]
+extern "C" fn sb() -> *mut SuperBlock {
+    unsafe { &mut FS.assume_init_mut().superblock }
+}
+
+#[no_mangle]
+extern "C" fn balloc(dev: u32) -> u32 {
+    let guard = LogGuard;
+    let ret = unsafe {
+        FS.assume_init_ref()
+            .allocate_block(dev as _, &guard)
+            .unwrap_or(0)
+    };
+    core::mem::forget(guard);
+    ret as u32
+}
+
+#[no_mangle]
+extern "C" fn bfree(dev: u32, block: u32) {
+    let guard = LogGuard;
+    unsafe {
+        FS.assume_init_ref()
+            .deallocate_block(dev as _, block as _, &guard)
+    };
+    core::mem::forget(guard);
 }
 
 extern "C" {

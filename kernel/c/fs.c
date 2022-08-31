@@ -22,86 +22,11 @@
 #include "file.h"
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
-// there should be one superblock per disk device, but we run with
-// only one device
-struct superblock sb; 
 
-// Read the super block.
-static void
-readsb(int dev, struct superblock *sb)
-{
-  struct buf bp;
+extern struct superblock* sb();
+extern uint balloc(uint);
+extern void bfree(uint, uint);
 
-  bp = bread(dev, 1);
-  memmove(sb, bp.data, sizeof(*sb));
-  brelse(bp);
-}
-
-// Init fs
-void
-fsinit(int dev) {
-  readsb(dev, &sb);
-  if(sb.magic != FSMAGIC)
-    panic("invalid file system");
-  initlog(dev, &sb);
-}
-
-// Zero a block.
-static void
-bzero(int dev, int bno)
-{
-  struct buf bp;
-
-  bp = bread(dev, bno);
-  memset(bp.data, 0, BSIZE);
-  log_write(&bp);
-  brelse(bp);
-}
-
-// Blocks.
-
-// Allocate a zeroed disk block.
-// returns 0 if out of disk space.
-static uint
-balloc(uint dev)
-{
-  int b, bi, m;
-  struct buf bp;
-
-  for(b = 0; b < sb.size; b += BPB){
-    bp = bread(dev, BBLOCK(b, sb));
-    for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
-      m = 1 << (bi % 8);
-      if((bp.data[bi/8] & m) == 0){  // Is block free?
-        bp.data[bi/8] |= m;  // Mark block in use.
-        log_write(&bp);
-        brelse(bp);
-        bzero(dev, b + bi);
-        return b + bi;
-      }
-    }
-    brelse(bp);
-  }
-  printf("balloc: out of blocks\n");
-  return 0;
-}
-
-// Free a disk block.
-static void
-bfree(int dev, uint b)
-{
-  struct buf bp;
-  int bi, m;
-
-  bp = bread(dev, BBLOCK(b, sb));
-  bi = b % BPB;
-  m = 1 << (bi % 8);
-  if((bp.data[bi/8] & m) == 0)
-    panic("freeing free block");
-  bp.data[bi/8] &= ~m;
-  log_write(&bp);
-  brelse(bp);
-}
 
 // Inodes.
 //
@@ -200,8 +125,9 @@ ialloc(uint dev, short type)
   struct buf bp;
   struct dinode *dip;
 
-  for(inum = 1; inum < sb.ninodes; inum++){
-    bp = bread(dev, IBLOCK(inum, sb));
+  for (inum = 1; inum < sb()->ninodes; inum++)
+  {
+    bp = bread(dev, IBLOCK(inum, sb()));
     dip = (struct dinode*)bp.data + inum%IPB;
     if(dip->type == 0){  // a free inode
       memset(dip, 0, sizeof(*dip));
@@ -225,7 +151,7 @@ iupdate(struct inode *ip)
   struct buf bp;
   struct dinode *dip;
 
-  bp = bread(ip->dev, IBLOCK(ip->inum, sb));
+  bp = bread(ip->dev, IBLOCK(ip->inum, sb()));
   dip = (struct dinode*)bp.data + ip->inum%IPB;
   dip->type = ip->type;
   dip->major = ip->major;
@@ -298,7 +224,7 @@ ilock(struct inode *ip)
   acquiresleep(&ip->lock);
 
   if(ip->valid == 0){
-    bp = bread(ip->dev, IBLOCK(ip->inum, sb));
+    bp = bread(ip->dev, IBLOCK(ip->inum, sb()));
     dip = (struct dinode*)bp.data + ip->inum%IPB;
     ip->type = dip->type;
     ip->major = dip->major;
