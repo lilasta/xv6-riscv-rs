@@ -27,7 +27,6 @@ use crate::{
     fs::SuperBlock,
     lock::{spin::SpinLock, Lock, LockGuard},
     process,
-    virtio::disk::Buffer,
 };
 
 const _: () = {

@@ -7,8 +7,6 @@ use core::{
 use crate::{
     bitmap::Bitmap,
     buffer::{self, BSIZE},
-    config::NINODE,
-    lock::{sleep::SleepLock, spin::SpinLock, Lock},
     log::{initlog, LogGuard},
 };
 
