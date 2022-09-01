@@ -74,12 +74,14 @@ impl Log {
 }
 
 fn commit(log: &mut LockGuard<SpinLock<Log>>) {
+    log.committing = true;
     if log.header.n > 0 {
         write_log(log);
         write_header(log);
         install_blocks(log, false);
         write_header(log);
     }
+    log.committing = false;
 }
 
 pub struct LogGuard;
@@ -127,21 +129,11 @@ impl LogGuard {
 
         log.outstanding -= 1;
 
-        let mut do_commit = false;
         if log.outstanding == 0 {
-            do_commit = true;
-            log.committing = true;
-        } else {
-            process::wakeup(core::ptr::addr_of!(LOG).addr());
+            commit(&mut log);
         }
 
-        if do_commit {
-            // call commit w/o holding locks, since not allowed
-            // to sleep with locks.
-            commit(&mut log);
-            log.committing = false;
-            process::wakeup(core::ptr::addr_of!(LOG).addr());
-        }
+        process::wakeup(core::ptr::addr_of!(LOG).addr());
     }
 }
 
@@ -165,6 +157,7 @@ fn read_header(log: &mut LockGuard<SpinLock<Log>>) -> Option<()> {
 fn write_header(log: &mut LockGuard<SpinLock<Log>>) -> Option<()> {
     let mut buf = buffer::get_with_unlock(log.device, log.start, log)?;
     unsafe { core::ptr::copy(&log.header, buf.as_mut_ptr(), 1) };
+    buffer::write_with_unlock(&mut buf, log);
     buffer::release_with_unlock(buf, log);
     Some(())
 }
@@ -180,6 +173,7 @@ fn install_blocks(log: &mut LockGuard<SpinLock<Log>>, recovering: bool) {
             let dst = to.as_mut_ptr::<u8>();
             core::ptr::copy(src, dst, BSIZE);
         }
+        buffer::write_with_unlock(&mut to, log);
 
         if !recovering {
             buffer::unpin(&to);
@@ -203,7 +197,7 @@ fn write_log(log: &mut LockGuard<SpinLock<Log>>) {
             let dst = to.as_mut_ptr::<u8>();
             core::ptr::copy(src, dst, BSIZE);
         }
-
+        buffer::write_with_unlock(&mut to, log);
         buffer::release_with_unlock(from, log);
         buffer::release_with_unlock(to, log);
     }

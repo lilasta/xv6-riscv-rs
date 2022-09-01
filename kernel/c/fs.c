@@ -24,9 +24,68 @@
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 extern struct superblock* sb();
-extern uint balloc(uint);
-extern void bfree(uint, uint);
+//extern uint balloc(uint);
+//extern void bfree(uint, uint);
 
+// Zero a block.
+static void
+bzero(int dev, int bno)
+{
+  struct buf bp;
+
+  bp = bread(dev, bno);
+  memset(bp.data, 0, BSIZE);
+  log_write(&bp);
+  brelse(bp);
+}
+
+// Blocks.
+
+// Allocate a zeroed disk block.
+// returns 0 if out of disk space.
+static uint
+balloc(uint dev)
+{
+  int b, bi, m;
+  struct buf bp;
+
+  for (b = 0; b < sb()->size; b += BPB)
+  {
+    bp = bread(dev, BBLOCK(b, sb()));
+    for (bi = 0; bi < BPB && b + bi < sb()->size; bi++)
+    {
+      m = 1 << (bi % 8);
+      if ((bp.data[bi / 8] & m) == 0)
+      {                       // Is block free?
+        bp.data[bi / 8] |= m; // Mark block in use.
+        log_write(&bp);
+        brelse(bp);
+        bzero(dev, b + bi);
+        return b + bi;
+      }
+    }
+    brelse(bp);
+  }
+  printf("balloc: out of blocks\n");
+  return 0;
+}
+
+// Free a disk block.
+static void
+bfree(int dev, uint b)
+{
+  struct buf bp;
+  int bi, m;
+
+  bp = bread(dev, BBLOCK(b, sb()));
+  bi = b % BPB;
+  m = 1 << (bi % 8);
+  if ((bp.data[bi / 8] & m) == 0)
+    panic("freeing free block");
+  bp.data[bi / 8] &= ~m;
+  log_write(&bp);
+  brelse(bp);
+}
 
 // Inodes.
 //

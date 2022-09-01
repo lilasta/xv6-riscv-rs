@@ -15,6 +15,7 @@ const fn bit_mask(bit_index: usize) -> u8 {
 
 /// ビットマップ
 #[repr(C)]
+#[derive(Clone, Debug)]
 pub struct Bitmap<const BITS: usize>
 where
     [u8; require_bytes(BITS)]:,
