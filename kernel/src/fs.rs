@@ -36,39 +36,39 @@ pub struct FileSystem {
 }
 
 impl FileSystem {
-    const BITMAP_SIZE: usize = BSIZE * 8;
+    const BITMAP_BITS: usize = BSIZE * (u8::BITS as usize);
 
     const fn bitmap_at(&self, index: usize) -> usize {
-        self.superblock.bmapstart as usize + index / Self::BITMAP_SIZE
+        self.superblock.bmapstart as usize + index / Self::BITMAP_BITS
     }
 
     pub fn allocate_block(&self, device: usize, log: &LogGuard) -> Option<usize> {
-        for bitmap_at in (0..(self.superblock.size as usize)).step_by(Self::BITMAP_SIZE) {
-            let mut bitmap_buf = buffer::get(device, self.bitmap_at(bitmap_at)).unwrap();
+        for bi in (0..(self.superblock.size as usize)).step_by(Self::BITMAP_BITS) {
+            let mut bitmap_buf = buffer::get(device, self.bitmap_at(bi)).unwrap();
 
             let bitmap = unsafe {
                 bitmap_buf
-                    .as_uninit_mut::<Bitmap<{ Self::BITMAP_SIZE }>>()
+                    .as_uninit_mut::<Bitmap<{ Self::BITMAP_BITS }>>()
                     .assume_init_mut()
             };
 
             match bitmap.allocate() {
-                Some(index) if (bitmap_at + index) >= self.superblock.size as usize => {
+                Some(index) if (bi + index) >= self.superblock.size as usize => {
                     bitmap.deallocate(index).unwrap();
                     buffer::release(bitmap_buf);
                     return None;
                 }
                 Some(index) => {
                     log.write(&mut bitmap_buf);
+                    buffer::release(bitmap_buf);
 
-                    let block = bitmap_at + index;
+                    let block = bi + index;
                     {
                         let mut buf = buffer::get(device, block).unwrap();
                         buf.write_zeros();
                         log.write(&mut buf);
                         buffer::release(buf);
                     }
-                    buffer::release(bitmap_buf);
                     return Some(block);
                 }
                 None => {
@@ -84,11 +84,11 @@ impl FileSystem {
         let mut bitmap_buf = buffer::get(device, self.bitmap_at(block)).unwrap();
         let bitmap = unsafe {
             bitmap_buf
-                .as_uninit_mut::<Bitmap<{ Self::BITMAP_SIZE }>>()
+                .as_uninit_mut::<Bitmap<{ Self::BITMAP_BITS }>>()
                 .assume_init_mut()
         };
 
-        bitmap.deallocate(block % Self::BITMAP_SIZE).unwrap();
+        bitmap.deallocate(block % Self::BITMAP_BITS).unwrap();
 
         log.write(&bitmap_buf);
 
@@ -117,7 +117,6 @@ extern "C" fn sb() -> *mut SuperBlock {
     unsafe { &mut FS.assume_init_mut().superblock }
 }
 
-/*
 #[no_mangle]
 extern "C" fn balloc(dev: u32) -> u32 {
     let guard = LogGuard;
@@ -139,7 +138,6 @@ extern "C" fn bfree(dev: u32, block: u32) {
     };
     core::mem::forget(guard);
 }
-*/
 
 extern "C" {
     fn ilock(ip: *mut c_void);
