@@ -17,7 +17,7 @@ pub trait Lock {
         Self: Sized,
     {
         unsafe { self.raw_lock() };
-        LockGuard { lock: self }
+        unsafe { LockGuard::new(self) }
     }
 
     fn unlock<'a>(guard: LockGuard<'a, Self>) -> &'a Self

@@ -11,8 +11,18 @@ impl<T> Undroppable<T> {
         Self(value)
     }
 
-    pub const fn forget(self) {
-        core::mem::forget(self);
+    pub const fn forget(this: Self) {
+        core::mem::forget(this);
+    }
+
+    pub const fn into_inner(mut this: Self) -> T {
+        let inner = unsafe { Self::take(&mut this) };
+        Self::forget(this);
+        inner
+    }
+
+    pub const unsafe fn take(this: &mut Self) -> T {
+        unsafe { core::ptr::read(&this.0) }
     }
 }
 

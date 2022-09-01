@@ -18,7 +18,8 @@ use super::{
 };
 
 struct Info {
-    buffer: NonNull<dyn Buffer>,
+    addr: usize,
+    in_use: bool,
     status: u8,
 }
 
@@ -175,17 +176,8 @@ fn disk() -> &'static SpinLock<Disk> {
     unsafe { DISK.assume_init_ref() }
 }
 
-pub trait Buffer {
-    fn block_number(&self) -> usize;
-    fn size(&self) -> usize;
-    fn addr(&self) -> usize;
-    fn start(&mut self);
-    fn finish(&mut self);
-    fn is_finished(&self) -> bool;
-}
-
-unsafe fn rw(mut buffer: NonNull<dyn Buffer>, write: bool) {
-    let sector = buffer.as_ref().block_number() * (buffer.as_ref().size() / 512);
+unsafe fn rw(addr: usize, block: usize, size: usize, write: bool) {
+    let sector = block * (size / 512);
 
     let mut disk = disk().lock();
 
@@ -214,8 +206,8 @@ unsafe fn rw(mut buffer: NonNull<dyn Buffer>, write: bool) {
     };
 
     disk.descriptor.as_mut()[idx[1]] = Descriptor {
-        addr: buffer.as_ref().addr() as u64,
-        len: buffer.as_ref().size() as u32,
+        addr: addr as u64,
+        len: size as u32,
         flags: VRING_DESC_F_NEXT
             | match write {
                 true => 0,                   // device reads b->data
@@ -224,8 +216,13 @@ unsafe fn rw(mut buffer: NonNull<dyn Buffer>, write: bool) {
         next: idx[2] as u16,
     };
 
-    buffer.as_mut().start();
-    let info = disk.info[idx[0]].write(Info { buffer, status: 0 });
+    let info = disk.info[idx[0]].write(Info {
+        addr,
+        in_use: true,
+        status: 0,
+    });
+
+    let in_use = core::ptr::addr_of!(info.in_use);
 
     disk.descriptor.as_mut()[idx[2]] = Descriptor {
         addr: &mut info.status as *mut _ as u64,
@@ -246,20 +243,19 @@ unsafe fn rw(mut buffer: NonNull<dyn Buffer>, write: bool) {
     write_reg(mmio_reg::QUEUE_NOTIFY, 0); // value is queue number
 
     // Wait for virtio_disk_intr() to say request has finished.
-    while !buffer.as_ref().is_finished() {
-        let thin = buffer.as_ptr().cast::<u8>();
-        process::sleep(thin.addr(), &mut disk);
+    while in_use.read_volatile() {
+        process::sleep(addr, &mut disk);
     }
 
     idx.map(|i| disk.deallocate_descriptor(i));
 }
 
-pub unsafe fn read(buffer: NonNull<dyn Buffer>) {
-    rw(buffer, false);
+pub unsafe fn read(addr: usize, block: usize, size: usize) {
+    rw(addr, block, size, false);
 }
 
-pub unsafe fn write(buffer: NonNull<dyn Buffer>) {
-    rw(buffer, true);
+pub unsafe fn write(addr: usize, block: usize, size: usize) {
+    rw(addr, block, size, true);
 }
 
 pub unsafe fn interrupt_handler() {
@@ -282,11 +278,15 @@ pub unsafe fn interrupt_handler() {
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
         let id = disk.used.as_ref().ring[disk.used_index as usize % DESCRIPTOR_NUM].id;
-        assert!(disk.info[id as usize].assume_init_ref().status == 0);
+        let Info {
+            addr,
+            in_use,
+            status,
+        } = disk.info[id as usize].assume_init_mut();
 
-        let mut buf = disk.info[id as usize].assume_init_ref().buffer;
-        buf.as_mut().finish();
-        process::wakeup(buf.cast::<u8>().addr().get());
+        assert!(*status == 0);
+        core::ptr::addr_of_mut!(*in_use).write_volatile(false);
+        process::wakeup(*addr);
 
         disk.used_index = disk.used_index.wrapping_add(1);
     }
