@@ -30,7 +30,6 @@ struct BufferKey {
 
 pub struct Buffer<const SIZE: usize> {
     in_use: bool,
-    modified: bool,
     data: [u8; SIZE],
 }
 
@@ -38,7 +37,6 @@ impl<const SIZE: usize> Buffer<SIZE> {
     pub const fn empty() -> Self {
         Self {
             in_use: false,
-            modified: false,
             data: [0; _],
         }
     }
@@ -79,8 +77,8 @@ impl<const SIZE: usize> Buffer<SIZE> {
         unsafe { &mut *ptr }
     }
 
-    pub const fn write_zeros(&mut self) {
-        unsafe { core::ptr::write_bytes(self.data.as_mut_ptr(), 0, self.size()) };
+    pub fn write_zeros(&mut self) {
+        self.data.fill(0);
     }
 }
 
@@ -126,7 +124,6 @@ impl Deref for BufferGuard {
 
 impl DerefMut for BufferGuard {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.buffer.modified = true;
         &mut self.buffer
     }
 }
@@ -152,7 +149,6 @@ pub fn get(device: usize, block: usize) -> Option<Undroppable<BufferGuard>> {
         unsafe {
             virtio::disk::read(NonNull::new_unchecked(&mut *guard));
         }
-        guard.buffer.modified = false;
     }
 
     Some(guard)
@@ -166,14 +162,17 @@ pub fn get_with_unlock<L: Lock>(
     Lock::unlock_temporarily(lock, || get(device, block))
 }
 
-pub fn release(mut buffer: Undroppable<BufferGuard>) {
-    if buffer.buffer.modified {
-        buffer.buffer.modified = false;
-        unsafe {
-            virtio::disk::write(NonNull::new_unchecked(&mut *buffer));
-        }
+pub fn write(buffer: &mut Undroppable<BufferGuard>) {
+    unsafe {
+        virtio::disk::write(NonNull::new_unchecked(&mut **buffer));
     }
+}
 
+pub fn write_with_unlock<L: Lock>(buffer: &mut Undroppable<BufferGuard>, lock: &mut LockGuard<L>) {
+    Lock::unlock_temporarily(lock, || write(buffer));
+}
+
+pub fn release(mut buffer: Undroppable<BufferGuard>) {
     unsafe { ManuallyDrop::drop(&mut buffer.buffer) };
 
     cache().release(buffer.cache_index).unwrap();
@@ -186,11 +185,11 @@ pub fn release_with_unlock<L: Lock>(buffer: Undroppable<BufferGuard>, lock: &mut
 }
 
 pub fn pin(guard: &BufferGuard) {
-    cache().pin(guard.cache_index);
+    cache().pin(guard.cache_index).unwrap();
 }
 
 pub fn unpin(guard: &BufferGuard) {
-    cache().unpin(guard.cache_index);
+    cache().unpin(guard.cache_index).unwrap();
 }
 
 mod bindings {
@@ -234,11 +233,6 @@ mod bindings {
         core::mem::forget(buf);
 
         ret
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn bwrite(buf: *mut BufferC) {
-        (*(*buf).original).get_mut().modified = true;
     }
 
     #[no_mangle]

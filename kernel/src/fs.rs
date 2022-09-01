@@ -65,6 +65,7 @@ impl FileSystem {
                     {
                         let mut buf = buffer::get(device, block).unwrap();
                         buf.write_zeros();
+                        log.write(&mut buf);
                         buffer::release(buf);
                     }
                     buffer::release(bitmap_buf);
@@ -116,6 +117,7 @@ extern "C" fn sb() -> *mut SuperBlock {
     unsafe { &mut FS.assume_init_mut().superblock }
 }
 
+/*
 #[no_mangle]
 extern "C" fn balloc(dev: u32) -> u32 {
     let guard = LogGuard;
@@ -137,6 +139,7 @@ extern "C" fn bfree(dev: u32, block: u32) {
     };
     core::mem::forget(guard);
 }
+*/
 
 extern "C" {
     fn ilock(ip: *mut c_void);
