@@ -28,17 +28,14 @@ struct BufferKey {
     block: usize,
 }
 
+#[repr(C)]
 pub struct Buffer<const SIZE: usize> {
-    in_use: bool,
     data: [u8; SIZE],
 }
 
 impl<const SIZE: usize> Buffer<SIZE> {
-    pub const fn empty() -> Self {
-        Self {
-            in_use: false,
-            data: [0; _],
-        }
+    pub const fn zeroed() -> Self {
+        Self { data: [0; _] }
     }
 
     pub const fn size(&self) -> usize {
@@ -84,6 +81,7 @@ impl<const SIZE: usize> Buffer<SIZE> {
 
 pub struct BufferGuard {
     buffer: ManuallyDrop<LockGuard<'static, SleepLock<Buffer<BSIZE>>>>,
+    in_use: bool,
     block_number: usize,
     cache_index: usize,
 }
@@ -102,15 +100,15 @@ impl virtio::disk::Buffer for BufferGuard {
     }
 
     fn start(&mut self) {
-        self.buffer.in_use = true;
+        self.in_use = true;
     }
 
     fn finish(&mut self) {
-        self.buffer.in_use = false;
+        self.in_use = false;
     }
 
     fn is_finished(&self) -> bool {
-        !self.buffer.in_use
+        !self.in_use
     }
 }
 
@@ -135,12 +133,13 @@ fn cache() -> LockGuard<'static, SpinLock<CacheRc<BufferKey, NBUF>>> {
 
 pub fn get(device: usize, block: usize) -> Option<Undroppable<BufferGuard>> {
     static BUFFERS: [SleepLock<Buffer<BSIZE>>; NBUF] =
-        [const { SleepLock::new(Buffer::empty()) }; _];
+        [const { SleepLock::new(Buffer::zeroed()) }; _];
 
     let (index, is_new) = cache().get(BufferKey { device, block })?;
 
     let mut guard = Undroppable::new(BufferGuard {
         buffer: ManuallyDrop::new(BUFFERS[index].lock()),
+        in_use: false,
         block_number: block,
         cache_index: index,
     });
@@ -200,6 +199,7 @@ mod bindings {
         let log = crate::log::LogGuard;
         let guard = Undroppable::new(BufferGuard {
             buffer: ManuallyDrop::new(LockGuard::from_ptr((*buf).original)),
+            in_use: false,
             block_number: (*buf).block_index,
             cache_index: (*buf).cache_index,
         });
@@ -239,6 +239,7 @@ mod bindings {
     unsafe extern "C" fn brelse(buf: BufferC) {
         let guard = Undroppable::new(BufferGuard {
             buffer: ManuallyDrop::new(LockGuard::from_ptr(buf.original)),
+            in_use: false,
             block_number: buf.block_index,
             cache_index: buf.cache_index,
         });
@@ -249,6 +250,7 @@ mod bindings {
     unsafe extern "C" fn bpin(buf: *mut BufferC) {
         let guard = Undroppable::new(BufferGuard {
             buffer: ManuallyDrop::new(LockGuard::from_ptr((*buf).original)),
+            in_use: false,
             block_number: (*buf).block_index,
             cache_index: (*buf).cache_index,
         });
@@ -260,6 +262,7 @@ mod bindings {
     unsafe extern "C" fn bunpin(buf: *mut BufferC) {
         let guard = Undroppable::new(BufferGuard {
             buffer: ManuallyDrop::new(LockGuard::from_ptr((*buf).original)),
+            in_use: false,
             block_number: (*buf).block_index,
             cache_index: (*buf).cache_index,
         });
