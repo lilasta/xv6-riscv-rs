@@ -7,14 +7,57 @@ use core::{
 use crate::{
     bitmap::Bitmap,
     buffer::{self, BSIZE},
+    config::NINODE,
+    lock::{sleep::SleepLock, spin::SpinLock},
     log::{initlog, LogGuard},
 };
+
+const NDIRECT: usize = 12;
 
 const FSMAGIC: u32 = 0x10203040;
 
 static mut FS: MaybeUninit<FileSystem> = MaybeUninit::uninit();
 
-struct Inode {}
+#[derive(PartialEq, Eq)]
+pub struct InodeKey {
+    device: usize,
+    number: usize,
+}
+
+#[repr(C)]
+pub struct Inode {
+    kind: u16,
+    major: u16,
+    minor: u16,
+    nlink: u16,
+    size: u32,
+    addrs: [u32; NDIRECT + 1],
+}
+
+impl Inode {
+    pub const fn new() -> Self {
+        Self {
+            kind: 0,
+            major: 0,
+            minor: 0,
+            nlink: 0,
+            size: 0,
+            addrs: [0; _],
+        }
+    }
+}
+
+struct InodeOnMemory {
+    inode: Inode,
+}
+
+impl InodeOnMemory {
+    pub const fn new() -> Self {
+        Self {
+            inode: Inode::new(),
+        }
+    }
+}
 
 #[repr(C)]
 pub struct SuperBlock {
@@ -30,14 +73,26 @@ pub struct SuperBlock {
 
 pub struct FileSystem {
     superblock: SuperBlock,
-    //inodes: SpinLock<[SleepLock<Inode>; NINODE]>,
+    inodes: SpinLock<[SleepLock<InodeOnMemory>; NINODE]>,
 }
 
 impl FileSystem {
     const BITMAP_BITS: usize = BSIZE * (u8::BITS as usize);
+    const INODES_PER_BLOCK: usize = BSIZE / core::mem::size_of::<Inode>();
 
     const fn bitmap_at(&self, index: usize) -> usize {
         self.superblock.bmapstart as usize + index / Self::BITMAP_BITS
+    }
+
+    const fn inode_block_at(&self, index: usize) -> usize {
+        self.superblock.inodestart as usize + index / Self::INODES_PER_BLOCK
+    }
+
+    pub const fn new(superblock: SuperBlock) -> Self {
+        Self {
+            superblock,
+            inodes: SpinLock::new([const { SleepLock::new(InodeOnMemory::new()) }; NINODE]),
+        }
     }
 
     pub fn allocate_block(&self, device: usize, log: &LogGuard) -> Option<usize> {
@@ -92,6 +147,29 @@ impl FileSystem {
 
         buffer::release(bitmap_buf);
     }
+
+    pub fn allocate_inode(&self, device: usize, kind: u16, log: &LogGuard) {
+        for inum in 1..(self.superblock.ninodes as usize) {
+            let mut block = buffer::get(device, self.inode_block_at(inum)).unwrap();
+            let inode = unsafe {
+                block
+                    .as_mut_ptr::<Inode>()
+                    .add(inum % Self::INODES_PER_BLOCK)
+                    .as_mut()
+                    .unwrap()
+            };
+
+            if inode.kind == 0 {
+                inode.kind = kind;
+                log.write(&mut block);
+                buffer::release(block);
+                return todo!();
+            }
+
+            buffer::release(block);
+        }
+        panic!("no inodes")
+    }
 }
 
 #[no_mangle]
@@ -107,7 +185,7 @@ extern "C" fn fsinit(device: u32) {
     assert!(superblock.magic == FSMAGIC);
     unsafe { initlog(device as u32, &superblock) };
 
-    unsafe { FS.write(FileSystem { superblock }) };
+    unsafe { FS.write(FileSystem::new(superblock)) };
 }
 
 #[no_mangle]
@@ -140,18 +218,6 @@ extern "C" fn bfree(dev: u32, block: u32) {
 extern "C" {
     fn ilock(ip: *mut c_void);
     fn iunlockput(ip: *mut c_void);
-}
-
-const NDIRECT: usize = 12;
-
-#[repr(C)]
-struct DiskInode {
-    kind: u16,
-    major: u16,
-    minor: u16,
-    nlink: u16,
-    size: u32,
-    addrs: [u32; NDIRECT + 1],
 }
 
 pub struct InodeLockGuard {

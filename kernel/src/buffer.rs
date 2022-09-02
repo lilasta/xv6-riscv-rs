@@ -13,12 +13,9 @@ use crate::{
 
 pub const BSIZE: usize = 1024;
 
-pub const fn check_buffer_size<T, const SIZE: usize>() -> Option<usize> {
-    if core::mem::size_of::<T>() > SIZE {
-        None
-    } else {
-        Some(0)
-    }
+pub const fn check_buffer_conversion<T, const SIZE: usize>() -> usize {
+    assert!(core::mem::size_of::<T>() <= SIZE);
+    0
 }
 
 #[derive(PartialEq, Eq)]
@@ -43,21 +40,21 @@ impl<const SIZE: usize> Buffer<SIZE> {
 
     pub const fn as_ptr<T>(&self) -> *const T
     where
-        [(); check_buffer_size::<T, SIZE>().unwrap()]:,
+        [(); check_buffer_conversion::<T, SIZE>()]:,
     {
         self.data.as_ptr().cast()
     }
 
     pub const fn as_mut_ptr<T>(&mut self) -> *mut T
     where
-        [(); check_buffer_size::<T, SIZE>().unwrap()]:,
+        [(); check_buffer_conversion::<T, SIZE>()]:,
     {
         self.data.as_mut_ptr().cast()
     }
 
     pub const fn as_uninit<T>(&self) -> &MaybeUninit<T>
     where
-        [(); check_buffer_size::<T, SIZE>().unwrap()]:,
+        [(); check_buffer_conversion::<T, SIZE>()]:,
     {
         let ptr = self.data.as_ptr();
         let ptr = ptr.cast::<MaybeUninit<T>>();
@@ -66,7 +63,7 @@ impl<const SIZE: usize> Buffer<SIZE> {
 
     pub const fn as_uninit_mut<T>(&mut self) -> &mut MaybeUninit<T>
     where
-        [(); check_buffer_size::<T, SIZE>().unwrap()]:,
+        [(); check_buffer_conversion::<T, SIZE>()]:,
     {
         let ptr = self.data.as_mut_ptr();
         let ptr = ptr.cast::<MaybeUninit<T>>();
