@@ -74,7 +74,7 @@ pub struct SuperBlock {
 pub struct InodeAllocator {
     inode_start: usize,
     inode_count: usize,
-    cache: CacheRc<InodeKey, NINODE>,
+    cache: SpinLock<CacheRc<InodeKey, NINODE>>,
     inodes: [SleepLock<Inode>; NINODE],
 }
 
@@ -87,43 +87,29 @@ impl InodeAllocator {
         Self {
             inode_start,
             inode_count,
-            cache: CacheRc::new(),
+            cache: SpinLock::new(CacheRc::new()),
             inodes: [const { SleepLock::new(Inode::zeroed()) }; _],
         }
     }
 
-    fn read_inode<L: Lock<Target = Self>>(
-        self: &mut LockGuard<L>,
-        device: usize,
-        index: usize,
-    ) -> Option<Inode> {
-        let block = buffer::get_with_unlock(device, self.inode_block_at(index), self)?;
+    fn read_inode(&self, device: usize, index: usize) -> Option<Inode> {
+        let block = buffer::get(device, self.inode_block_at(index))?;
         let ptr = unsafe { block.as_ptr::<Inode>().add(index % INODES_PER_BLOCK) };
         let inode = unsafe { ptr.read() };
-        buffer::release_with_unlock(block, self);
+        buffer::release(block);
         Some(inode)
     }
 
-    fn write_inode<L: Lock<Target = Self>>(
-        self: &mut LockGuard<L>,
-        device: usize,
-        index: usize,
-        inode: &Inode,
-        log: &LogGuard,
-    ) {
-        let mut block = buffer::get_with_unlock(device, self.inode_block_at(index), self).unwrap();
+    fn write_inode(&self, device: usize, index: usize, inode: &Inode, log: &LogGuard) {
+        let mut block = buffer::get(device, self.inode_block_at(index)).unwrap();
         let ptr = unsafe { block.as_mut_ptr::<Inode>().add(index % INODES_PER_BLOCK) };
         unsafe { ptr.copy_from(inode, 1) };
         log.write(&block);
-        buffer::release_with_unlock(block, self);
+        buffer::release(block);
     }
 
-    pub fn get<'a, L: Lock<Target = Self>>(
-        self: &'a mut LockGuard<L>,
-        device: usize,
-        index: usize,
-    ) -> Option<LockGuard<'a, SleepLock<Inode>>> {
-        let (index, is_new) = self.cache.get(InodeKey { device, index })?;
+    pub fn get(&self, device: usize, index: usize) -> Option<LockGuard<SleepLock<Inode>>> {
+        let (index, is_new) = self.cache.lock().get(InodeKey { device, index })?;
 
         if is_new {
             let read = self.read_inode(device, index).unwrap();
@@ -134,15 +120,14 @@ impl InodeAllocator {
     }
 
     // TODO: needs lock?
-    pub fn allocate<'a, L: Lock<Target = Self>>(
-        self: &'a mut LockGuard<L>,
+    pub fn allocate(
+        &self,
         device: usize,
         kind: u16,
         log: &LogGuard,
-    ) -> Option<LockGuard<'a, SleepLock<Inode>>> {
+    ) -> Option<LockGuard<SleepLock<Inode>>> {
         for index in 1..(self.inode_count as usize) {
-            let mut block =
-                buffer::get_with_unlock(device, self.inode_block_at(index), self).unwrap();
+            let mut block = buffer::get(device, self.inode_block_at(index)).unwrap();
             let inode = unsafe {
                 block
                     .as_mut_ptr::<Inode>()
@@ -154,22 +139,18 @@ impl InodeAllocator {
             if inode.kind == 0 {
                 inode.kind = kind;
                 log.write(&mut block);
-                buffer::release_with_unlock(block, self);
+                buffer::release(block);
                 return self.get(device, index);
             }
 
-            buffer::release_with_unlock(block, self);
+            buffer::release(block);
         }
 
         None
     }
 
-    pub fn deallocate<'a, L: Lock<Target = Self>>(
-        self: &'a mut LockGuard<L>,
-        mut guard: InodeGuard<'a>,
-        log: &LogGuard,
-    ) {
-        let is_last = self.cache.release(guard.cache_index).unwrap();
+    pub fn deallocate(&self, mut guard: InodeGuard, log: &LogGuard) {
+        let is_last = self.cache.lock().release(guard.cache_index).unwrap();
         if is_last {
             *guard.inode = Inode::zeroed();
             truncate(&mut guard, log);
