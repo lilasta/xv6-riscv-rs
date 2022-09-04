@@ -19,7 +19,7 @@ const NINDIRECT: usize = BSIZE / core::mem::size_of::<u32>();
 const INODES_PER_BLOCK: usize = BSIZE / core::mem::size_of::<Inode>();
 const FSMAGIC: u32 = 0x10203040;
 
-static mut FS: MaybeUninit<FileSystem> = MaybeUninit::uninit();
+static mut FS: FileSystem = FileSystem::uninit();
 
 #[derive(PartialEq, Eq)]
 pub struct InodeKey {
@@ -69,6 +69,21 @@ pub struct SuperBlock {
     pub logstart: u32,   // Block number of first log block
     pub inodestart: u32, // Block number of first inode block
     pub bmapstart: u32,  // Block number of first free map block
+}
+
+impl SuperBlock {
+    pub const fn zeroed() -> Self {
+        Self {
+            magic: 0,
+            size: 0,
+            nblocks: 0,
+            ninodes: 0,
+            nlog: 0,
+            logstart: 0,
+            inodestart: 0,
+            bmapstart: 0,
+        }
+    }
 }
 
 pub struct InodeAllocator<const N: usize> {
@@ -186,6 +201,7 @@ impl FileSystem {
         self.superblock.bmapstart as usize + index / Self::BITMAP_BITS
     }
 
+    /*
     pub const fn new(superblock: SuperBlock) -> Self {
         Self {
             inode_alloc: InodeAllocator::new(
@@ -194,6 +210,20 @@ impl FileSystem {
             ),
             superblock,
         }
+    }
+    */
+
+    pub const fn uninit() -> Self {
+        Self {
+            inode_alloc: InodeAllocator::new(0, 0),
+            superblock: SuperBlock::zeroed(),
+        }
+    }
+
+    pub fn init(&mut self, superblock: SuperBlock) {
+        self.inode_alloc.inode_count = superblock.ninodes as usize;
+        self.inode_alloc.inode_start = superblock.inodestart as usize;
+        self.superblock = superblock;
     }
 
     pub fn allocate_block(&self, device: usize, log: &LogGuard) -> Option<usize> {
@@ -291,22 +321,18 @@ extern "C" fn fsinit(device: u32) {
     assert!(superblock.magic == FSMAGIC);
     unsafe { initlog(device as u32, &superblock) };
 
-    unsafe { FS.write(FileSystem::new(superblock)) };
+    unsafe { FS.init(superblock) };
 }
 
 #[no_mangle]
 extern "C" fn sb() -> *mut SuperBlock {
-    unsafe { &mut FS.assume_init_mut().superblock }
+    unsafe { &mut FS.superblock }
 }
 
 #[no_mangle]
 extern "C" fn balloc(dev: u32) -> u32 {
     let guard = LogGuard;
-    let ret = unsafe {
-        FS.assume_init_ref()
-            .allocate_block(dev as _, &guard)
-            .unwrap_or(0)
-    };
+    let ret = unsafe { FS.allocate_block(dev as _, &guard).unwrap_or(0) };
     core::mem::forget(guard);
     ret as u32
 }
@@ -314,10 +340,7 @@ extern "C" fn balloc(dev: u32) -> u32 {
 #[no_mangle]
 extern "C" fn bfree(dev: u32, block: u32) {
     let guard = LogGuard;
-    unsafe {
-        FS.assume_init_ref()
-            .deallocate_block(dev as _, block as _, &guard)
-    };
+    unsafe { FS.deallocate_block(dev as _, block as _, &guard) };
     core::mem::forget(guard);
 }
 
