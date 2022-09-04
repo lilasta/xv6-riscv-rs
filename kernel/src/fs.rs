@@ -71,14 +71,14 @@ pub struct SuperBlock {
     pub bmapstart: u32,  // Block number of first free map block
 }
 
-pub struct InodeAllocator {
+pub struct InodeAllocator<const N: usize> {
     inode_start: usize,
     inode_count: usize,
-    cache: SpinLock<CacheRc<InodeKey, NINODE>>,
-    inodes: [SleepLock<Inode>; NINODE],
+    cache: SpinLock<CacheRc<InodeKey, N>>,
+    inodes: [SleepLock<Inode>; N],
 }
 
-impl InodeAllocator {
+impl<const N: usize> InodeAllocator<N> {
     const fn inode_block_at(&self, index: usize) -> usize {
         self.inode_start + index / INODES_PER_BLOCK
     }
@@ -108,24 +108,40 @@ impl InodeAllocator {
         buffer::release(block);
     }
 
-    pub fn get(&self, device: usize, index: usize) -> Option<LockGuard<SleepLock<Inode>>> {
-        let (index, is_new) = self.cache.lock().get(InodeKey { device, index })?;
+    pub fn get(&self, device: usize, inode_index: usize) -> Option<InodeGuard> {
+        let (cache_index, is_new) = self.cache.lock().get(InodeKey {
+            device,
+            index: inode_index,
+        })?;
 
         if is_new {
-            let read = self.read_inode(device, index).unwrap();
-            *self.inodes[index].lock() = read;
+            let read = self.read_inode(device, inode_index).unwrap();
+            *self.inodes[cache_index].lock() = read;
         }
 
-        Some(self.inodes[index].lock())
+        Some(InodeGuard {
+            device,
+            inode_index,
+            cache_index,
+            inode: self.inodes[cache_index].lock(),
+        })
     }
 
-    // TODO: needs lock?
-    pub fn allocate(
-        &self,
-        device: usize,
-        kind: u16,
-        log: &LogGuard,
-    ) -> Option<LockGuard<SleepLock<Inode>>> {
+    pub fn pin(&self, cache_index: usize) {
+        self.cache.lock().pin(cache_index).unwrap();
+    }
+
+    pub fn release(&self, mut guard: InodeGuard, log: &LogGuard) {
+        let was_last = self.cache.lock().release(guard.cache_index).unwrap();
+        if was_last {
+            assert!(guard.inode.nlink == 0); // TODO: ?
+
+            truncate(&mut guard, log);
+            self.deallocate(guard.device, guard.inode_index, log);
+        }
+    }
+
+    pub fn allocate(&self, device: usize, kind: u16, log: &LogGuard) -> Option<usize> {
         for index in 1..(self.inode_count as usize) {
             let mut block = buffer::get(device, self.inode_block_at(index)).unwrap();
             let inode = unsafe {
@@ -140,7 +156,7 @@ impl InodeAllocator {
                 inode.kind = kind;
                 log.write(&mut block);
                 buffer::release(block);
-                return self.get(device, index);
+                return Some(index);
             }
 
             buffer::release(block);
@@ -149,19 +165,18 @@ impl InodeAllocator {
         None
     }
 
-    pub fn deallocate(&self, mut guard: InodeGuard, log: &LogGuard) {
-        let is_last = self.cache.lock().release(guard.cache_index).unwrap();
-        if is_last {
-            *guard.inode = Inode::zeroed();
-            truncate(&mut guard, log);
-            self.write_inode(guard.device, guard.inode_index, &guard.inode, log);
-        }
+    pub fn deallocate(&self, device: usize, index: usize, log: &LogGuard) {
+        let mut block = buffer::get(device, self.inode_block_at(index)).unwrap();
+        let ptr = unsafe { block.as_mut_ptr::<Inode>().add(index % INODES_PER_BLOCK) };
+        unsafe { (*ptr).kind = 0 };
+        log.write(&block);
+        buffer::release(block);
     }
 }
 
 pub struct FileSystem {
     superblock: SuperBlock,
-    //inode_alloc: SpinLock<InodeAllocator>,
+    inode_alloc: InodeAllocator<NINODE>,
 }
 
 impl FileSystem {
@@ -173,12 +188,10 @@ impl FileSystem {
 
     pub const fn new(superblock: SuperBlock) -> Self {
         Self {
-            /*
-            inode_alloc: SpinLock::new(InodeAllocator::new(
+            inode_alloc: InodeAllocator::new(
                 superblock.inodestart as usize,
                 superblock.ninodes as usize,
-            )),
-            */
+            ),
             superblock,
         }
     }
