@@ -258,7 +258,8 @@ create(char *path, short type, short major, short minor)
     return 0;
   }
 
-  if((ip = ialloc(dp->dev, type)) == 0)
+  uint inum = ialloc(dp->dev, type);
+  if (inum == 0 || (ip = iget(dp->dev, inum)) == 0)
     panic("create: ialloc");
 
   ilock(ip);
