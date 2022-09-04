@@ -15,6 +15,7 @@ pub const BSIZE: usize = 1024;
 
 pub const fn check_buffer_conversion<T, const SIZE: usize>() -> usize {
     assert!(core::mem::size_of::<T>() <= SIZE);
+    assert!(core::mem::needs_drop::<T>() == false);
     0
 }
 
