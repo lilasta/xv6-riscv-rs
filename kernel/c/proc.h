@@ -88,16 +88,16 @@ struct proc
 {
   // p->lock must be held when using these:
   enum procstate state; // Process state
-  int *killed;           // If non-zero, have been killed
-  int *pid;              // Process ID
+  int *killed;          // If non-zero, have been killed
+  int *pid;             // Process ID
 
   // these are private to the process, so p->lock need not be held.
-  uint64 *kstack;               // Virtual address of kernel stack
-  uint64 *sz;                   // Size of process memory (bytes)
-  pagetable_t *pagetable;       // User page table
+  uint64 *kstack;              // Virtual address of kernel stack
+  uint64 *sz;                  // Size of process memory (bytes)
+  pagetable_t *pagetable;      // User page table
   struct trapframe *trapframe; // data page for trampoline.S
-  struct file **ofile;          // Open files
-  struct inode **cwd;           // Current directory
-  char *name;                   // Process name (debugging)
+  struct file **ofile;         // Open files
+  struct inode **cwd;          // Current directory
+  char *name;                  // Process name (debugging)
   void *original;
 };
