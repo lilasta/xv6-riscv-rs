@@ -131,6 +131,8 @@ pub unsafe fn setup_init_process() {
     context.cwd = namei(cstr!("/").as_ptr());
 
     let mut process = table::table().allocate_process().unwrap();
+    assert!(process.pid == 1);
+
     process.state = ProcessState::Runnable(context);
 }
 
@@ -274,7 +276,6 @@ pub unsafe fn fork() -> Option<usize> {
 pub unsafe fn exit(status: i32) {
     let pl = current().unwrap();
     let process = pl.get_mut();
-
     assert!(process.pid != 1);
 
     let context = process.context().unwrap();

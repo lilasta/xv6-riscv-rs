@@ -1,4 +1,7 @@
+use core::ffi::c_void;
+
 use crate::{
+    config::NOFILE,
     lock::{spin::SpinLock, Lock},
     process,
     vm::binding::copyinstr,
@@ -102,6 +105,13 @@ unsafe extern "C" fn argint(n: i32, ip: *mut i32) -> i32 {
     0
 }
 
+unsafe fn argfd(n: i32) -> Option<(usize, *mut c_void)> {
+    let context = process::context().unwrap();
+    let fd = arg_usize(n as _);
+    let f = context.ofile.get(fd).copied()?;
+    Some((fd, f))
+}
+
 #[no_mangle]
 unsafe extern "C" fn argaddr(n: i32, ip: *mut usize) -> i32 {
     *ip = arg_usize(n as _);
@@ -116,10 +126,20 @@ unsafe extern "C" fn argstr(n: i32, buf: usize, max: i32) -> i32 {
     }
 }
 
+fn fdalloc(f: *mut c_void) -> Result<usize, ()> {
+    let context = process::context().ok_or(())?;
+    for (fd, file) in context.ofile.iter_mut().enumerate() {
+        if file.is_null() {
+            *file = f;
+            return Ok(fd);
+        }
+    }
+    Err(())
+}
+
 extern "C" {
     fn sys_chdir() -> u64;
     fn sys_close() -> u64;
-    fn sys_dup() -> u64;
     fn sys_exec() -> u64;
     fn sys_fstat() -> u64;
     fn sys_link() -> u64;
@@ -129,6 +149,7 @@ extern "C" {
     fn sys_pipe() -> u64;
     fn sys_read() -> u64;
     fn sys_unlink() -> u64;
+    fn sys_dup() -> u64;
     fn sys_write() -> u64;
 }
 
@@ -213,4 +234,21 @@ unsafe extern "C" fn sys_sleep() -> u64 {
 
 unsafe extern "C" fn sys_uptime() -> u64 {
     *TICKS.lock()
+}
+
+extern "C" {
+    fn filedup(f: *mut c_void) -> *mut c_void;
+}
+
+unsafe extern "C" fn _sys_dup() -> u64 {
+    let Some((fd, f)) = argfd(0) else {
+        return u64::MAX;
+    };
+
+    let Ok(_) = fdalloc(f) else {
+        return u64::MAX;
+    };
+
+    filedup(f);
+    fd as u64
 }
