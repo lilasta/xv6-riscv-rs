@@ -1,6 +1,7 @@
 use core::{
     ffi::c_char,
     marker::PhantomData,
+    mem::MaybeUninit,
     ops::{Deref, DerefMut},
 };
 
@@ -457,6 +458,32 @@ impl<'a> InodeLockGuard<'a> {
 
     pub const fn inode_number(&self) -> usize {
         unsafe { (*self.inode).inum as usize }
+    }
+
+    pub fn read<T>(&self, offset: usize, n: usize) -> Result<T, usize> {
+        extern "C" {
+            fn readi(ip: *mut InodeC, user_dst: i32, dst: usize, off: u32, n: u32) -> i32;
+        }
+
+        unsafe {
+            let type_size = core::mem::size_of::<T>();
+            let must_read = type_size * n;
+
+            let mut value = MaybeUninit::<T>::uninit();
+            let read = readi(
+                self.inode,
+                0,
+                value.as_mut_ptr().addr(),
+                offset as u32,
+                must_read as u32,
+            ) as usize;
+
+            if read == must_read {
+                Ok(value.assume_init())
+            } else {
+                Err(read)
+            }
+        }
     }
 
     pub fn update(&mut self) {
