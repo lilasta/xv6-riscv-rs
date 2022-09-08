@@ -5,7 +5,7 @@ use core::ptr::NonNull;
 use crate::{
     allocator::KernelAllocator,
     memory_layout::{symbol_addr, KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, UART0, VIRTIO0},
-    process::kernel_stack::kstack_allocator,
+    process,
     riscv::paging::{PageTable, PGSIZE, PTE},
 };
 
@@ -60,7 +60,7 @@ fn make_pagetable_for_kernel() -> PageTable {
         .unwrap();
 
     // map kernel stacks
-    kstack_allocator().initialize(&mut pagetable);
+    process::initialize_kstack(&mut pagetable);
 
     pagetable
 }
