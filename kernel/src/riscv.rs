@@ -1,24 +1,20 @@
 use core::arch::asm;
 
-pub macro read_csr($csr:ident) {
-    {
-        let mut x: u64;
-        asm!(concat!("csrr {r}, ", stringify!($csr)), r = out(reg) x);
-        x
-    }
-}
+pub macro read_csr($csr:ident) {{
+    let mut x: u64;
+    asm!(concat!("csrr {r}, ", stringify!($csr)), r = out(reg) x);
+    x
+}}
 
 pub macro write_csr($csr:ident, $val:expr) {
     asm!(concat!("csrw ", stringify!($csr), ", {r}"), r = in(reg) $val);
 }
 
-pub macro read_reg($reg:ident) {
-    {
-        let mut x: u64;
-        asm!(concat!("mv {r}, ", stringify!($reg)), r = out(reg) x);
-        x
-    }
-}
+pub macro read_reg($reg:ident) {{
+    let mut x: u64;
+    asm!(concat!("mv {r}, ", stringify!($reg)), r = out(reg) x);
+    x
+}}
 
 pub macro write_reg($reg:ident, $val:expr) {
     asm!(concat!("mv ", stringify!($reg), ", {r}"), r = in(reg) $val);
