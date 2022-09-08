@@ -1,8 +1,10 @@
 use core::ffi::c_void;
 
 use crate::{
-    config::NOFILE,
+    config::{MAXPATH, NOFILE},
+    fs::DIRSIZE,
     lock::{spin::SpinLock, Lock},
+    log::LogGuard,
     process,
     vm::binding::copyinstr,
 };
@@ -293,4 +295,20 @@ unsafe extern "C" fn sys_fstat() -> u64 {
 
     let addr = arg_usize(1);
     filestat(f, addr) as u64
+}
+
+unsafe extern "C" fn _sys_link() -> u64 {
+    let name = [0u8; DIRSIZE];
+    let new = [0u8; MAXPATH];
+    let old = [0u8; MAXPATH];
+
+    if arg_string(0, old.as_ptr().addr(), old.len()).is_err() {
+        return u64::MAX;
+    }
+
+    if arg_string(1, new.as_ptr().addr(), new.len()).is_err() {
+        return u64::MAX;
+    }
+
+    todo!()
 }

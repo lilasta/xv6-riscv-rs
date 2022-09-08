@@ -13,6 +13,9 @@ use crate::{
     log::{initlog, LogGuard},
 };
 
+// Directory is a file containing a sequence of dirent structures.
+pub const DIRSIZE: usize = 14;
+
 const NDIRECT: usize = 12;
 const NINDIRECT: usize = BSIZE / core::mem::size_of::<u32>();
 
