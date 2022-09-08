@@ -11,7 +11,7 @@
 
 use crate::{
     lock::{Lock, LockGuard},
-    process,
+    process::{self, copyout_either},
     uart::UART,
 };
 
@@ -162,13 +162,9 @@ impl<'a, L: Lock<Target = Console>> LockGuard<'a, L> {
                 break;
             }
 
-            extern "C" {
-                fn either_copyout(user_dst: i32, dst: usize, src: usize, len: usize) -> i32;
-            }
-
             let mut cbuf = c;
             unsafe {
-                if either_copyout(dst_user as _, dst, &mut cbuf as *mut _ as usize, 1) == -1 {
+                if !copyout_either(dst_user != 0, dst, core::ptr::addr_of_mut!(cbuf).addr(), 1) {
                     break;
                 }
             }
