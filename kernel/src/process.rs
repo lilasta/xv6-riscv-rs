@@ -72,7 +72,7 @@ pub fn cpuid() -> usize {
     unsafe { riscv::read_reg!(tp) as usize }
 }
 
-fn cpu() -> InterruptGuard<&'static mut CPU<*mut CPUContext, Process>> {
+fn cpu() -> InterruptGuard<&'static mut CPU<'static, *mut CPUContext, Process>> {
     InterruptGuard::with(|| unsafe {
         assert!(!interrupt::is_enabled());
         assert!(cpuid() < NCPU);

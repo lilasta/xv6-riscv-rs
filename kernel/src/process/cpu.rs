@@ -1,16 +1,16 @@
 use crate::lock::{spin::SpinLock, Lock, LockGuard};
 
 #[derive(Debug)]
-pub enum CPU<C, P: 'static> {
+pub enum CPU<'a, C, P> {
     Invalid,
     Ready,
-    Dispatching(C, LockGuard<'static, SpinLock<P>>),
-    Running(C, &'static SpinLock<P>),
+    Dispatching(C, LockGuard<'a, SpinLock<P>>),
+    Running(C, &'a SpinLock<P>),
     Pausing(C),
-    Preempting(LockGuard<'static, SpinLock<P>>),
+    Preempting(LockGuard<'a, SpinLock<P>>),
 }
 
-impl<C, P> CPU<C, P> {
+impl<'a, C, P> CPU<'a, C, P> {
     pub const fn is_ready(&self) -> bool {
         matches!(self, Self::Ready)
     }
@@ -19,7 +19,7 @@ impl<C, P> CPU<C, P> {
         matches!(self, Self::Running(_, _))
     }
 
-    pub const fn assigned_process(&self) -> Option<&'static SpinLock<P>> {
+    pub const fn assigned_process(&self) -> Option<&'a SpinLock<P>> {
         match self {
             Self::Running(_, process) => Some(process),
             _ => None,
@@ -39,8 +39,8 @@ impl<C, P> CPU<C, P> {
     pub fn start_dispatch(
         &mut self,
         context: C,
-        process: LockGuard<'static, SpinLock<P>>,
-    ) -> Result<(), LockGuard<'static, SpinLock<P>>> {
+        process: LockGuard<'a, SpinLock<P>>,
+    ) -> Result<(), LockGuard<'a, SpinLock<P>>> {
         self.transition(|this| match this {
             Self::Ready => (Self::Dispatching(context, process), Ok(())),
             other => (other, Err(process)),
@@ -56,7 +56,7 @@ impl<C, P> CPU<C, P> {
         })
     }
 
-    pub fn pause(&mut self) -> Result<LockGuard<'static, SpinLock<P>>, ()> {
+    pub fn pause(&mut self) -> Result<LockGuard<'a, SpinLock<P>>, ()> {
         self.transition(|this| match this {
             Self::Running(context, process) => (Self::Pausing(context), Ok(process.lock())),
             other => (other, Err(())),
@@ -65,15 +65,15 @@ impl<C, P> CPU<C, P> {
 
     pub fn start_preemption(
         &mut self,
-        process: LockGuard<'static, SpinLock<P>>,
-    ) -> Result<C, LockGuard<'static, SpinLock<P>>> {
+        process: LockGuard<'a, SpinLock<P>>,
+    ) -> Result<C, LockGuard<'a, SpinLock<P>>> {
         self.transition(|this| match this {
             Self::Pausing(context) => (Self::Preempting(process), Ok(context)),
             other => (other, Err(process)),
         })
     }
 
-    pub fn finish_preemption(&mut self) -> Result<LockGuard<'static, SpinLock<P>>, ()> {
+    pub fn finish_preemption(&mut self) -> Result<LockGuard<'a, SpinLock<P>>, ()> {
         self.transition(|this| match this {
             Self::Preempting(process) => (Self::Ready, Ok(process)),
             other => (other, Err(())),
