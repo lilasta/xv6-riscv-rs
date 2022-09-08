@@ -1,5 +1,6 @@
 use core::{
-    ffi::c_void,
+    ffi::c_char,
+    marker::PhantomData,
     ops::{Deref, DerefMut},
 };
 
@@ -346,40 +347,107 @@ unsafe extern "C" fn bfree(dev: u32, block: u32) {
     core::mem::forget(guard);
 }
 
-pub trait InodeOps {}
-
-extern "C" {
-    fn ilock(ip: *mut c_void);
-    fn iunlockput(ip: *mut c_void);
+pub trait InodeOps {
+    fn search_by_path(&self, path: &str) -> Option<InodeLockGuard>;
 }
 
-pub struct InodeLockGuard {
-    inode: *mut c_void,
-}
+impl<'a> InodeOps for LogGuard<'a> {
+    fn search_by_path(&self, path: &str) -> Option<InodeLockGuard> {
+        extern "C" {
+            fn namei(path: *const c_char) -> *mut InodeC;
+        }
 
-impl InodeLockGuard {
-    pub fn new(inode: *mut c_void) -> Self {
-        unsafe { ilock(inode) };
-        Self { inode }
+        unsafe {
+            let inode = namei(path.as_ptr().cast());
+            if inode.is_null() {
+                None
+            } else {
+                Some(InodeLockGuard::new(inode))
+            }
+        }
     }
 }
 
-impl Deref for InodeLockGuard {
-    type Target = *mut c_void;
+#[repr(C)]
+pub struct InodeC {
+    dev: u32,
+    inum: u32,
+    refcnt: u32,
+    valid: u32,
+    kind: u16,
+    major: u16,
+    minor: u16,
+    nlink: u16,
+    size: u32,
+    addrs: [u32; NDIRECT + 1],
+}
+
+pub struct InodeLockGuard<'a> {
+    inode: *mut InodeC,
+    lifetime: PhantomData<&'a ()>,
+}
+
+impl<'a> InodeLockGuard<'a> {
+    fn new(inode: *mut InodeC) -> Self {
+        extern "C" {
+            fn ilock(ip: *mut InodeC);
+        }
+        unsafe { ilock(inode) };
+        Self {
+            inode,
+            lifetime: PhantomData,
+        }
+    }
+
+    pub fn link(&self, name: &str, inum: usize) -> Result<(), ()> {
+        extern "C" {
+            fn dirlink(dp: *mut InodeC, name: *const c_char, inum: u32) -> i32;
+        }
+
+        unsafe {
+            match dirlink(self.inode, name.as_ptr().cast(), inum as u32) {
+                0 => Ok(()),
+                _ => Err(()),
+            }
+        }
+    }
+
+    pub fn lookup(&self, name: &str) -> Option<(InodeLockGuard, usize)> {
+        extern "C" {
+            fn dirlookup(dp: *mut InodeC, name: *const c_char, poff: *mut u32) -> *mut InodeC;
+        }
+
+        unsafe {
+            let mut poff = 0;
+            let inode = dirlookup(self.inode, name.as_ptr().cast(), &mut poff);
+            if inode.is_null() {
+                None
+            } else {
+                Some((InodeLockGuard::new(inode), poff as usize))
+            }
+        }
+    }
+}
+
+impl<'a> Deref for InodeLockGuard<'a> {
+    type Target = InodeC;
 
     fn deref(&self) -> &Self::Target {
-        &self.inode
+        unsafe { &*self.inode }
     }
 }
 
-impl DerefMut for InodeLockGuard {
+impl<'a> DerefMut for InodeLockGuard<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inode
+        unsafe { &mut *self.inode }
     }
 }
 
-impl Drop for InodeLockGuard {
+impl<'a> Drop for InodeLockGuard<'a> {
     fn drop(&mut self) {
+        extern "C" {
+            fn iunlockput(ip: *mut InodeC);
+        }
         unsafe { iunlockput(self.inode) };
     }
 }

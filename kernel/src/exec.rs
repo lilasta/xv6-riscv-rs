@@ -1,12 +1,12 @@
 use core::{
-    ffi::{c_char, c_void, CStr},
+    ffi::{c_char, CStr},
     mem::MaybeUninit,
 };
 
 use crate::{
     config::MAXARG,
     elf::{ELFHeader, ProgramHeader},
-    fs::InodeLockGuard,
+    fs::{InodeC, InodeOps},
     log,
     process::{self, allocate_pagetable, free_pagetable, process::ProcessContext},
     riscv::paging::{pg_roundup, PageTable, PGSIZE},
@@ -14,8 +14,7 @@ use crate::{
 };
 
 extern "C" {
-    fn namei(path: *const c_char) -> *mut c_void;
-    fn readi(ip: *mut c_void, user_dst: i32, dst: usize, off: u32, n: u32) -> i32;
+    fn readi(ip: *mut InodeC, user_dst: i32, dst: usize, off: u32, n: u32) -> i32;
 }
 
 pub unsafe fn execute(
@@ -23,18 +22,17 @@ pub unsafe fn execute(
     path: *const c_char,
     argv: *const *const c_char,
 ) -> i32 {
-    let _logguard = log::start();
+    let path = CStr::from_ptr(path).to_str().unwrap();
 
-    let ip = namei(path);
-    if ip.is_null() {
+    let log = log::start();
+    let Some(mut ip) = log.search_by_path(path) else {
         return -1;
-    }
-    let ip = InodeLockGuard::new(ip);
+    };
 
     let mut elf: MaybeUninit<ELFHeader> = MaybeUninit::uninit();
     // Check ELF header
     let read = readi(
-        *ip,
+        &mut *ip,
         0,
         elf.as_mut_ptr() as usize,
         0,
@@ -64,7 +62,7 @@ pub unsafe fn execute(
     for _ in 0..elf.phnum {
         let mut ph: MaybeUninit<ProgramHeader> = MaybeUninit::uninit();
         let read = readi(
-            *ip,
+            &mut *ip,
             0,
             ph.as_mut_ptr() as usize,
             off as _,
@@ -95,14 +93,14 @@ pub unsafe fn execute(
             bad!(sz);
         }
 
-        if !load_seg(&mut pagetable, ph.vaddr, *ip, ph.off, ph.filesz) {
+        if !load_seg(&mut pagetable, ph.vaddr, &mut *ip, ph.off, ph.filesz) {
             bad!(sz);
         }
 
         off += core::mem::size_of::<ProgramHeader>();
     }
     drop(ip);
-    drop(_logguard);
+    drop(log);
 
     let oldsz = current_context.sz;
 
@@ -168,12 +166,6 @@ pub unsafe fn execute(
     // value, which goes in a0.
     current_context.trapframe.as_mut().a1 = sp as u64;
 
-    // Save program name for debugging.
-    let _path = CStr::from_ptr(path);
-    //let path = path.program_name();
-    //char* dummyname = "DUMMY"; // TODO
-    //safestrcpy(p->name, last, sizeof(p->name));
-
     let old_pagetable = core::mem::replace(&mut current_context.pagetable, pagetable);
     current_context.sz = sz;
     current_context.trapframe.as_mut().epc = elf.entry as u64;
@@ -195,7 +187,7 @@ unsafe fn ptr_to_slice<'a, T>(start: *const *const T) -> &'a [*const T] {
 fn load_seg(
     pagetable: &mut PageTable,
     va: usize,
-    ip: *mut c_void,
+    ip: *mut InodeC,
     offset: usize,
     size: usize,
 ) -> bool {
@@ -224,7 +216,7 @@ mod binding {
     unsafe extern "C" fn loadseg(
         mut pagetable: PageTable,
         va: usize,
-        ip: *mut c_void,
+        ip: *mut InodeC,
         offset: u32,
         size: u32,
     ) -> i32 {
