@@ -7,7 +7,7 @@ use crate::{
     config::MAXARG,
     elf::{ELFHeader, ProgramHeader},
     fs::InodeLockGuard,
-    log::LogGuard,
+    log,
     process::{self, allocate_pagetable, free_pagetable, process::ProcessContext},
     riscv::paging::{pg_roundup, PageTable, PGSIZE},
     vm::binding::copyout,
@@ -23,7 +23,7 @@ pub unsafe fn execute(
     path: *const c_char,
     argv: *const *const c_char,
 ) -> i32 {
-    let _logguard = LogGuard::new();
+    let _logguard = log::start();
 
     let ip = namei(path);
     if ip.is_null() {

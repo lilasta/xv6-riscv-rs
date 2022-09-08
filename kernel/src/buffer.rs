@@ -200,11 +200,13 @@ pub fn unpin(guard: &BufferGuard) {
 }
 
 mod bindings {
+    use crate::log;
+
     use super::*;
 
     #[no_mangle]
     unsafe extern "C" fn log_write(buf: *mut BufferC) {
-        let log = crate::log::LogGuard;
+        let log = log::get_guard_without_start();
         let guard = Undroppable::new(BufferGuard {
             buffer: LockGuard::from_ptr((*buf).original),
             in_use: false,

@@ -1,10 +1,9 @@
 use core::ffi::c_void;
 
 use crate::{
-    config::{MAXPATH, NOFILE},
+    config::MAXPATH,
     fs::DIRSIZE,
     lock::{spin::SpinLock, Lock},
-    log::LogGuard,
     process,
     vm::binding::copyinstr,
 };

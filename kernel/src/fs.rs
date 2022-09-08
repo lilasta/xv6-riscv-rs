@@ -1,6 +1,5 @@
 use core::{
     ffi::c_void,
-    mem::MaybeUninit,
     ops::{Deref, DerefMut},
 };
 
@@ -10,7 +9,7 @@ use crate::{
     cache::CacheRc,
     config::NINODE,
     lock::{sleep::SleepLock, spin::SpinLock, Lock, LockGuard},
-    log::{initlog, LogGuard},
+    log::{self, initlog, LogGuard},
 };
 
 // Directory is a file containing a sequence of dirent structures.
@@ -333,19 +332,21 @@ extern "C" fn sb() -> *mut SuperBlock {
 }
 
 #[no_mangle]
-extern "C" fn balloc(dev: u32) -> u32 {
-    let guard = LogGuard;
-    let ret = unsafe { FS.allocate_block(dev as _, &guard).unwrap_or(0) };
+unsafe extern "C" fn balloc(dev: u32) -> u32 {
+    let guard = log::get_guard_without_start();
+    let ret = FS.allocate_block(dev as _, &guard).unwrap_or(0);
     core::mem::forget(guard);
     ret as u32
 }
 
 #[no_mangle]
-extern "C" fn bfree(dev: u32, block: u32) {
-    let guard = LogGuard;
-    unsafe { FS.deallocate_block(dev as _, block as _, &guard) };
+unsafe extern "C" fn bfree(dev: u32, block: u32) {
+    let guard = log::get_guard_without_start();
+    FS.deallocate_block(dev as _, block as _, &guard);
     core::mem::forget(guard);
 }
+
+pub trait InodeOps {}
 
 extern "C" {
     fn ilock(ip: *mut c_void);
