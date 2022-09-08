@@ -6,14 +6,11 @@ use core::{
 use crate::{
     allocator::KernelAllocator,
     config::NOFILE,
-    log,
-    process::allocate_pagetable,
+    log, process,
     riscv::paging::{PageTable, PGSIZE},
 };
 
-use super::{
-    context::CPUContext, free_pagetable, kernel_stack::kstack_allocator, trapframe::TrapFrame,
-};
+use super::{context::CPUContext, free_pagetable, trapframe::TrapFrame};
 
 #[derive(Debug)]
 pub enum ProcessState {
@@ -197,9 +194,9 @@ pub struct ProcessContext {
 impl ProcessContext {
     pub fn allocate(jump: extern "C" fn()) -> Result<Self, ()> {
         let trapframe = KernelAllocator::get().allocate().ok_or(())?;
-        let pagetable = allocate_pagetable(trapframe.addr().get())?;
+        let pagetable = process::allocate_pagetable(trapframe.addr().get())?;
 
-        let kstack = kstack_allocator().allocate().ok_or(())?;
+        let kstack = process::allocate_kstack().ok_or(())?;
 
         let mut context = CPUContext::zeroed();
         context.ra = jump as u64;
@@ -257,6 +254,6 @@ impl Drop for ProcessContext {
     fn drop(&mut self) {
         KernelAllocator::get().deallocate(self.trapframe);
         free_pagetable(self.pagetable, self.sz);
-        kstack_allocator().deallocate(self.kstack);
+        process::deallocate_kstack(self.kstack).unwrap();
     }
 }

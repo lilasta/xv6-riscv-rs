@@ -1,6 +1,5 @@
 mod context;
 mod cpu;
-pub mod kernel_stack;
 pub mod process;
 mod scheduler;
 mod table;
@@ -9,10 +8,13 @@ mod trapframe;
 use core::ffi::{c_char, c_void};
 use core::mem::MaybeUninit;
 
-use crate::config::{NCPU, ROOTDEV};
+use crate::allocator::KernelAllocator;
+use crate::bitmap::Bitmap;
+use crate::config::{NCPU, NPROC, ROOTDEV};
 use crate::interrupt::InterruptGuard;
 use crate::lock::spin::SpinLock;
 use crate::lock::{Lock, LockGuard};
+use crate::memory_layout::{kstack, kstack_index};
 use crate::process::process::ProcessContext;
 use crate::riscv::{self, enable_interrupt};
 use crate::vm::binding::{copyin, copyout};
@@ -80,6 +82,25 @@ fn cpu() -> InterruptGuard<&'static mut CPU<'static, *mut CPUContext, Process>> 
         static mut CPUS: [CPU<*mut CPUContext, Process>; NCPU] = [const { CPU::Ready }; _];
         &mut CPUS[cpuid()]
     })
+}
+
+static KSTACK_USED: SpinLock<Bitmap<NPROC>> = SpinLock::new(Bitmap::new());
+
+pub fn initialize_kstack(pagetable: &mut PageTable) {
+    for i in 0..NPROC {
+        let memory = KernelAllocator::get().allocate_page().unwrap();
+        let pa = memory.addr().get();
+        let va = kstack(i);
+        pagetable.map(va, pa, PGSIZE, PTE::R | PTE::W).unwrap();
+    }
+}
+
+pub fn allocate_kstack() -> Option<usize> {
+    KSTACK_USED.lock().allocate().map(kstack)
+}
+
+pub fn deallocate_kstack(addr: usize) -> Result<(), ()> {
+    KSTACK_USED.lock().deallocate(kstack_index(addr))
 }
 
 extern "C" fn finish_dispatch() {
