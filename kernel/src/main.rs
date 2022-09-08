@@ -18,6 +18,7 @@
 #![feature(const_slice_index)]
 #![feature(const_trait_impl)]
 #![feature(const_try)]
+#![feature(cstr_from_bytes_until_nul)]
 #![feature(decl_macro)]
 #![feature(generic_arg_infer)]
 #![feature(generic_const_exprs)]

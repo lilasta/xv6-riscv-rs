@@ -25,7 +25,7 @@ pub unsafe fn execute(
     let path = CStr::from_ptr(path).to_str().unwrap();
 
     let log = log::start();
-    let Some(mut ip) = log.search_by_path(path) else {
+    let Some(mut ip) = log.search(path) else {
         return -1;
     };
 

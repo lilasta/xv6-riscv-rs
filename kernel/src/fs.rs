@@ -348,17 +348,49 @@ unsafe extern "C" fn bfree(dev: u32, block: u32) {
 }
 
 pub trait InodeOps {
-    fn search_by_path(&self, path: &str) -> Option<InodeLockGuard>;
+    fn get(&self, device: usize, inode: usize) -> Option<InodeLockGuard>;
+    fn search(&self, path: &str) -> Option<InodeLockGuard>;
+    fn search_parent(&self, path: &str, name: &mut [u8; DIRSIZE]) -> Option<InodeLockGuard>;
 }
 
 impl<'a> InodeOps for LogGuard<'a> {
-    fn search_by_path(&self, path: &str) -> Option<InodeLockGuard> {
+    fn get(&self, device: usize, inode: usize) -> Option<InodeLockGuard> {
+        extern "C" {
+            fn iget(device: u32, inode: u32) -> *mut InodeC;
+        }
+
+        unsafe {
+            let inode = iget(device as _, inode as _);
+            if inode.is_null() {
+                None
+            } else {
+                Some(InodeLockGuard::new(inode))
+            }
+        }
+    }
+
+    fn search(&self, path: &str) -> Option<InodeLockGuard> {
         extern "C" {
             fn namei(path: *const c_char) -> *mut InodeC;
         }
 
         unsafe {
             let inode = namei(path.as_ptr().cast());
+            if inode.is_null() {
+                None
+            } else {
+                Some(InodeLockGuard::new(inode))
+            }
+        }
+    }
+
+    fn search_parent(&self, path: &str, name: &mut [u8; DIRSIZE]) -> Option<InodeLockGuard> {
+        extern "C" {
+            fn nameiparent(path: *const c_char, name: *mut c_char) -> *mut InodeC;
+        }
+
+        unsafe {
+            let inode = nameiparent(path.as_ptr().cast(), name.as_mut_ptr().cast());
             if inode.is_null() {
                 None
             } else {
@@ -396,6 +428,53 @@ impl<'a> InodeLockGuard<'a> {
         Self {
             inode,
             lifetime: PhantomData,
+        }
+    }
+
+    pub const fn is_directory(&self) -> bool {
+        unsafe { (*self.inode).kind == 1 }
+    }
+
+    pub const fn is_file(&self) -> bool {
+        unsafe { (*self.inode).kind == 2 }
+    }
+
+    pub const fn is_device(&self) -> bool {
+        unsafe { (*self.inode).kind == 3 }
+    }
+
+    pub const fn increment_link(&mut self) {
+        unsafe { (*self.inode).nlink += 1 };
+    }
+
+    pub const fn decrement_link(&mut self) {
+        unsafe { (*self.inode).nlink -= 1 };
+    }
+
+    pub const fn device_number(&self) -> usize {
+        unsafe { (*self.inode).dev as usize }
+    }
+
+    pub const fn inode_number(&self) -> usize {
+        unsafe { (*self.inode).inum as usize }
+    }
+
+    pub fn update(&mut self) {
+        extern "C" {
+            fn iupdate(ip: *mut InodeC);
+        }
+
+        unsafe { iupdate(self.inode) };
+    }
+
+    pub fn put(self) {
+        extern "C" {
+            fn iunlockput(ip: *mut InodeC);
+        }
+
+        unsafe {
+            iunlockput(self.inode);
+            core::mem::forget(self);
         }
     }
 
