@@ -6,7 +6,7 @@ use core::{
 use crate::{
     allocator::KernelAllocator,
     config::NOFILE,
-    log::LogGuard,
+    log,
     process::allocate_pagetable,
     riscv::paging::{PageTable, PGSIZE},
 };
@@ -230,7 +230,7 @@ impl ProcessContext {
             }
         }
 
-        let _guard = LogGuard::new();
+        let _guard = log::start();
         unsafe { iput(self.cwd) };
         drop(_guard);
     }
