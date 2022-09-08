@@ -11,14 +11,6 @@ pub enum CPU<'a, C, P> {
 }
 
 impl<'a, C, P> CPU<'a, C, P> {
-    pub const fn is_ready(&self) -> bool {
-        matches!(self, Self::Ready)
-    }
-
-    pub const fn is_running(&self) -> bool {
-        matches!(self, Self::Running(_, _))
-    }
-
     pub const fn assigned_process(&self) -> Option<&'a SpinLock<P>> {
         match self {
             Self::Running(_, process) => Some(process),
