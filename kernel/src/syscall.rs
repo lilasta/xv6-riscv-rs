@@ -109,6 +109,9 @@ unsafe fn argfd(n: i32) -> Option<(usize, *mut c_void)> {
     let context = process::context().unwrap();
     let fd = arg_usize(n as _);
     let f = context.ofile.get(fd).copied()?;
+    if f.is_null() {
+        return None;
+    }
     Some((fd, f))
 }
 
@@ -139,18 +142,13 @@ fn fdalloc(f: *mut c_void) -> Result<usize, ()> {
 
 extern "C" {
     fn sys_chdir() -> u64;
-    fn sys_close() -> u64;
     fn sys_exec() -> u64;
-    fn sys_fstat() -> u64;
     fn sys_link() -> u64;
     fn sys_mkdir() -> u64;
     fn sys_mknod() -> u64;
     fn sys_open() -> u64;
     fn sys_pipe() -> u64;
-    fn sys_read() -> u64;
     fn sys_unlink() -> u64;
-    fn sys_dup() -> u64;
-    fn sys_write() -> u64;
 }
 
 static SYSCALLS: &[unsafe extern "C" fn() -> u64] = &[
@@ -238,9 +236,13 @@ unsafe extern "C" fn sys_uptime() -> u64 {
 
 extern "C" {
     fn filedup(f: *mut c_void) -> *mut c_void;
+    fn fileread(f: *mut c_void, addr: usize, size: i32) -> i32;
+    fn filewrite(f: *mut c_void, addr: usize, size: i32) -> i32;
+    fn fileclose(f: *mut c_void);
+    fn filestat(f: *mut c_void, addr: usize) -> i32;
 }
 
-unsafe extern "C" fn _sys_dup() -> u64 {
+unsafe extern "C" fn sys_dup() -> u64 {
     let Some((fd, f)) = argfd(0) else {
         return u64::MAX;
     };
@@ -251,4 +253,44 @@ unsafe extern "C" fn _sys_dup() -> u64 {
 
     filedup(f);
     fd as u64
+}
+
+unsafe extern "C" fn sys_read() -> u64 {
+    let Some((_, f)) = argfd(0) else {
+        return u64::MAX;
+    };
+
+    let addr = arg_usize(1);
+    let n = arg_i32(2);
+    fileread(f, addr, n) as u64
+}
+
+unsafe extern "C" fn sys_write() -> u64 {
+    let Some((_, f)) = argfd(0) else {
+        return u64::MAX;
+    };
+
+    let addr = arg_usize(1);
+    let n = arg_i32(2);
+    filewrite(f, addr, n) as u64
+}
+
+unsafe extern "C" fn sys_close() -> u64 {
+    let Some((fd, f)) = argfd(0) else {
+        return u64::MAX;
+    };
+
+    let context = process::context().unwrap();
+    context.ofile[fd] = core::ptr::null_mut();
+    fileclose(f);
+    0
+}
+
+unsafe extern "C" fn sys_fstat() -> u64 {
+    let Some((_, f)) = argfd(0) else {
+        return u64::MAX;
+    };
+
+    let addr = arg_usize(1);
+    filestat(f, addr) as u64
 }
