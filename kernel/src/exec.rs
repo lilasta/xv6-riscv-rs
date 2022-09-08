@@ -50,18 +50,10 @@ pub unsafe fn execute(
     let mut sz = 0;
     let mut off = elf.phoff;
     for _ in 0..elf.phnum {
-        let mut ph: MaybeUninit<ProgramHeader> = MaybeUninit::uninit();
-        let read = readi(
-            &mut *ip,
-            0,
-            ph.as_mut_ptr() as usize,
-            off as _,
-            core::mem::size_of::<ProgramHeader>() as _,
-        );
-        if read as usize != core::mem::size_of::<ProgramHeader>() {
+        let Ok(ph) = ip.read::<ProgramHeader>(off, 1) else {
             bad!(sz);
-        }
-        let ph = ph.assume_init();
+        };
+
         if ph.kind != ProgramHeader::KIND_LOAD {
             continue;
         }
