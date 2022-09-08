@@ -29,20 +29,10 @@ pub unsafe fn execute(
         return -1;
     };
 
-    let mut elf: MaybeUninit<ELFHeader> = MaybeUninit::uninit();
-    // Check ELF header
-    let read = readi(
-        &mut *ip,
-        0,
-        elf.as_mut_ptr() as usize,
-        0,
-        core::mem::size_of::<ELFHeader>() as _,
-    );
-    if read as usize != core::mem::size_of::<ELFHeader>() {
+    let Ok(elf) = ip.read::<ELFHeader>(0, 1) else {
         return -1;
-    }
+    };
 
-    let elf = elf.assume_init();
     if !elf.validate_magic() {
         return -1;
     }
