@@ -1,10 +1,10 @@
-use core::ffi::c_void;
+use core::ffi::{c_void, CStr};
 
 use crate::{
     config::MAXPATH,
-    fs::DIRSIZE,
+    fs::{InodeOps, DIRSIZE},
     lock::{spin::SpinLock, Lock},
-    process,
+    log, process,
     vm::binding::copyinstr,
 };
 
@@ -144,7 +144,6 @@ fn fdalloc(f: *mut c_void) -> Result<usize, ()> {
 extern "C" {
     fn sys_chdir() -> u64;
     fn sys_exec() -> u64;
-    fn sys_link() -> u64;
     fn sys_mkdir() -> u64;
     fn sys_mknod() -> u64;
     fn sys_open() -> u64;
@@ -296,18 +295,60 @@ unsafe extern "C" fn sys_fstat() -> u64 {
     filestat(f, addr) as u64
 }
 
-unsafe extern "C" fn _sys_link() -> u64 {
-    let name = [0u8; DIRSIZE];
-    let new = [0u8; MAXPATH];
-    let old = [0u8; MAXPATH];
+unsafe extern "C" fn sys_link() -> u64 {
+    let mut new = [0u8; MAXPATH];
+    let mut old = [0u8; MAXPATH];
 
-    if arg_string(0, old.as_ptr().addr(), old.len()).is_err() {
+    if arg_string(0, old.as_mut_ptr().addr(), old.len()).is_err() {
         return u64::MAX;
     }
 
-    if arg_string(1, new.as_ptr().addr(), new.len()).is_err() {
+    if arg_string(1, new.as_mut_ptr().addr(), new.len()).is_err() {
         return u64::MAX;
     }
 
-    todo!()
+    let Ok(old) = CStr::from_ptr(old.as_ptr().cast()).to_str() else {
+        return u64::MAX;
+    };
+
+    let Ok(new) = CStr::from_ptr(new.as_ptr().cast()).to_str() else {
+        return u64::MAX;
+    };
+
+    let log = log::start();
+    let Some(mut ip) = log.search(old) else {
+        return u64::MAX;
+    };
+
+    if ip.is_directory() {
+        return u64::MAX;
+    }
+
+    let dev = ip.device_number();
+    let inum = ip.inode_number();
+    ip.increment_link();
+    ip.update();
+    drop(ip);
+
+    let bad = || {
+        let mut inode = log.get(dev, inum).unwrap();
+        inode.decrement_link();
+        u64::MAX
+    };
+
+    let mut name = [0u8; DIRSIZE];
+    let Some(dir) = log.search_parent(new, &mut name) else {
+        return bad();
+    };
+
+    if dir.device_number() != dev {
+        return bad();
+    }
+
+    let name = CStr::from_bytes_until_nul(&name).unwrap().to_str().unwrap();
+    if dir.link(name, inum).is_err() {
+        return bad();
+    }
+
+    0
 }
