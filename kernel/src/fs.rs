@@ -1,5 +1,5 @@
 use core::{
-    ffi::c_char,
+    ffi::{c_char, CStr},
     marker::PhantomData,
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
@@ -350,6 +350,7 @@ unsafe extern "C" fn bfree(dev: u32, block: u32) {
 
 pub trait InodeOps {
     fn get(&self, device: usize, inode: usize) -> Option<InodeLockGuard>;
+    fn create(&self, path: &str, kind: u16, major: u16, minor: u16) -> Result<InodeLockGuard, ()>;
     fn search(&self, path: &str) -> Option<InodeLockGuard>;
     fn search_parent(&self, path: &str, name: &mut [u8; DIRSIZE]) -> Option<InodeLockGuard>;
 }
@@ -366,6 +367,47 @@ impl<'a> InodeOps for LogGuard<'a> {
                 None
             } else {
                 Some(InodeLockGuard::new(inode))
+            }
+        }
+    }
+
+    fn create(&self, path: &str, kind: u16, major: u16, minor: u16) -> Result<InodeLockGuard, ()> {
+        let mut name = [0u8; DIRSIZE];
+        let mut dir = self.search_parent(path, &mut name).ok_or(())?;
+
+        let name = CStr::from_bytes_until_nul(&name).or(Err(()))?;
+        let name = name.to_str().or(Err(()))?;
+
+        match dir.lookup(name) {
+            // TODO: T_FILE
+            Some((inode, _)) if kind == 2 && (inode.is_file() || inode.is_device()) => Ok(inode),
+            Some(_) => Err(()),
+            None => {
+                extern "C" {
+                    fn ialloc(dev: u32, kind: u16) -> u32;
+                }
+
+                let inode_number = unsafe { ialloc(dir.device_number() as u32, kind) as usize };
+                assert!(inode_number != 0);
+
+                let mut inode = self.get(dir.device_number(), inode_number).unwrap();
+                inode.major = major;
+                inode.minor = minor;
+                inode.nlink = 1;
+                inode.update();
+
+                // TODO: T_DIR
+                if kind == 1 {
+                    dir.increment_link();
+                    dir.update();
+
+                    inode.link(".", inode.inode_number()).unwrap();
+                    inode.link("..", dir.inode_number()).unwrap();
+                }
+
+                dir.link(name, inode.inode_number()).unwrap();
+
+                Ok(inode)
             }
         }
     }
@@ -479,6 +521,34 @@ impl<'a> InodeLockGuard<'a> {
         unsafe { (*self.inode).inum as usize }
     }
 
+    pub const fn device_major(&self) -> Option<usize> {
+        if self.is_device() {
+            Some(unsafe { (*self.inode).major as usize })
+        } else {
+            None
+        }
+    }
+
+    pub const fn device_minor(&self) -> Option<usize> {
+        if self.is_device() {
+            Some(unsafe { (*self.inode).minor as usize })
+        } else {
+            None
+        }
+    }
+
+    // TODO: -> InodeKey
+    pub fn unlock_without_put(self) {
+        extern "C" {
+            fn iunlock(ip: *mut InodeC);
+        }
+
+        unsafe {
+            iunlock(self.inode);
+            core::mem::forget(self);
+        }
+    }
+
     pub fn read<T>(&self, offset: usize, n: usize) -> Result<T, usize> {
         extern "C" {
             fn readi(ip: *mut InodeC, user_dst: i32, dst: usize, off: u32, n: u32) -> i32;
@@ -541,6 +611,14 @@ impl<'a> InodeLockGuard<'a> {
         }
 
         unsafe { iupdate(self.inode) };
+    }
+
+    pub fn truncate(&mut self) {
+        extern "C" {
+            fn itrunc(ip: *mut InodeC);
+        }
+
+        unsafe { itrunc(self.inode) };
     }
 
     pub fn link(&self, name: &str, inum: usize) -> Result<(), ()> {
@@ -617,4 +695,80 @@ impl<'a> Drop for InodeLockGuard<'a> {
         }
         unsafe { iunlockput(self.inode) };
     }
+}
+
+pub fn link(new: &str, old: &str) -> Result<(), ()> {
+    let log = log::start();
+    let mut ip = log.search(old).ok_or(())?;
+
+    if ip.is_directory() {
+        return Err(());
+    }
+
+    let dev = ip.device_number();
+    let inum = ip.inode_number();
+    ip.increment_link();
+    ip.update();
+    drop(ip);
+
+    let bad = || {
+        let mut inode = log.get(dev, inum).unwrap();
+        inode.decrement_link();
+        Err(())
+    };
+
+    let mut name = [0u8; DIRSIZE];
+    let Some(dir) = log.search_parent(new, &mut name) else {
+        return bad();
+    };
+
+    if dir.device_number() != dev {
+        return bad();
+    }
+
+    let name = CStr::from_bytes_until_nul(&name).unwrap().to_str().unwrap();
+    if dir.link(name, inum).is_err() {
+        return bad();
+    }
+
+    Ok(())
+}
+
+pub fn unlink(path: &str) -> Result<(), ()> {
+    let log = log::start();
+
+    let mut name = [0u8; DIRSIZE];
+    let mut dir = log.search_parent(path, &mut name).ok_or(())?;
+
+    let name = CStr::from_bytes_until_nul(&name).map_err(|_| ())?;
+    let name = name.to_str().map_err(|_| ())?;
+
+    if name == "." || name == ".." {
+        return Err(());
+    }
+
+    let (mut ip, offset) = dir.lookup(name).ok_or(())?;
+    assert!(ip.counf_of_link() > 0);
+
+    if ip.is_empty() == Some(false) {
+        return Err(());
+    }
+
+    let entry = DirectoryEntry::unused();
+    dir.write(entry, offset).unwrap();
+
+    if ip.is_directory() {
+        dir.decrement_link();
+        dir.update();
+    }
+
+    ip.decrement_link();
+    ip.update();
+    Ok(())
+}
+
+pub fn make_directory(path: &str) -> Result<(), ()> {
+    let log = log::start();
+    log.create(path, 1, 0, 0)?; // TODO: 1 == T_DIR
+    Ok(())
 }
