@@ -1,5 +1,6 @@
 use core::{
     ffi::{c_void, CStr},
+    mem::MaybeUninit,
     ptr::NonNull,
 };
 
@@ -11,7 +12,7 @@ use crate::{
     lock::{spin::SpinLock, Lock},
     log, process,
     riscv::paging::PGSIZE,
-    vm::binding::copyinstr,
+    vm::binding::{copyinstr, copyout},
 };
 
 pub enum SystemCall {
@@ -97,12 +98,6 @@ unsafe fn argfd(n: i32) -> Option<(usize, *mut FileC)> {
     Some((fd, f.cast()))
 }
 
-#[no_mangle]
-unsafe extern "C" fn argaddr(n: i32, ip: *mut usize) -> i32 {
-    *ip = arg_usize(n as _);
-    0
-}
-
 fn fdalloc(f: *mut FileC) -> Result<usize, ()> {
     let context = process::context().ok_or(())?;
     for (fd, file) in context.ofile.iter_mut().enumerate() {
@@ -112,10 +107,6 @@ fn fdalloc(f: *mut FileC) -> Result<usize, ()> {
         }
     }
     Err(())
-}
-
-extern "C" {
-    fn sys_pipe() -> u64;
 }
 
 static SYSCALLS: &[unsafe extern "C" fn() -> u64] = &[
@@ -220,6 +211,7 @@ extern "C" {
     fn fileclose(f: *mut FileC);
     fn filestat(f: *mut FileC, addr: usize) -> i32;
     fn filealloc() -> *mut FileC;
+    fn pipealloc(f1: *mut *mut FileC, f2: *mut *mut FileC) -> i32;
 }
 
 const FD_NONE: u32 = 0;
@@ -508,4 +500,54 @@ unsafe extern "C" fn sys_exec() -> u64 {
     let ret = execute(process::context().unwrap(), path.as_ptr(), argv.as_ptr());
     deallocate(argv);
     ret as u64
+}
+
+unsafe extern "C" fn sys_pipe() -> u64 {
+    let fdarray = arg_usize(0);
+
+    let context = process::context().unwrap();
+    let mut rf = MaybeUninit::uninit();
+    let mut wf = MaybeUninit::uninit();
+
+    if pipealloc(rf.as_mut_ptr(), wf.as_mut_ptr()) < 0 {
+        return u64::MAX;
+    }
+
+    let rf = rf.assume_init();
+    let wf = wf.assume_init();
+
+    let Ok(fd0) = fdalloc(rf) else {
+        fileclose(rf);
+        fileclose(wf);
+        return u64::MAX;
+    };
+
+    let Ok(fd1) = fdalloc(wf) else {
+        context.ofile[fd0] = core::ptr::null_mut();
+        fileclose(rf);
+        fileclose(wf);
+        return u64::MAX;
+    };
+
+    if copyout(
+        context.pagetable,
+        fdarray,
+        core::ptr::addr_of!(fd0).addr(),
+        core::mem::size_of::<u32>(),
+    ) < 0
+        || copyout(
+            context.pagetable,
+            fdarray + core::mem::size_of::<u32>(),
+            core::ptr::addr_of!(fd1).addr(),
+            core::mem::size_of::<u32>(),
+        ) < 0
+    {
+        context.ofile[fd0] = core::ptr::null_mut();
+        context.ofile[fd1] = core::ptr::null_mut();
+        fileclose(rf);
+        fileclose(wf);
+        return u64::MAX;
+    }
+
+    0
 }
