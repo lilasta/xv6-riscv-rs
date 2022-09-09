@@ -127,7 +127,6 @@ int strncmp(const char *, const char *, uint);
 char *strncpy(char *, const char *, int);
 
 // syscall.c
-int argaddr(int, uint64 *);
 void syscall();
 
 // trap.c
