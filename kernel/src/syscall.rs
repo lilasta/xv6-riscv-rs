@@ -1,8 +1,8 @@
 use core::ffi::{c_void, CStr};
 
 use crate::{
-    config::MAXPATH,
-    fs::{DirectoryEntry, InodeOps, DIRSIZE},
+    config::{MAXPATH, NDEV},
+    fs::{self, InodeOps},
     lock::{spin::SpinLock, Lock},
     log, process,
     vm::binding::copyinstr,
@@ -106,14 +106,14 @@ unsafe extern "C" fn argint(n: i32, ip: *mut i32) -> i32 {
     0
 }
 
-unsafe fn argfd(n: i32) -> Option<(usize, *mut c_void)> {
+unsafe fn argfd(n: i32) -> Option<(usize, *mut FileC)> {
     let context = process::context().unwrap();
     let fd = arg_usize(n as _);
     let f = context.ofile.get(fd).copied()?;
     if f.is_null() {
         return None;
     }
-    Some((fd, f))
+    Some((fd, f.cast()))
 }
 
 #[no_mangle]
@@ -130,11 +130,11 @@ unsafe extern "C" fn argstr(n: i32, buf: usize, max: i32) -> i32 {
     }
 }
 
-fn fdalloc(f: *mut c_void) -> Result<usize, ()> {
+fn fdalloc(f: *mut FileC) -> Result<usize, ()> {
     let context = process::context().ok_or(())?;
     for (fd, file) in context.ofile.iter_mut().enumerate() {
         if file.is_null() {
-            *file = f;
+            *file = f.cast();
             return Ok(fd);
         }
     }
@@ -144,9 +144,7 @@ fn fdalloc(f: *mut c_void) -> Result<usize, ()> {
 extern "C" {
     fn sys_chdir() -> u64;
     fn sys_exec() -> u64;
-    fn sys_mkdir() -> u64;
     fn sys_mknod() -> u64;
-    fn sys_open() -> u64;
     fn sys_pipe() -> u64;
 }
 
@@ -233,13 +231,31 @@ unsafe extern "C" fn sys_uptime() -> u64 {
     *TICKS.lock()
 }
 
-extern "C" {
-    fn filedup(f: *mut c_void) -> *mut c_void;
-    fn fileread(f: *mut c_void, addr: usize, size: i32) -> i32;
-    fn filewrite(f: *mut c_void, addr: usize, size: i32) -> i32;
-    fn fileclose(f: *mut c_void);
-    fn filestat(f: *mut c_void, addr: usize) -> i32;
+#[repr(C)]
+struct FileC {
+    kind: u32,
+    refcnt: u32,
+    readable: bool,
+    writable: bool,
+    pipe: *mut c_void,
+    ip: *mut c_void,
+    off: u32,
+    major: u32,
 }
+
+extern "C" {
+    fn filedup(f: *mut FileC) -> *mut FileC;
+    fn fileread(f: *mut FileC, addr: usize, size: i32) -> i32;
+    fn filewrite(f: *mut FileC, addr: usize, size: i32) -> i32;
+    fn fileclose(f: *mut FileC);
+    fn filestat(f: *mut FileC, addr: usize) -> i32;
+    fn filealloc() -> *mut FileC;
+}
+
+const FD_NONE: u32 = 0;
+const FD_PIPE: u32 = 1;
+const FD_INODE: u32 = 2;
+const FD_DEVICE: u32 = 3;
 
 unsafe extern "C" fn sys_dup() -> u64 {
     let Some((fd, f)) = argfd(0) else {
@@ -314,42 +330,10 @@ unsafe extern "C" fn sys_link() -> u64 {
         return u64::MAX;
     };
 
-    let log = log::start();
-    let Some(mut ip) = log.search(old) else {
-        return u64::MAX;
-    };
-
-    if ip.is_directory() {
-        return u64::MAX;
+    match fs::link(new, old) {
+        Ok(_) => 0,
+        Err(_) => u64::MAX,
     }
-
-    let dev = ip.device_number();
-    let inum = ip.inode_number();
-    ip.increment_link();
-    ip.update();
-    drop(ip);
-
-    let bad = || {
-        let mut inode = log.get(dev, inum).unwrap();
-        inode.decrement_link();
-        u64::MAX
-    };
-
-    let mut name = [0u8; DIRSIZE];
-    let Some(dir) = log.search_parent(new, &mut name) else {
-        return bad();
-    };
-
-    if dir.device_number() != dev {
-        return bad();
-    }
-
-    let name = CStr::from_bytes_until_nul(&name).unwrap().to_str().unwrap();
-    if dir.link(name, inum).is_err() {
-        return bad();
-    }
-
-    0
 }
 
 unsafe extern "C" fn sys_unlink() -> u64 {
@@ -363,40 +347,93 @@ unsafe extern "C" fn sys_unlink() -> u64 {
         return u64::MAX;
     };
 
+    match fs::unlink(path) {
+        Ok(_) => 0,
+        Err(_) => u64::MAX,
+    }
+}
+
+unsafe extern "C" fn sys_open() -> u64 {
+    let mut path = [0u8; MAXPATH];
+
+    if arg_string(0, path.as_mut_ptr().addr(), path.len()).is_err() {
+        return u64::MAX;
+    }
+
+    let Ok(path) = CStr::from_ptr(path.as_ptr().cast()).to_str() else {
+        return u64::MAX;
+    };
+
+    const O_RDONLY: usize = 0x000;
+    const O_WRONLY: usize = 0x001;
+    const O_RDWR: usize = 0x002;
+    const O_CREATE: usize = 0x200;
+    const O_TRUNC: usize = 0x400;
+
     let log = log::start();
+    let mode = arg_usize(1);
+    let inode = if mode & O_CREATE != 0 {
+        log.create(path, 2, 0, 0) // TODO: 2 = T_FILE
+    } else {
+        log.search(path).ok_or(())
+    };
 
-    let mut name = [0u8; DIRSIZE];
-    let Some(mut dir) = log.search_parent(path, &mut name) else {
+    let Ok(mut inode) = inode else {
         return u64::MAX;
     };
 
-    let Ok(name) = CStr::from_ptr(name.as_ptr().cast()).to_str() else {
+    if inode.is_directory() && mode != O_RDONLY {
+        return u64::MAX;
+    }
+
+    if inode.is_device() && inode.device_major() >= Some(NDEV) {
+        return u64::MAX;
+    }
+
+    let file = unsafe { filealloc() };
+    if file.is_null() {
+        return u64::MAX;
+    }
+
+    let file = unsafe { &mut *file };
+    let Ok(fd) =  fdalloc(file) else {
+        unsafe { fileclose(file) };
         return u64::MAX;
     };
 
-    if name == "." || name == ".." {
+    if inode.is_device() {
+        file.kind = FD_DEVICE;
+        file.major = inode.device_major().unwrap() as u32;
+    } else {
+        file.kind = FD_INODE;
+        file.off = 0;
+    }
+
+    file.ip = core::ptr::addr_of_mut!(*inode).cast();
+    file.readable = mode & O_WRONLY == 0;
+    file.writable = mode & O_WRONLY != 0 || mode & O_RDWR != 0;
+
+    if mode & O_TRUNC != 0 && inode.is_file() {
+        inode.truncate();
+    }
+
+    inode.unlock_without_put();
+    fd as u64
+}
+
+unsafe extern "C" fn sys_mkdir() -> u64 {
+    let mut path = [0u8; MAXPATH];
+
+    if arg_string(0, path.as_mut_ptr().addr(), path.len()).is_err() {
         return u64::MAX;
     }
 
-    let Some((mut ip, offset)) = dir.lookup(name) else {
+    let Ok(path) = CStr::from_ptr(path.as_ptr().cast()).to_str() else {
         return u64::MAX;
     };
 
-    assert!(ip.counf_of_link() > 0);
-
-    if ip.is_empty() == Some(false) {
-        return u64::MAX;
+    match fs::make_directory(path) {
+        Ok(_) => 0,
+        Err(_) => u64::MAX,
     }
-
-    let entry = DirectoryEntry::unused();
-    dir.write(entry, offset).unwrap();
-
-    if ip.is_directory() {
-        dir.decrement_link();
-        dir.update();
-    }
-
-    ip.decrement_link();
-    ip.update();
-    0
 }
