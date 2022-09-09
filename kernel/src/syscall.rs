@@ -1,7 +1,7 @@
 use core::ffi::{c_void, CStr};
 
 use crate::{
-    config::{MAXPATH, NDEV},
+    config::{MAXARG, MAXPATH, NDEV},
     fs::{self, InodeOps},
     lock::{spin::SpinLock, Lock},
     log, process,
@@ -142,9 +142,7 @@ fn fdalloc(f: *mut FileC) -> Result<usize, ()> {
 }
 
 extern "C" {
-    fn sys_chdir() -> u64;
     fn sys_exec() -> u64;
-    fn sys_mknod() -> u64;
     fn sys_pipe() -> u64;
 }
 
@@ -436,4 +434,68 @@ unsafe extern "C" fn sys_mkdir() -> u64 {
         Ok(_) => 0,
         Err(_) => u64::MAX,
     }
+}
+
+unsafe extern "C" fn sys_mknod() -> u64 {
+    let mut path = [0u8; MAXPATH];
+
+    if arg_string(0, path.as_mut_ptr().addr(), path.len()).is_err() {
+        return u64::MAX;
+    }
+
+    let Ok(path) = CStr::from_ptr(path.as_ptr().cast()).to_str() else {
+        return u64::MAX;
+    };
+
+    let major = arg_usize(1);
+    let minor = arg_usize(2);
+
+    match fs::make_special_file(path, major as u16, minor as u16) {
+        Ok(_) => 0,
+        Err(_) => u64::MAX,
+    }
+}
+
+unsafe extern "C" fn sys_chdir() -> u64 {
+    let mut path = [0u8; MAXPATH];
+
+    if arg_string(0, path.as_mut_ptr().addr(), path.len()).is_err() {
+        return u64::MAX;
+    }
+
+    let Ok(path) = CStr::from_ptr(path.as_ptr().cast()).to_str() else {
+        return u64::MAX;
+    };
+
+    let log = log::start();
+    let Some(inode) = log.search(path) else {
+        return u64::MAX;
+    };
+
+    if inode.is_directory() {
+        return u64::MAX;
+    }
+
+    let context = process::context().unwrap();
+    fs::put(context.cwd.cast());
+    context.cwd = inode.unlock_without_put().cast();
+
+    0
+}
+
+unsafe extern "C" fn _sys_exec() -> u64 {
+    let mut path = [0u8; MAXPATH];
+
+    if arg_string(0, path.as_mut_ptr().addr(), path.len()).is_err() {
+        return u64::MAX;
+    }
+
+    let Ok(path) = CStr::from_ptr(path.as_ptr().cast()).to_str() else {
+        return u64::MAX;
+    };
+
+    let mut argv = [core::ptr::null::<u8>(); MAXARG];
+    let argv_used = arg_usize(1);
+
+    todo!()
 }
