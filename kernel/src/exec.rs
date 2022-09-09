@@ -3,16 +3,12 @@ use core::ffi::{c_char, CStr};
 use crate::{
     config::MAXARG,
     elf::{ELFHeader, ProgramHeader},
-    fs::{InodeC, InodeOps},
+    fs::{InodeLockGuard, InodeOps},
     log,
     process::{self, allocate_pagetable, free_pagetable, process::ProcessContext},
     riscv::paging::{pg_roundup, PageTable, PGSIZE},
     vm::binding::copyout,
 };
-
-extern "C" {
-    fn readi(ip: *mut InodeC, user_dst: i32, dst: usize, off: u32, n: u32) -> i32;
-}
 
 pub unsafe fn execute(
     current_context: &mut ProcessContext,
@@ -22,11 +18,11 @@ pub unsafe fn execute(
     let path = CStr::from_ptr(path).to_str().unwrap();
 
     let log = log::start();
-    let Some(mut ip) = log.search(path) else {
+    let Some( ip) = log.search(path) else {
         return -1;
     };
 
-    let Ok(elf) = ip.read::<ELFHeader>(0, 1) else {
+    let Ok(elf) = ip.read::<ELFHeader>(0) else {
         return -1;
     };
 
@@ -47,7 +43,7 @@ pub unsafe fn execute(
     let mut sz = 0;
     let mut off = elf.phoff;
     for _ in 0..elf.phnum {
-        let Ok(ph) = ip.read::<ProgramHeader>(off, 1) else {
+        let Ok(ph) = ip.read::<ProgramHeader>(off) else {
             bad!(sz);
         };
 
@@ -72,7 +68,7 @@ pub unsafe fn execute(
             bad!(sz);
         }
 
-        if !load_seg(&mut pagetable, ph.vaddr, &mut *ip, ph.off, ph.filesz) {
+        if !load_seg(&mut pagetable, ph.vaddr, &ip, ph.off, ph.filesz) {
             bad!(sz);
         }
 
@@ -166,42 +162,19 @@ unsafe fn ptr_to_slice<'a, T>(start: *const *const T) -> &'a [*const T] {
 fn load_seg(
     pagetable: &mut PageTable,
     va: usize,
-    ip: *mut InodeC,
+    inode: &InodeLockGuard,
     offset: usize,
     size: usize,
 ) -> bool {
     for i in (0..size).step_by(PGSIZE) {
         let pa = pagetable.virtual_to_physical(va + i).unwrap();
         let n = (size - i).min(PGSIZE);
-        if unsafe { readi(ip, 0, pa, (offset + i) as _, n as _) } as usize != n {
+        if inode
+            .copy_to(<*mut u8>::from_bits(pa), offset + i, n)
+            .is_err()
+        {
             return false;
         }
     }
     true
-}
-
-mod binding {
-    use super::*;
-
-    #[no_mangle]
-    unsafe extern "C" fn exec(path: *const c_char, argv: *const *const c_char) -> i32 {
-        match process::context() {
-            Some(context) => execute(context, path, argv),
-            None => -1,
-        }
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn loadseg(
-        mut pagetable: PageTable,
-        va: usize,
-        ip: *mut InodeC,
-        offset: u32,
-        size: u32,
-    ) -> i32 {
-        match load_seg(&mut pagetable, va, ip, offset as _, size as _) {
-            true => 0,
-            false => -1,
-        }
-    }
 }

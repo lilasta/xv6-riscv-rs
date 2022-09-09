@@ -551,30 +551,29 @@ impl<'a> InodeLockGuard<'a> {
         }
     }
 
-    pub fn read<T>(&self, offset: usize, n: usize) -> Result<T, usize> {
+    pub fn copy_to<T>(&self, dst: *mut T, offset: usize, count: usize) -> Result<(), usize> {
         extern "C" {
             fn readi(ip: *mut InodeC, user_dst: i32, dst: usize, off: u32, n: u32) -> i32;
         }
 
         unsafe {
             let type_size = core::mem::size_of::<T>();
-            let must_read = type_size * n;
+            let must_read = type_size * count;
 
-            let mut value = MaybeUninit::<T>::uninit();
-            let read = readi(
-                self.inode,
-                0,
-                value.as_mut_ptr().addr(),
-                offset as u32,
-                must_read as u32,
-            ) as usize;
+            let read = readi(self.inode, 0, dst.addr(), offset as u32, must_read as u32) as usize;
 
             if read == must_read {
-                Ok(value.assume_init())
+                Ok(())
             } else {
                 Err(read)
             }
         }
+    }
+
+    pub fn read<T>(&self, offset: usize) -> Result<T, usize> {
+        let mut value = MaybeUninit::<T>::uninit();
+        self.copy_to(value.as_mut_ptr(), offset, 1)?;
+        Ok(unsafe { value.assume_init() })
     }
 
     pub fn write<T>(&mut self, mut value: T, offset: usize) -> Result<(), usize> {
@@ -667,7 +666,7 @@ impl<'a> InodeLockGuard<'a> {
 
         let entry_size = core::mem::size_of::<DirectoryEntry>();
         for off in ((2 * entry_size)..(self.size as usize)).step_by(entry_size) {
-            let entry = self.read::<DirectoryEntry>(off, 1).unwrap();
+            let entry = self.read::<DirectoryEntry>(off).unwrap();
             if entry.inode_number != 0 {
                 return Some(false);
             }
