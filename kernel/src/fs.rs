@@ -375,8 +375,7 @@ impl<'a> InodeOps for LogGuard<'a> {
         let mut name = [0u8; DIRSIZE];
         let mut dir = self.search_parent(path, &mut name).ok_or(())?;
 
-        let name = CStr::from_bytes_until_nul(&name).or(Err(()))?;
-        let name = name.to_str().or(Err(()))?;
+        let name = unsafe { CStr::from_ptr(name.as_ptr().cast()).to_str().or(Err(()))? };
 
         match dir.lookup(name) {
             // TODO: T_FILE
@@ -538,14 +537,16 @@ impl<'a> InodeLockGuard<'a> {
     }
 
     // TODO: -> InodeKey
-    pub fn unlock_without_put(self) {
+    pub fn unlock_without_put(self) -> *mut InodeC {
         extern "C" {
             fn iunlock(ip: *mut InodeC);
         }
 
         unsafe {
-            iunlock(self.inode);
+            let inode = self.inode;
             core::mem::forget(self);
+            iunlock(inode);
+            inode
         }
     }
 
@@ -734,6 +735,15 @@ pub fn link(new: &str, old: &str) -> Result<(), ()> {
     Ok(())
 }
 
+#[deprecated]
+pub fn put(ip: *mut InodeC) {
+    extern "C" {
+        fn iput(ip: *mut InodeC);
+    }
+
+    unsafe { iput(ip) };
+}
+
 pub fn unlink(path: &str) -> Result<(), ()> {
     let log = log::start();
 
@@ -770,5 +780,11 @@ pub fn unlink(path: &str) -> Result<(), ()> {
 pub fn make_directory(path: &str) -> Result<(), ()> {
     let log = log::start();
     log.create(path, 1, 0, 0)?; // TODO: 1 == T_DIR
+    Ok(())
+}
+
+pub fn make_special_file(path: &str, major: u16, minor: u16) -> Result<(), ()> {
+    let log = log::start();
+    log.create(path, 3, major, minor)?; // TODO: 3 == T_DEVICE
     Ok(())
 }
