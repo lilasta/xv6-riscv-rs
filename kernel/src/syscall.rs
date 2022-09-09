@@ -1,8 +1,4 @@
-use core::{
-    ffi::{c_void, CStr},
-    mem::MaybeUninit,
-    ptr::NonNull,
-};
+use core::{ffi::CStr, mem::MaybeUninit, ptr::NonNull};
 
 use crate::{
     allocator::KernelAllocator,
@@ -66,40 +62,42 @@ pub unsafe fn read_string_from_process_memory(
     }
 }
 
-unsafe fn arg_raw(n: usize) -> u64 {
+fn arg_raw<const N: usize>() -> u64 {
     let process = process::context().unwrap();
-    match n {
-        0 => process.trapframe.as_ref().a0,
-        1 => process.trapframe.as_ref().a1,
-        2 => process.trapframe.as_ref().a2,
-        3 => process.trapframe.as_ref().a3,
-        4 => process.trapframe.as_ref().a4,
-        5 => process.trapframe.as_ref().a5,
-        _ => panic!(),
+    unsafe {
+        match N {
+            0 => process.trapframe.as_ref().a0,
+            1 => process.trapframe.as_ref().a1,
+            2 => process.trapframe.as_ref().a2,
+            3 => process.trapframe.as_ref().a3,
+            4 => process.trapframe.as_ref().a4,
+            5 => process.trapframe.as_ref().a5,
+            _ => panic!(),
+        }
     }
 }
 
-pub unsafe fn arg_i32(n: usize) -> i32 {
-    arg_raw(n) as _
+fn arg_i32<const N: usize>() -> i32 {
+    arg_raw::<N>() as _
 }
 
-pub unsafe fn arg_usize(n: usize) -> usize {
-    arg_raw(n) as _
+fn arg_usize<const N: usize>() -> usize {
+    arg_raw::<N>() as _
 }
 
-pub unsafe fn arg_string(n: usize, buf: usize, max: usize) -> Result<usize, i32> {
-    let addr = arg_usize(n);
-    read_string_from_process_memory(addr, buf, max)
+fn arg_string<const N: usize>(buf: usize, max: usize) -> Result<usize, i32> {
+    let addr = arg_usize::<N>();
+    unsafe { read_string_from_process_memory(addr, buf, max) }
 }
 
-unsafe fn argfd(n: i32) -> Option<(usize, *mut FileC)> {
+fn arg_fd<const N: usize>() -> Result<(usize, *mut FileC), ()> {
     let context = process::context().unwrap();
-    let fd = arg_usize(n as _);
-    let f = context.ofile.get(fd).copied()?;
+    let fd = arg_usize::<N>();
+    let f = context.ofile.get(fd).copied().ok_or(())?;
     if f.is_null() {
-        return None;
+        return Err(());
     }
-    Some((fd, f.cast()))
+    Ok((fd, f.cast()))
 }
 
 fn fdalloc(f: *mut FileC) -> Result<usize, ()> {
@@ -113,7 +111,7 @@ fn fdalloc(f: *mut FileC) -> Result<usize, ()> {
     Err(())
 }
 
-static SYSCALLS: &[unsafe extern "C" fn() -> u64] = &[
+static SYSCALLS: &[fn() -> Result<u64, ()>] = &[
     sys_fork, sys_exit, sys_wait, sys_pipe, sys_read, sys_kill, sys_exec, sys_fstat, sys_chdir,
     sys_dup, sys_getpid, sys_sbrk, sys_sleep, sys_uptime, sys_open, sys_write, sys_mknod,
     sys_unlink, sys_link, sys_mkdir, sys_close,
@@ -123,10 +121,11 @@ static SYSCALLS: &[unsafe extern "C" fn() -> u64] = &[
 unsafe extern "C" fn syscall() {
     let process = process::context().unwrap();
     let index = process.trapframe.as_ref().a7 - 1;
-    process.trapframe.as_mut().a0 = match SYSCALLS.get(index as usize) {
-        Some(f) => f(),
+    let result = match SYSCALLS.get(index as usize) {
+        Some(f) => f().unwrap_or(u64::MAX),
         None => u64::MAX,
     };
+    process.trapframe.as_mut().a0 = result;
 }
 
 static TICKS: SpinLock<u64> = SpinLock::new(0);
@@ -138,170 +137,123 @@ unsafe extern "C" fn clockintr() {
     process::wakeup(&TICKS as *const _ as usize);
 }
 
-unsafe extern "C" fn sys_exit() -> u64 {
-    let n = arg_i32(0);
-    process::exit(n);
+fn sys_exit() -> Result<u64, ()> {
+    let n = arg_i32::<0>();
+    unsafe { process::exit(n) };
     unreachable!()
 }
 
-unsafe extern "C" fn sys_getpid() -> u64 {
-    process::id().unwrap() as u64
+fn sys_getpid() -> Result<u64, ()> {
+    Ok(process::id().unwrap() as u64)
 }
 
-unsafe extern "C" fn sys_fork() -> u64 {
-    match process::fork() {
-        Some(pid) => pid as u64,
-        None => u64::MAX,
-    }
+fn sys_fork() -> Result<u64, ()> {
+    unsafe { process::fork().map(|pid| pid as u64).ok_or(()) }
 }
 
-unsafe extern "C" fn sys_wait() -> u64 {
-    let addr = match arg_usize(0) {
+fn sys_wait() -> Result<u64, ()> {
+    let addr = match arg_usize::<0>() {
         0 => None,
         addr => Some(addr),
     };
 
-    match process::wait(addr) {
-        Some(pid) => pid as u64,
-        None => u64::MAX,
-    }
+    unsafe { process::wait(addr).map(|pid| pid as u64).ok_or(()) }
 }
 
-unsafe extern "C" fn sys_sbrk() -> u64 {
-    let n = arg_i32(0) as isize;
-    match process::context().unwrap().resize_memory(n) {
-        Ok(old) => old as u64,
-        Err(_) => u64::MAX,
-    }
+fn sys_sbrk() -> Result<u64, ()> {
+    let n = arg_i32::<0>() as isize;
+    process::context()
+        .unwrap()
+        .resize_memory(n)
+        .map(|old| old as u64)
 }
 
-unsafe extern "C" fn sys_kill() -> u64 {
-    process::kill(arg_usize(0)) as u64
+fn sys_kill() -> Result<u64, ()> {
+    Ok(process::kill(arg_usize::<0>()) as u64)
 }
 
-unsafe extern "C" fn sys_sleep() -> u64 {
-    let time = arg_usize(0) as u64;
+fn sys_sleep() -> Result<u64, ()> {
+    let time = arg_usize::<0>() as u64;
     let mut ticks = TICKS.lock();
     let ticks0 = *ticks;
     while (*ticks - ticks0) < time {
         if process::is_killed() == Some(true) {
-            return u64::MAX;
+            return Err(());
         }
         process::sleep(&TICKS as *const _ as usize, &mut ticks);
     }
-    0
+    Ok(0)
 }
 
-unsafe extern "C" fn sys_uptime() -> u64 {
-    *TICKS.lock()
+fn sys_uptime() -> Result<u64, ()> {
+    Ok(*TICKS.lock())
 }
 
-unsafe extern "C" fn sys_dup() -> u64 {
-    let Some((fd, f)) = argfd(0) else {
-        return u64::MAX;
-    };
-
-    let Ok(_) = fdalloc(f) else {
-        return u64::MAX;
-    };
-
-    filedup(f);
-    fd as u64
+fn sys_dup() -> Result<u64, ()> {
+    let (fd, f) = arg_fd::<0>()?;
+    fdalloc(f)?;
+    unsafe { filedup(f) };
+    Ok(fd as u64)
 }
 
-unsafe extern "C" fn sys_read() -> u64 {
-    let Some((_, f)) = argfd(0) else {
-        return u64::MAX;
-    };
-
-    let addr = arg_usize(1);
-    let n = arg_i32(2);
-    fileread(f, addr, n) as u64
+fn sys_read() -> Result<u64, ()> {
+    let (_, f) = arg_fd::<0>()?;
+    let addr = arg_usize::<1>();
+    let n = arg_i32::<2>();
+    Ok(unsafe { fileread(f, addr, n) as u64 })
 }
 
-unsafe extern "C" fn sys_write() -> u64 {
-    let Some((_, f)) = argfd(0) else {
-        return u64::MAX;
-    };
+fn sys_write() -> Result<u64, ()> {
+    let (_, f) = arg_fd::<0>()?;
 
-    let addr = arg_usize(1);
-    let n = arg_i32(2);
-    filewrite(f, addr, n) as u64
+    let addr = arg_usize::<1>();
+    let n = arg_i32::<2>();
+    Ok(unsafe { filewrite(f, addr, n) as u64 })
 }
 
-unsafe extern "C" fn sys_close() -> u64 {
-    let Some((fd, f)) = argfd(0) else {
-        return u64::MAX;
-    };
-
+fn sys_close() -> Result<u64, ()> {
+    let (fd, f) = arg_fd::<0>()?;
     let context = process::context().unwrap();
     context.ofile[fd] = core::ptr::null_mut();
-    fileclose(f);
-    0
+    unsafe { fileclose(f) };
+    Ok(0)
 }
 
-unsafe extern "C" fn sys_fstat() -> u64 {
-    let Some((_, f)) = argfd(0) else {
-        return u64::MAX;
-    };
-
-    let addr = arg_usize(1);
-    filestat(f, addr) as u64
+fn sys_fstat() -> Result<u64, ()> {
+    let (_, f) = arg_fd::<0>()?;
+    let addr = arg_usize::<1>();
+    Ok(unsafe { filestat(f, addr) as u64 })
 }
 
-unsafe extern "C" fn sys_link() -> u64 {
+fn sys_link() -> Result<u64, ()> {
     let mut new = [0u8; MAXPATH];
     let mut old = [0u8; MAXPATH];
 
-    if arg_string(0, old.as_mut_ptr().addr(), old.len()).is_err() {
-        return u64::MAX;
-    }
+    arg_string::<0>(old.as_mut_ptr().addr(), old.len()).or(Err(()))?;
+    arg_string::<1>(new.as_mut_ptr().addr(), new.len()).or(Err(()))?;
 
-    if arg_string(1, new.as_mut_ptr().addr(), new.len()).is_err() {
-        return u64::MAX;
-    }
+    let old = unsafe { CStr::from_ptr(old.as_ptr().cast()).to_str().or(Err(()))? };
+    let new = unsafe { CStr::from_ptr(new.as_ptr().cast()).to_str().or(Err(()))? };
 
-    let Ok(old) = CStr::from_ptr(old.as_ptr().cast()).to_str() else {
-        return u64::MAX;
-    };
-
-    let Ok(new) = CStr::from_ptr(new.as_ptr().cast()).to_str() else {
-        return u64::MAX;
-    };
-
-    match fs::link(new, old) {
-        Ok(_) => 0,
-        Err(_) => u64::MAX,
-    }
+    fs::link(new, old).and(Ok(0))
 }
 
-unsafe extern "C" fn sys_unlink() -> u64 {
+fn sys_unlink() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
 
-    if arg_string(0, path.as_mut_ptr().addr(), path.len()).is_err() {
-        return u64::MAX;
-    }
+    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
 
-    let Ok(path) = CStr::from_ptr(path.as_ptr().cast()).to_str() else {
-        return u64::MAX;
-    };
+    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
 
-    match fs::unlink(path) {
-        Ok(_) => 0,
-        Err(_) => u64::MAX,
-    }
+    fs::unlink(path).and(Ok(0))
 }
 
-unsafe extern "C" fn sys_open() -> u64 {
+fn sys_open() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
 
-    if arg_string(0, path.as_mut_ptr().addr(), path.len()).is_err() {
-        return u64::MAX;
-    }
+    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
 
-    let Ok(path) = CStr::from_ptr(path.as_ptr().cast()).to_str() else {
-        return u64::MAX;
-    };
+    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
 
     const O_RDONLY: usize = 0x000;
     const O_WRONLY: usize = 0x001;
@@ -310,34 +262,30 @@ unsafe extern "C" fn sys_open() -> u64 {
     const O_TRUNC: usize = 0x400;
 
     let log = log::start();
-    let mode = arg_usize(1);
-    let inode = if mode & O_CREATE != 0 {
+    let mode = arg_usize::<1>();
+    let mut inode = if mode & O_CREATE != 0 {
         log.create(path, 2, 0, 0) // TODO: 2 = T_FILE
     } else {
         log.search(path).ok_or(())
-    };
-
-    let Ok(mut inode) = inode else {
-        return u64::MAX;
-    };
+    }?;
 
     if inode.is_directory() && mode != O_RDONLY {
-        return u64::MAX;
+        return Err(());
     }
 
     if inode.is_device() && inode.device_major() >= Some(NDEV) {
-        return u64::MAX;
+        return Err(());
     }
 
     let file = unsafe { filealloc() };
     if file.is_null() {
-        return u64::MAX;
+        return Err(());
     }
 
     let file = unsafe { &mut *file };
     let Ok(fd) =  fdalloc(file) else {
         unsafe { fileclose(file) };
-        return u64::MAX;
+        return Err(());
     };
 
     if inode.is_device() {
@@ -357,94 +305,72 @@ unsafe extern "C" fn sys_open() -> u64 {
     }
 
     inode.unlock_without_put();
-    fd as u64
+    Ok(fd as u64)
 }
 
-unsafe extern "C" fn sys_mkdir() -> u64 {
+fn sys_mkdir() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
 
-    if arg_string(0, path.as_mut_ptr().addr(), path.len()).is_err() {
-        return u64::MAX;
-    }
+    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
 
-    let Ok(path) = CStr::from_ptr(path.as_ptr().cast()).to_str() else {
-        return u64::MAX;
-    };
+    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
 
-    match fs::make_directory(path) {
-        Ok(_) => 0,
-        Err(_) => u64::MAX,
-    }
+    fs::make_directory(path).and(Ok(0))
 }
 
-unsafe extern "C" fn sys_mknod() -> u64 {
+fn sys_mknod() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
 
-    if arg_string(0, path.as_mut_ptr().addr(), path.len()).is_err() {
-        return u64::MAX;
-    }
+    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
 
-    let Ok(path) = CStr::from_ptr(path.as_ptr().cast()).to_str() else {
-        return u64::MAX;
-    };
+    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
 
-    let major = arg_usize(1);
-    let minor = arg_usize(2);
+    let major = arg_usize::<1>();
+    let minor = arg_usize::<2>();
 
-    match fs::make_special_file(path, major as u16, minor as u16) {
-        Ok(_) => 0,
-        Err(_) => u64::MAX,
-    }
+    fs::make_special_file(path, major as u16, minor as u16).and(Ok(0))
 }
 
-unsafe extern "C" fn sys_chdir() -> u64 {
+fn sys_chdir() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
 
-    if arg_string(0, path.as_mut_ptr().addr(), path.len()).is_err() {
-        return u64::MAX;
-    }
+    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
 
-    let Ok(path) = CStr::from_ptr(path.as_ptr().cast()).to_str() else {
-        return u64::MAX;
-    };
+    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
 
     let log = log::start();
-    let Some(inode) = log.search(path) else {
-        return u64::MAX;
-    };
+    let inode = log.search(path).ok_or(())?;
 
     if !inode.is_directory() {
-        return u64::MAX;
+        return Err(());
     }
 
     let context = process::context().unwrap();
     fs::put(context.cwd.cast());
     context.cwd = inode.unlock_without_put().cast();
 
-    0
+    Ok(0)
 }
 
-unsafe extern "C" fn sys_exec() -> u64 {
+fn sys_exec() -> Result<u64, ()> {
     let mut path = [0i8; MAXPATH];
 
-    if arg_string(0, path.as_mut_ptr().addr(), path.len()).is_err() {
-        return u64::MAX;
-    }
+    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
 
     let mut argv = [core::ptr::null::<i8>(); MAXARG];
-    let argv_user = arg_usize(1);
+    let argv_user = arg_usize::<1>();
 
     let deallocate = |argv: [*const i8; _]| {
         for ptr in argv {
             if !ptr.is_null() {
-                KernelAllocator::get().deallocate(NonNull::new_unchecked(ptr.cast_mut()));
+                KernelAllocator::get().deallocate(NonNull::new(ptr.cast_mut()).unwrap());
             }
         }
     };
 
     let bad = |argv| {
         deallocate(argv);
-        u64::MAX
+        Err(())
     };
 
     let mut i = 0;
@@ -453,7 +379,8 @@ unsafe extern "C" fn sys_exec() -> u64 {
             return bad(argv);
         }
 
-        let Some(addr) = process::read_memory(argv_user + core::mem::size_of::<usize>() * i) else {
+        let addr = unsafe { process::read_memory(argv_user + core::mem::size_of::<usize>() * i) };
+        let Some(addr) = addr else {
             return bad(argv);
         };
 
@@ -467,64 +394,71 @@ unsafe extern "C" fn sys_exec() -> u64 {
             None => return bad(argv),
         }
 
-        if read_string_from_process_memory(addr, argv[i].addr(), PGSIZE).is_err() {
+        if unsafe { read_string_from_process_memory(addr, argv[i].addr(), PGSIZE).is_err() } {
             return bad(argv);
         }
 
         i += 1;
     }
 
-    let ret = execute(process::context().unwrap(), path.as_ptr(), argv.as_ptr());
+    let ret = unsafe { execute(process::context().unwrap(), path.as_ptr(), argv.as_ptr()) };
     deallocate(argv);
-    ret as u64
+    Ok(ret as u64)
 }
 
-unsafe extern "C" fn sys_pipe() -> u64 {
-    let fdarray = arg_usize(0);
+fn sys_pipe() -> Result<u64, ()> {
+    let fdarray = arg_usize::<0>();
 
     let context = process::context().unwrap();
     let mut rf = MaybeUninit::uninit();
     let mut wf = MaybeUninit::uninit();
 
-    if pipealloc(rf.as_mut_ptr(), wf.as_mut_ptr()) < 0 {
-        return u64::MAX;
+    if unsafe { pipealloc(rf.as_mut_ptr(), wf.as_mut_ptr()) < 0 } {
+        return Err(());
     }
 
-    let rf = rf.assume_init();
-    let wf = wf.assume_init();
+    let rf = unsafe { rf.assume_init() };
+    let wf = unsafe { wf.assume_init() };
 
     let Ok(fd0) = fdalloc(rf) else {
-        fileclose(rf);
-        fileclose(wf);
-        return u64::MAX;
+        unsafe {
+            fileclose(rf);
+            fileclose(wf);
+        }
+        return Err(());
     };
 
     let Ok(fd1) = fdalloc(wf) else {
         context.ofile[fd0] = core::ptr::null_mut();
-        fileclose(rf);
-        fileclose(wf);
-        return u64::MAX;
+        unsafe {
+            fileclose(rf);
+            fileclose(wf);
+        }
+        return Err(());
     };
 
-    if copyout(
-        context.pagetable,
-        fdarray,
-        core::ptr::addr_of!(fd0).addr(),
-        core::mem::size_of::<u32>(),
-    ) < 0
-        || copyout(
+    if unsafe {
+        copyout(
             context.pagetable,
-            fdarray + core::mem::size_of::<u32>(),
-            core::ptr::addr_of!(fd1).addr(),
+            fdarray,
+            core::ptr::addr_of!(fd0).addr(),
             core::mem::size_of::<u32>(),
         ) < 0
-    {
+            || copyout(
+                context.pagetable,
+                fdarray + core::mem::size_of::<u32>(),
+                core::ptr::addr_of!(fd1).addr(),
+                core::mem::size_of::<u32>(),
+            ) < 0
+    } {
         context.ofile[fd0] = core::ptr::null_mut();
         context.ofile[fd1] = core::ptr::null_mut();
-        fileclose(rf);
-        fileclose(wf);
-        return u64::MAX;
+        unsafe {
+            fileclose(rf);
+            fileclose(wf);
+        }
+        return Err(());
     }
 
-    0
+    Ok(0)
 }

@@ -5,10 +5,38 @@ use crate::{
     elf::{ELFHeader, ProgramHeader},
     fs::{InodeLockGuard, InodeOps},
     log,
-    process::{self, allocate_pagetable, free_pagetable, process::ProcessContext},
+    process::{allocate_pagetable, free_pagetable, process::ProcessContext},
     riscv::paging::{pg_roundup, PageTable, PGSIZE},
     vm::binding::copyout,
 };
+
+unsafe fn ptr_to_slice<'a, T>(start: *const *const T) -> &'a [*const T] {
+    let mut ptr = start;
+    while !(*ptr).is_null() {
+        ptr = ptr.offset(1);
+    }
+    core::slice::from_ptr_range(start..ptr)
+}
+
+fn load_seg(
+    pagetable: &mut PageTable,
+    va: usize,
+    inode: &InodeLockGuard,
+    offset: usize,
+    size: usize,
+) -> bool {
+    for i in (0..size).step_by(PGSIZE) {
+        let pa = pagetable.virtual_to_physical(va + i).unwrap();
+        let n = (size - i).min(PGSIZE);
+        if inode
+            .copy_to(<*mut u8>::from_bits(pa), offset + i, n)
+            .is_err()
+        {
+            return false;
+        }
+    }
+    true
+}
 
 pub unsafe fn execute(
     current_context: &mut ProcessContext,
@@ -149,32 +177,4 @@ pub unsafe fn execute(
 
     // this ends up in a0, the first argument to main(argc, argv)
     argv.len() as i32
-}
-
-unsafe fn ptr_to_slice<'a, T>(start: *const *const T) -> &'a [*const T] {
-    let mut ptr = start;
-    while !(*ptr).is_null() {
-        ptr = ptr.offset(1);
-    }
-    core::slice::from_ptr_range(start..ptr)
-}
-
-fn load_seg(
-    pagetable: &mut PageTable,
-    va: usize,
-    inode: &InodeLockGuard,
-    offset: usize,
-    size: usize,
-) -> bool {
-    for i in (0..size).step_by(PGSIZE) {
-        let pa = pagetable.virtual_to_physical(va + i).unwrap();
-        let n = (size - i).min(PGSIZE);
-        if inode
-            .copy_to(<*mut u8>::from_bits(pa), offset + i, n)
-            .is_err()
-        {
-            return false;
-        }
-    }
-    true
 }
