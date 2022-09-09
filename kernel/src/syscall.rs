@@ -2,7 +2,7 @@ use core::ffi::{c_void, CStr};
 
 use crate::{
     config::MAXPATH,
-    fs::{InodeOps, DIRSIZE},
+    fs::{DirectoryEntry, InodeOps, DIRSIZE},
     lock::{spin::SpinLock, Lock},
     log, process,
     vm::binding::copyinstr,
@@ -148,7 +148,6 @@ extern "C" {
     fn sys_mknod() -> u64;
     fn sys_open() -> u64;
     fn sys_pipe() -> u64;
-    fn sys_unlink() -> u64;
 }
 
 static SYSCALLS: &[unsafe extern "C" fn() -> u64] = &[
@@ -350,5 +349,54 @@ unsafe extern "C" fn sys_link() -> u64 {
         return bad();
     }
 
+    0
+}
+
+unsafe extern "C" fn sys_unlink() -> u64 {
+    let mut path = [0u8; MAXPATH];
+
+    if arg_string(0, path.as_mut_ptr().addr(), path.len()).is_err() {
+        return u64::MAX;
+    }
+
+    let Ok(path) = CStr::from_ptr(path.as_ptr().cast()).to_str() else {
+        return u64::MAX;
+    };
+
+    let log = log::start();
+
+    let mut name = [0u8; DIRSIZE];
+    let Some(mut dir) = log.search_parent(path, &mut name) else {
+        return u64::MAX;
+    };
+
+    let Ok(name) = CStr::from_ptr(name.as_ptr().cast()).to_str() else {
+        return u64::MAX;
+    };
+
+    if name == "." || name == ".." {
+        return u64::MAX;
+    }
+
+    let Some((mut ip, offset)) = dir.lookup(name) else {
+        return u64::MAX;
+    };
+
+    assert!(ip.counf_of_link() > 0);
+
+    if ip.is_empty() == Some(false) {
+        return u64::MAX;
+    }
+
+    let entry = DirectoryEntry::unused();
+    dir.write(entry, offset).unwrap();
+
+    if ip.is_directory() {
+        dir.decrement_link();
+        dir.update();
+    }
+
+    ip.decrement_link();
+    ip.update();
     0
 }
