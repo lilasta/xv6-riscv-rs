@@ -54,6 +54,7 @@ mod kernelvec;
 mod lock;
 mod log;
 mod memory_layout;
+mod pipe;
 mod plic;
 mod process;
 mod riscv;

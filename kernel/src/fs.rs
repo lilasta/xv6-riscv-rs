@@ -396,6 +396,7 @@ impl<'a> InodeOps for LogGuard<'a> {
                 inode.update();
 
                 // TODO: T_DIR
+                // TODO: avoid unwrap (https://github.com/mit-pdos/xv6-riscv/blob/riscv/kernel/sysfile.c#L295)
                 if kind == 1 {
                     dir.increment_link();
                     dir.update();

@@ -8,6 +8,10 @@ use crate::{
     allocator::KernelAllocator,
     config::{MAXARG, MAXPATH, NDEV},
     exec::execute,
+    file::{
+        filealloc, fileclose, filedup, fileread, filestat, filewrite, pipealloc, FileC, FD_DEVICE,
+        FD_INODE,
+    },
     fs::{self, InodeOps},
     lock::{spin::SpinLock, Lock},
     log, process,
@@ -191,33 +195,6 @@ unsafe extern "C" fn sys_sleep() -> u64 {
 unsafe extern "C" fn sys_uptime() -> u64 {
     *TICKS.lock()
 }
-
-#[repr(C)]
-struct FileC {
-    kind: u32,
-    refcnt: u32,
-    readable: bool,
-    writable: bool,
-    pipe: *mut c_void,
-    ip: *mut c_void,
-    off: u32,
-    major: u32,
-}
-
-extern "C" {
-    fn filedup(f: *mut FileC) -> *mut FileC;
-    fn fileread(f: *mut FileC, addr: usize, size: i32) -> i32;
-    fn filewrite(f: *mut FileC, addr: usize, size: i32) -> i32;
-    fn fileclose(f: *mut FileC);
-    fn filestat(f: *mut FileC, addr: usize) -> i32;
-    fn filealloc() -> *mut FileC;
-    fn pipealloc(f1: *mut *mut FileC, f2: *mut *mut FileC) -> i32;
-}
-
-const FD_NONE: u32 = 0;
-const FD_PIPE: u32 = 1;
-const FD_INODE: u32 = 2;
-const FD_DEVICE: u32 = 3;
 
 unsafe extern "C" fn sys_dup() -> u64 {
     let Some((fd, f)) = argfd(0) else {
