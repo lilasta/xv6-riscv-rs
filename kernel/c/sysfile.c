@@ -36,53 +36,6 @@ fdalloc(struct file *f)
 }
 
 uint64
-sys_exec(void)
-{
-  char path[MAXPATH], *argv[MAXARG];
-  int i;
-  uint64 uargv, uarg;
-
-  if (argstr(0, path, MAXPATH) < 0 || argaddr(1, &uargv) < 0)
-  {
-    return -1;
-  }
-  memset(argv, 0, sizeof(argv));
-  for (i = 0;; i++)
-  {
-    if (i >= NELEM(argv))
-    {
-      goto bad;
-    }
-    if (fetchaddr(uargv + sizeof(uint64) * i, (uint64 *)&uarg) < 0)
-    {
-      goto bad;
-    }
-    if (uarg == 0)
-    {
-      argv[i] = 0;
-      break;
-    }
-    argv[i] = kalloc();
-    if (argv[i] == 0)
-      goto bad;
-    if (fetchstr(uarg, argv[i], PGSIZE) < 0)
-      goto bad;
-  }
-
-  int ret = exec(path, argv);
-
-  for (i = 0; i < NELEM(argv) && argv[i] != 0; i++)
-    kfree(argv[i]);
-
-  return ret;
-
-bad:
-  for (i = 0; i < NELEM(argv) && argv[i] != 0; i++)
-    kfree(argv[i]);
-  return -1;
-}
-
-uint64
 sys_pipe(void)
 {
   uint64 fdarray; // user pointer to array of two integers
