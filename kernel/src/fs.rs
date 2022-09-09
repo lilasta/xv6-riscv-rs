@@ -415,6 +415,21 @@ pub struct InodeC {
     addrs: [u32; NDIRECT + 1],
 }
 
+#[repr(C)]
+pub struct DirectoryEntry {
+    inode_number: u16,
+    name: [u8; DIRSIZE],
+}
+
+impl DirectoryEntry {
+    pub const fn unused() -> Self {
+        Self {
+            inode_number: 0,
+            name: [0; _],
+        }
+    }
+}
+
 pub struct InodeLockGuard<'a> {
     inode: *mut InodeC,
     lifetime: PhantomData<&'a ()>,
@@ -442,6 +457,10 @@ impl<'a> InodeLockGuard<'a> {
 
     pub const fn is_device(&self) -> bool {
         unsafe { (*self.inode).kind == 3 }
+    }
+
+    pub const fn counf_of_link(&self) -> usize {
+        unsafe { (*self.inode).nlink as usize }
     }
 
     pub const fn increment_link(&mut self) {
@@ -486,6 +505,36 @@ impl<'a> InodeLockGuard<'a> {
         }
     }
 
+    pub fn write<T>(&mut self, mut value: T, offset: usize) -> Result<(), usize> {
+        extern "C" {
+            fn writei(ip: *mut InodeC, user_src: i32, src: usize, off: u32, n: u32) -> i32;
+        }
+
+        unsafe {
+            let type_size = core::mem::size_of::<T>();
+
+            let wrote = writei(
+                self.inode,
+                0,
+                core::ptr::addr_of_mut!(value).addr(),
+                offset as u32,
+                type_size as u32,
+            );
+
+            let wrote = if wrote < 0 {
+                return Err(0);
+            } else {
+                wrote as usize
+            };
+
+            if wrote == type_size {
+                Ok(())
+            } else {
+                Err(wrote)
+            }
+        }
+    }
+
     pub fn update(&mut self) {
         extern "C" {
             fn iupdate(ip: *mut InodeC);
@@ -494,18 +543,11 @@ impl<'a> InodeLockGuard<'a> {
         unsafe { iupdate(self.inode) };
     }
 
-    pub fn put(self) {
-        extern "C" {
-            fn iunlockput(ip: *mut InodeC);
-        }
-
-        unsafe {
-            iunlockput(self.inode);
-            core::mem::forget(self);
-        }
-    }
-
     pub fn link(&self, name: &str, inum: usize) -> Result<(), ()> {
+        if !self.is_directory() {
+            return Err(());
+        }
+
         extern "C" {
             fn dirlink(dp: *mut InodeC, name: *const c_char, inum: u32) -> i32;
         }
@@ -518,7 +560,11 @@ impl<'a> InodeLockGuard<'a> {
         }
     }
 
-    pub fn lookup(&self, name: &str) -> Option<(InodeLockGuard, usize)> {
+    pub fn lookup(&self, name: &str) -> Option<(InodeLockGuard<'a>, usize)> {
+        if !self.is_directory() {
+            return None;
+        }
+
         extern "C" {
             fn dirlookup(dp: *mut InodeC, name: *const c_char, poff: *mut u32) -> *mut InodeC;
         }
@@ -532,6 +578,21 @@ impl<'a> InodeLockGuard<'a> {
                 Some((InodeLockGuard::new(inode), poff as usize))
             }
         }
+    }
+
+    pub fn is_empty(&self) -> Option<bool> {
+        if !self.is_directory() {
+            return None;
+        }
+
+        let entry_size = core::mem::size_of::<DirectoryEntry>();
+        for off in ((2 * entry_size)..(self.size as usize)).step_by(entry_size) {
+            let entry = self.read::<DirectoryEntry>(off, 1).unwrap();
+            if entry.inode_number != 0 {
+                return Some(false);
+            }
+        }
+        Some(true)
     }
 }
 
