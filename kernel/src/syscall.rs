@@ -1,10 +1,16 @@
-use core::ffi::{c_void, CStr};
+use core::{
+    ffi::{c_void, CStr},
+    ptr::NonNull,
+};
 
 use crate::{
+    allocator::KernelAllocator,
     config::{MAXARG, MAXPATH, NDEV},
+    exec::execute,
     fs::{self, InodeOps},
     lock::{spin::SpinLock, Lock},
     log, process,
+    riscv::paging::PGSIZE,
     vm::binding::copyinstr,
 };
 
@@ -81,31 +87,6 @@ pub unsafe fn arg_string(n: usize, buf: usize, max: usize) -> Result<usize, i32>
     read_string_from_process_memory(addr, buf, max)
 }
 
-#[no_mangle]
-unsafe extern "C" fn fetchaddr(addr: usize, ip: *mut u64) -> i32 {
-    match process::read_memory(addr) {
-        Some(v) => {
-            *ip = v;
-            0
-        }
-        None => -1,
-    }
-}
-
-#[no_mangle]
-unsafe extern "C" fn fetchstr(addr: usize, buf: usize, max: i32) -> i32 {
-    match read_string_from_process_memory(addr, buf, max as usize) {
-        Ok(len) => len as _,
-        Err(err) => err as _,
-    }
-}
-
-#[no_mangle]
-unsafe extern "C" fn argint(n: i32, ip: *mut i32) -> i32 {
-    *ip = arg_i32(n as _);
-    0
-}
-
 unsafe fn argfd(n: i32) -> Option<(usize, *mut FileC)> {
     let context = process::context().unwrap();
     let fd = arg_usize(n as _);
@@ -122,14 +103,6 @@ unsafe extern "C" fn argaddr(n: i32, ip: *mut usize) -> i32 {
     0
 }
 
-#[no_mangle]
-unsafe extern "C" fn argstr(n: i32, buf: usize, max: i32) -> i32 {
-    match arg_string(n as _, buf, max as _) {
-        Ok(v) => v as _,
-        Err(v) => v,
-    }
-}
-
 fn fdalloc(f: *mut FileC) -> Result<usize, ()> {
     let context = process::context().ok_or(())?;
     for (fd, file) in context.ofile.iter_mut().enumerate() {
@@ -142,7 +115,6 @@ fn fdalloc(f: *mut FileC) -> Result<usize, ()> {
 }
 
 extern "C" {
-    fn sys_exec() -> u64;
     fn sys_pipe() -> u64;
 }
 
@@ -483,19 +455,57 @@ unsafe extern "C" fn sys_chdir() -> u64 {
     0
 }
 
-unsafe extern "C" fn _sys_exec() -> u64 {
-    let mut path = [0u8; MAXPATH];
+unsafe extern "C" fn sys_exec() -> u64 {
+    let mut path = [0i8; MAXPATH];
 
     if arg_string(0, path.as_mut_ptr().addr(), path.len()).is_err() {
         return u64::MAX;
     }
 
-    let Ok(path) = CStr::from_ptr(path.as_ptr().cast()).to_str() else {
-        return u64::MAX;
+    let mut argv = [core::ptr::null::<i8>(); MAXARG];
+    let argv_user = arg_usize(1);
+
+    let deallocate = |argv: [*const i8; _]| {
+        for ptr in argv {
+            if !ptr.is_null() {
+                KernelAllocator::get().deallocate(NonNull::new_unchecked(ptr.cast_mut()));
+            }
+        }
     };
 
-    let mut argv = [core::ptr::null::<u8>(); MAXARG];
-    let argv_used = arg_usize(1);
+    let bad = |argv| {
+        deallocate(argv);
+        u64::MAX
+    };
 
-    todo!()
+    let mut i = 0;
+    loop {
+        if i >= argv.len() {
+            return bad(argv);
+        }
+
+        let Some(addr) = process::read_memory(argv_user + core::mem::size_of::<usize>() * i) else {
+            return bad(argv);
+        };
+
+        if addr == 0 {
+            break;
+        }
+
+        let arg = KernelAllocator::get().allocate::<i8>();
+        match arg {
+            Some(arg) => argv[i] = arg.as_ptr().cast_const(),
+            None => return bad(argv),
+        }
+
+        if read_string_from_process_memory(addr, argv[i].addr(), PGSIZE).is_err() {
+            return bad(argv);
+        }
+
+        i += 1;
+    }
+
+    let ret = execute(process::context().unwrap(), path.as_ptr(), argv.as_ptr());
+    deallocate(argv);
+    ret as u64
 }

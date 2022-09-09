@@ -1,7 +1,4 @@
-use core::{
-    ffi::{c_char, CStr},
-    mem::MaybeUninit,
-};
+use core::ffi::{c_char, CStr};
 
 use crate::{
     config::MAXARG,
