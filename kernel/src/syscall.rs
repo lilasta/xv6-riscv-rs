@@ -436,7 +436,7 @@ unsafe extern "C" fn sys_chdir() -> u64 {
         return u64::MAX;
     };
 
-    if inode.is_directory() {
+    if !inode.is_directory() {
         return u64::MAX;
     }
 
