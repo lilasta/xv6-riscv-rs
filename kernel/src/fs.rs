@@ -352,7 +352,7 @@ pub trait InodeOps {
     fn get(&self, device: usize, inode: usize) -> Option<InodeLockGuard>;
     fn create(&self, path: &str, kind: u16, major: u16, minor: u16) -> Result<InodeLockGuard, ()>;
     fn search(&self, path: &str) -> Option<InodeLockGuard>;
-    fn search_parent(&self, path: &str, name: &mut [u8; DIRSIZE]) -> Option<InodeLockGuard>;
+    fn search_parent(&self, path: &str, name: &mut [u8; DIRSIZE + 1]) -> Option<InodeLockGuard>;
 }
 
 impl<'a> InodeOps for LogGuard<'a> {
@@ -372,7 +372,7 @@ impl<'a> InodeOps for LogGuard<'a> {
     }
 
     fn create(&self, path: &str, kind: u16, major: u16, minor: u16) -> Result<InodeLockGuard, ()> {
-        let mut name = [0u8; DIRSIZE];
+        let mut name = [0u8; DIRSIZE + 1];
         let mut dir = self.search_parent(path, &mut name).ok_or(())?;
 
         let name = unsafe { CStr::from_ptr(name.as_ptr().cast()).to_str().or(Err(()))? };
@@ -427,7 +427,7 @@ impl<'a> InodeOps for LogGuard<'a> {
         }
     }
 
-    fn search_parent(&self, path: &str, name: &mut [u8; DIRSIZE]) -> Option<InodeLockGuard> {
+    fn search_parent(&self, path: &str, name: &mut [u8; DIRSIZE + 1]) -> Option<InodeLockGuard> {
         extern "C" {
             fn nameiparent(path: *const c_char, name: *mut c_char) -> *mut InodeC;
         }
@@ -718,7 +718,7 @@ pub fn link(new: &str, old: &str) -> Result<(), ()> {
         Err(())
     };
 
-    let mut name = [0u8; DIRSIZE];
+    let mut name = [0u8; DIRSIZE + 1];
     let Some(dir) = log.search_parent(new, &mut name) else {
         return bad();
     };
@@ -747,11 +747,11 @@ pub fn put(ip: *mut InodeC) {
 pub fn unlink(path: &str) -> Result<(), ()> {
     let log = log::start();
 
-    let mut name = [0u8; DIRSIZE];
+    let mut name = [0u8; DIRSIZE + 1];
     let mut dir = log.search_parent(path, &mut name).ok_or(())?;
 
-    let name = CStr::from_bytes_until_nul(&name).map_err(|_| ())?;
-    let name = name.to_str().map_err(|_| ())?;
+    let name = CStr::from_bytes_until_nul(&name).unwrap();
+    let name = name.to_str().map_err(|_| ()).unwrap();
 
     if name == "." || name == ".." {
         return Err(());
