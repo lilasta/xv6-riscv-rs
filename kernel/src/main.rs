@@ -2,6 +2,7 @@
 #![no_main]
 #![allow(dead_code)]
 #![allow(incomplete_features)]
+#![feature(alloc_error_handler)]
 #![feature(asm_const)]
 #![feature(arbitrary_self_types)]
 #![feature(const_convert)]
@@ -37,6 +38,8 @@
 #![feature(slice_ptr_get)]
 #![feature(stdsimd)]
 #![feature(strict_provenance)]
+
+extern crate alloc;
 
 mod allocator;
 mod bitmap;
@@ -101,4 +104,9 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     use core::fmt::Write;
     let _ = writeln!(Print, "{}", info);
     loop {}
+}
+
+#[alloc_error_handler]
+fn alloc_error(layout: core::alloc::Layout) -> ! {
+    panic!("Cannot alloc: {:?}", layout);
 }

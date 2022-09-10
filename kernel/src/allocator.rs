@@ -2,7 +2,7 @@
 //! kernel stacks, page-table pages,
 //! and pipe buffers. Allocates whole 4096-byte pages.
 
-use core::ptr::NonNull;
+use core::{alloc::GlobalAlloc, ptr::NonNull};
 
 use crate::{
     lock::{spin::SpinLock, Lock, LockGuard},
@@ -25,6 +25,7 @@ impl KernelAllocator {
 
     // Singleton
     pub fn get() -> LockGuard<'static, SpinLock<KernelAllocator>> {
+        #[global_allocator]
         static mut ALLOCATOR: SpinLock<KernelAllocator> = SpinLock::new(KernelAllocator::uninit());
         unsafe { ALLOCATOR.lock() }
     }
@@ -98,6 +99,27 @@ impl KernelAllocator {
     pub fn deallocate<T>(&mut self, pa: NonNull<T>) {
         assert!(core::mem::size_of::<T>() <= PGSIZE);
         self.deallocate_page(pa.cast());
+    }
+}
+
+unsafe impl GlobalAlloc for SpinLock<KernelAllocator> {
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+        if PGSIZE < layout.size() {
+            return core::ptr::null_mut();
+        }
+
+        if PGSIZE % layout.align() != 0 {
+            return core::ptr::null_mut();
+        }
+
+        match self.lock().allocate_page() {
+            Some(ptr) => ptr.as_ptr(),
+            None => core::ptr::null_mut(),
+        }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, _: core::alloc::Layout) {
+        self.lock().deallocate_page(NonNull::new_unchecked(ptr));
     }
 }
 
