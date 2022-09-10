@@ -1,6 +1,7 @@
 use crate::{
     lock::{spin::SpinLock, LockGuard},
     process,
+    vm::PageTableExtension,
 };
 
 pub struct Pipe<const SIZE: usize> {
@@ -33,8 +34,15 @@ impl<const SIZE: usize> Pipe<SIZE> {
                 process::wakeup(core::ptr::addr_of!(self.read).addr());
                 process::sleep(core::ptr::addr_of!(self.write).addr(), self);
             } else {
-                todo!();
-                i += 1;
+                match process::read_memory(addr + i) {
+                    Some(ch) => {
+                        let index = self.write % SIZE;
+                        self.data[index] = ch;
+                        self.write += 1;
+                        i += 1;
+                    }
+                    None => break,
+                }
             }
         }
         process::wakeup(core::ptr::addr_of!(self.read).addr());
@@ -42,7 +50,36 @@ impl<const SIZE: usize> Pipe<SIZE> {
         Ok(i)
     }
 
-    pub fn read(&mut self, addr: usize, n: usize) -> usize {
-        todo!()
+    pub fn read(self: &mut LockGuard<SpinLock<Self>>, addr: usize, n: usize) -> Result<usize, ()> {
+        while self.read == self.write && !self.is_writing {
+            if process::is_killed() == Some(true) {
+                return Err(());
+            }
+            process::sleep(core::ptr::addr_of!(self.read).addr(), self);
+        }
+
+        let read_previous = self.read;
+        for i in 0..n {
+            if self.read == self.write {
+                break;
+            }
+
+            let ch = self.data[self.read % SIZE];
+            self.read += 1;
+
+            // TODO: process::write_memorY
+            if unsafe {
+                process::context()
+                    .unwrap()
+                    .pagetable
+                    .write(addr + i, &ch)
+                    .is_err()
+            } {
+                break;
+            }
+        }
+
+        process::wakeup(core::ptr::addr_of!(self.write).addr());
+        Ok(self.read - read_previous)
     }
 }

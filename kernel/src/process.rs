@@ -36,7 +36,7 @@ fn current() -> Option<&'static SpinLock<Process>> {
     cpu().assigned_process()
 }
 
-pub unsafe fn read_memory<T>(addr: usize) -> Option<T> {
+pub fn read_memory<T>(addr: usize) -> Option<T> {
     let process = context().unwrap();
     if addr >= process.sz || addr + core::mem::size_of::<T>() > process.sz {
         return None;
@@ -47,7 +47,7 @@ pub unsafe fn read_memory<T>(addr: usize) -> Option<T> {
         return None;
     }
 
-    Some(dst.assume_init())
+    Some(unsafe { dst.assume_init() })
 }
 
 // Copy from either a user address, or kernel address,
