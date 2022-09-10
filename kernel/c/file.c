@@ -14,46 +14,27 @@
 #include "proc.h"
 
 struct devsw devsw[NDEV];
-struct
-{
-  struct spinlock lock;
-  struct file file[NFILE];
-} ftable;
 
 void fileinit(void)
 {
-  initlock(&ftable.lock, "ftable");
 }
 
 // Allocate a file structure.
 struct file *
 filealloc(void)
 {
-  struct file *f;
-
-  acquire(&ftable.lock);
-  for (f = ftable.file; f < ftable.file + NFILE; f++)
-  {
-    if (f->ref == 0)
-    {
-      f->ref = 1;
-      release(&ftable.lock);
-      return f;
-    }
-  }
-  release(&ftable.lock);
-  return 0;
+  struct file *f = kalloc();
+  f->ref = 1;
+  return f;
 }
 
 // Increment ref count for file f.
 struct file *
 filedup(struct file *f)
 {
-  acquire(&ftable.lock);
   if (f->ref < 1)
     panic("filedup");
   f->ref++;
-  release(&ftable.lock);
   return f;
 }
 
@@ -62,18 +43,16 @@ void fileclose(struct file *f)
 {
   struct file ff;
 
-  acquire(&ftable.lock);
   if (f->ref < 1)
     panic("fileclose");
+
   if (--f->ref > 0)
   {
-    release(&ftable.lock);
     return;
   }
+
   ff = *f;
-  f->ref = 0;
-  f->type = FD_NONE;
-  release(&ftable.lock);
+  kfree(f);
 
   if (ff.type == FD_PIPE)
   {
