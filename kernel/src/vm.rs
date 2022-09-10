@@ -88,6 +88,7 @@ pub unsafe fn uvminit(mut pagetable: PageTable, src: *const u8, size: usize) {
 
 pub trait PageTableExtension {
     unsafe fn write<T: ?Sized>(&self, dst_va: usize, src: &T) -> Result<(), usize>;
+    unsafe fn read<T: ?Sized>(&self, dst: &mut T, src_va: usize) -> Result<(), usize>;
 }
 
 impl PageTableExtension for PageTable {
@@ -116,6 +117,33 @@ impl PageTableExtension for PageTable {
 
             copied += bytes;
             dst_va = va0 + PGSIZE;
+        }
+        Ok(())
+    }
+
+    unsafe fn read<T: ?Sized>(&self, dst: &mut T, mut src_va: usize) -> Result<(), usize> {
+        let dst_size = core::mem::size_of_val(dst);
+
+        let mut copied = 0;
+        while copied < dst_size {
+            let va0 = pg_rounddown(src_va);
+
+            let Some(pa0) = self.virtual_to_physical(va0) else {
+                return Err(copied);
+            };
+
+            let offset = src_va - va0;
+            let remain = dst_size - copied;
+            let bytes = (PGSIZE - offset).min(remain);
+
+            core::ptr::copy(
+                <*const u8>::from_bits(pa0 + offset),
+                <*mut T>::cast::<u8>(dst).add(copied),
+                bytes,
+            );
+
+            copied += bytes;
+            src_va = va0 + PGSIZE;
         }
         Ok(())
     }
@@ -167,32 +195,20 @@ pub mod binding {
     // Copy len bytes to dst from virtual address srcva in a given page table.
     // Return 0 on success, -1 on error.
     #[no_mangle]
-    pub unsafe extern "C" fn copyin(
+    unsafe extern "C" fn copyin(
         pagetable: PageTable,
-        mut dst: usize,
-        mut src_va: usize,
-        mut len: usize,
+        dst: usize,
+        src_va: usize,
+        len: usize,
     ) -> i32 {
-        while len > 0 {
-            let va0 = pg_rounddown(src_va);
-            let Some(pa0) = pagetable.virtual_to_physical(va0) else {
-                return -1;
-            };
-
-            let offset = src_va - va0;
-            let n = (PGSIZE - offset).min(len);
-
-            core::ptr::copy(
-                <*const u8>::from_bits(pa0 + offset),
-                <*mut u8>::from_bits(dst),
-                n,
-            );
-
-            len -= n;
-            dst += n;
-            src_va = va0 + PGSIZE;
+        let result = pagetable.read(
+            core::slice::from_raw_parts_mut(<*mut u8>::from_bits(dst), len),
+            src_va,
+        );
+        match result {
+            Ok(_) => 0,
+            Err(_) => -1,
         }
-        0
     }
 
     // Copy a null-terminated string from user to kernel.

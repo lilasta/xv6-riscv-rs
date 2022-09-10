@@ -17,7 +17,6 @@ use crate::lock::{Lock, LockGuard};
 use crate::memory_layout::{kstack, kstack_index};
 use crate::process::process::ProcessContext;
 use crate::riscv::{self, enable_interrupt};
-use crate::vm::binding::copyin;
 use crate::vm::{uvminit, PageTableExtension};
 use crate::{config::NOFILE, riscv::paging::PageTable};
 use crate::{cstr, interrupt};
@@ -43,18 +42,29 @@ pub unsafe fn read_memory<T>(addr: usize) -> Option<T> {
         return None;
     }
 
-    let dst = MaybeUninit::uninit();
-    if copyin(
-        process.pagetable,
-        dst.as_ptr() as usize,
-        addr,
-        core::mem::size_of::<T>(),
-    ) != 0
-    {
+    let mut dst = MaybeUninit::uninit();
+    if unsafe { process.pagetable.read(&mut dst, addr).is_err() } {
         return None;
     }
 
     Some(dst.assume_init())
+}
+
+// Copy from either a user address, or kernel address,
+// depending on usr_src.
+// Returns 0 on success, -1 on error.
+pub unsafe fn copyin_either<T: ?Sized>(dst: &mut T, user_src: bool, src: usize) -> bool {
+    let proc_context = current().unwrap().get_mut().context().unwrap();
+    if user_src {
+        proc_context.pagetable.read(dst, src).is_ok()
+    } else {
+        core::ptr::copy(
+            <*const u8>::from_bits(src),
+            <*mut T>::cast::<u8>(dst),
+            core::mem::size_of_val(dst),
+        );
+        true
+    }
 }
 
 // Copy to either a user address, or kernel address,
@@ -209,19 +219,6 @@ pub fn free_pagetable(mut pagetable: PageTable, size: usize) {
         pagetable.unmap(0, crate::riscv::paging::pg_roundup(size) / PGSIZE, true);
     }
     pagetable.deallocate();
-}
-
-// Copy from either a user address, or kernel address,
-// depending on usr_src.
-// Returns 0 on success, -1 on error.
-pub unsafe fn copyin_either(dst: usize, user_src: bool, src: usize, len: usize) -> bool {
-    let proc_context = current().unwrap().get_mut().context().unwrap();
-    if user_src {
-        copyin(proc_context.pagetable, dst, src, len) == 0
-    } else {
-        core::ptr::copy(<*const u8>::from_bits(src), <*mut u8>::from_bits(dst), len);
-        true
-    }
 }
 
 pub fn sleep<L: Lock>(token: usize, guard: &mut LockGuard<L>) {
@@ -544,7 +541,11 @@ mod binding {
 
     #[no_mangle]
     unsafe extern "C" fn either_copyin(dst: usize, user_src: i32, src: usize, len: usize) -> i32 {
-        match copyin_either(dst, user_src != 0, src, len) {
+        match copyin_either(
+            core::slice::from_raw_parts_mut(<*mut u8>::from_bits(dst), len),
+            user_src != 0,
+            src,
+        ) {
             true => 0,
             false => -1,
         }
