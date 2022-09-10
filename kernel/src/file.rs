@@ -1,6 +1,8 @@
 use core::ffi::c_void;
 
-use crate::config::NDEV;
+use crate::{config::NDEV, pipe::Pipe};
+
+pub const PIPESIZE: usize = 512;
 
 #[repr(C)]
 pub struct DeviceFile {
@@ -14,10 +16,10 @@ pub struct FileC {
     pub refcnt: u32,
     pub readable: bool,
     pub writable: bool,
-    pub pipe: *mut c_void,
     pub ip: *mut c_void,
     pub off: u32,
     pub major: u32,
+    pub pipe: Pipe<PIPESIZE>,
 }
 
 extern "C" {
@@ -27,7 +29,6 @@ extern "C" {
     pub fn fileclose(f: *mut FileC);
     pub fn filestat(f: *mut FileC, addr: usize) -> i32;
     pub fn filealloc() -> *mut FileC;
-    pub fn pipealloc(f1: *mut *mut FileC, f2: *mut *mut FileC) -> i32;
 }
 
 pub const FD_NONE: u32 = 0;

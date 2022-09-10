@@ -1,16 +1,18 @@
-use core::{ffi::CStr, mem::MaybeUninit, ptr::NonNull};
+use core::{ffi::CStr, ptr::NonNull};
 
 use crate::{
     allocator::KernelAllocator,
     config::{MAXARG, MAXPATH, NDEV},
     exec::execute,
     file::{
-        filealloc, fileclose, filedup, fileread, filestat, filewrite, pipealloc, FileC, FD_DEVICE,
-        FD_INODE,
+        filealloc, fileclose, filedup, fileread, filestat, filewrite, FileC, FD_DEVICE, FD_INODE,
+        FD_PIPE,
     },
     fs::{self, InodeOps},
     lock::{spin::SpinLock, Lock},
-    log, process,
+    log,
+    pipe::Pipe,
+    process,
     riscv::paging::PGSIZE,
     vm::{binding::copyinstr, PageTableExtension},
 };
@@ -410,15 +412,28 @@ fn sys_pipe() -> Result<u64, ()> {
     let fdarray = arg_usize::<0>();
 
     let context = process::context().unwrap();
-    let mut rf = MaybeUninit::uninit();
-    let mut wf = MaybeUninit::uninit();
 
-    if unsafe { pipealloc(rf.as_mut_ptr(), wf.as_mut_ptr()) < 0 } {
+    let rf = unsafe { filealloc() };
+    let wf = unsafe { filealloc() };
+    if rf.is_null() || wf.is_null() {
+        unsafe {
+            if !rf.is_null() {
+                fileclose(rf);
+            }
+            if !wf.is_null() {
+                fileclose(wf);
+            }
+        }
         return Err(());
     }
 
-    let rf = unsafe { rf.assume_init() };
-    let wf = unsafe { wf.assume_init() };
+    let Some((read, write)) = Pipe::allocate() else {
+        unsafe {
+            fileclose(rf);
+            fileclose(wf);
+        }
+        return Err(());
+    };
 
     let Ok(fd0) = fdalloc(rf) else {
         unsafe {
@@ -436,6 +451,17 @@ fn sys_pipe() -> Result<u64, ()> {
         }
         return Err(());
     };
+
+    unsafe {
+        (*rf).kind = FD_PIPE;
+        (*rf).readable = true;
+        (*rf).writable = false;
+        core::ptr::write(&mut (*rf).pipe, read);
+        (*wf).kind = FD_PIPE;
+        (*wf).readable = false;
+        (*wf).writable = true;
+        core::ptr::write(&mut (*wf).pipe, write);
+    }
 
     let pair = [fd0 as u32, fd1 as u32];
 
