@@ -1,3 +1,8 @@
+use crate::{
+    lock::{spin::SpinLock, LockGuard},
+    process,
+};
+
 pub struct Pipe<const SIZE: usize> {
     data: [u8; SIZE],
     read: usize,
@@ -17,8 +22,24 @@ impl<const SIZE: usize> Pipe<SIZE> {
         }
     }
 
-    pub fn write(&mut self, addr: usize, n: usize) -> usize {
-        todo!()
+    pub fn write(self: &mut LockGuard<SpinLock<Self>>, addr: usize, n: usize) -> Result<usize, ()> {
+        let mut i = 0;
+        while i < n {
+            if self.is_reading || process::is_killed() == Some(true) {
+                return Err(());
+            }
+
+            if self.write == self.read + SIZE {
+                process::wakeup(core::ptr::addr_of!(self.read).addr());
+                process::sleep(core::ptr::addr_of!(self.write).addr(), self);
+            } else {
+                todo!();
+                i += 1;
+            }
+        }
+        process::wakeup(core::ptr::addr_of!(self.read).addr());
+
+        Ok(i)
     }
 
     pub fn read(&mut self, addr: usize, n: usize) -> usize {
