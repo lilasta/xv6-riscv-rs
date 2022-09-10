@@ -119,8 +119,7 @@ static SYSCALLS: &[fn() -> Result<u64, ()>] = &[
     sys_unlink, sys_link, sys_mkdir, sys_close,
 ];
 
-#[no_mangle]
-unsafe extern "C" fn syscall() {
+pub unsafe fn syscall() {
     let process = process::context().unwrap();
     let index = process.trapframe.as_ref().a7 - 1;
     let result = match SYSCALLS.get(index as usize) {
@@ -133,7 +132,7 @@ unsafe extern "C" fn syscall() {
 static TICKS: SpinLock<u64> = SpinLock::new(0);
 
 #[no_mangle]
-unsafe extern "C" fn clockintr() {
+pub unsafe extern "C" fn clockintr() {
     let mut ticks = TICKS.lock();
     *ticks += 1; // TODO: Overflow?
     process::wakeup(&TICKS as *const _ as usize);

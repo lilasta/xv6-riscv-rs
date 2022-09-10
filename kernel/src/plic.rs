@@ -25,7 +25,7 @@ unsafe extern "C" fn plicinithart() {
 
 // ask the PLIC what interrupt we should serve.
 #[no_mangle]
-unsafe extern "C" fn plic_claim() -> u32 {
+pub unsafe extern "C" fn plic_claim() -> u32 {
     let hart = read_reg!(tp);
     let irq = <*mut u32>::from_bits(plic_sclaim(hart)).read();
     irq
@@ -33,7 +33,7 @@ unsafe extern "C" fn plic_claim() -> u32 {
 
 // tell the PLIC we've served this IRQ.
 #[no_mangle]
-unsafe extern "C" fn plic_complete(irq: u32) {
+pub unsafe extern "C" fn plic_complete(irq: u32) {
     let hart = read_reg!(tp);
     <*mut u32>::from_bits(plic_sclaim(hart)).write(irq);
 }

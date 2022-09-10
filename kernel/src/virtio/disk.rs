@@ -296,6 +296,6 @@ pub unsafe fn interrupt_handler() {
 extern "C" fn virtio_disk_init() {}
 
 #[no_mangle]
-extern "C" fn virtio_disk_intr() {
+pub extern "C" fn virtio_disk_intr() {
     unsafe { interrupt_handler() }
 }

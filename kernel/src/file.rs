@@ -4,6 +4,13 @@ use crate::{config::NDEV, pipe::Pipe};
 
 pub const PIPESIZE: usize = 512;
 
+pub enum FileKind {
+    None,
+    Pipe,
+    Inode,
+    Device,
+}
+
 #[repr(C)]
 pub struct DeviceFile {
     pub read: extern "C" fn(i32, usize, i32) -> i32,

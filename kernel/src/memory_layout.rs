@@ -95,5 +95,5 @@ pub macro symbol_addr($sym:ident) {{
         static $sym: core::ffi::c_void;
     }
 
-    unsafe { core::ptr::addr_of!($sym) as *const _ }
+    unsafe { core::ptr::addr_of!($sym) }
 }}

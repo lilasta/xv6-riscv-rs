@@ -96,6 +96,19 @@ pub fn is_killed() -> Option<bool> {
     Some(unsafe { current()?.get().killed != 0 })
 }
 
+pub fn set_killed() -> Option<()> {
+    unsafe { current()?.get_mut().killed = 1 };
+    Some(())
+}
+
+pub fn is_running() -> bool {
+    let Some(process) = current() else {
+        return false;
+    };
+
+    unsafe { process.get().is_running() }
+}
+
 pub fn cpuid() -> usize {
     assert!(!interrupt::is_enabled());
     unsafe { riscv::read_reg!(tp) as usize }

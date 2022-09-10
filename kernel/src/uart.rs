@@ -245,26 +245,22 @@ extern "C" {
     fn consoleintr(c: i32);
 }
 
-mod binding {
-    use super::*;
+#[no_mangle]
+unsafe extern "C" fn uartinit() {
+    UART::get().init();
+}
 
-    #[no_mangle]
-    unsafe extern "C" fn uartinit() {
-        UART::get().init();
-    }
+#[no_mangle]
+unsafe extern "C" fn uartputc(c: i32) {
+    UART::get().putc(c as u8);
+}
 
-    #[no_mangle]
-    unsafe extern "C" fn uartputc(c: i32) {
-        UART::get().putc(c as u8);
-    }
+#[no_mangle]
+unsafe extern "C" fn uartputc_sync(c: i32) {
+    UART::get().putc_blocking(c as u8);
+}
 
-    #[no_mangle]
-    unsafe extern "C" fn uartputc_sync(c: i32) {
-        UART::get().putc_blocking(c as u8);
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn uartintr() {
-        UART::get().handle_interrupt();
-    }
+#[no_mangle]
+pub unsafe extern "C" fn uartintr() {
+    UART::get().handle_interrupt();
 }

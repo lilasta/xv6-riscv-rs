@@ -150,6 +150,10 @@ impl Process {
         }
     }
 
+    pub const fn is_running(&self) -> bool {
+        matches!(self.state, ProcessState::Running(_))
+    }
+
     pub fn context(&mut self) -> Option<&mut ProcessContext> {
         match &mut self.state {
             ProcessState::Runnable(context) => Some(context),

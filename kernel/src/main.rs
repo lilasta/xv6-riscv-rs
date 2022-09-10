@@ -61,6 +61,7 @@ mod riscv;
 mod start;
 mod syscall;
 mod trampoline;
+mod trap;
 mod uart;
 mod undrop;
 mod virtio;

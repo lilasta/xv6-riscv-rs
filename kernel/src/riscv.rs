@@ -7,7 +7,7 @@ pub macro read_csr($csr:ident) {{
 }}
 
 pub macro write_csr($csr:ident, $val:expr) {
-    asm!(concat!("csrw ", stringify!($csr), ", {r}"), r = in(reg) $val);
+    asm!(concat!("csrw ", stringify!($csr), ", {r}"), r = in(reg) $val)
 }
 
 pub macro read_reg($reg:ident) {{
