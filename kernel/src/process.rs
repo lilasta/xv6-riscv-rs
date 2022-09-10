@@ -17,8 +17,8 @@ use crate::lock::{Lock, LockGuard};
 use crate::memory_layout::{kstack, kstack_index};
 use crate::process::process::ProcessContext;
 use crate::riscv::{self, enable_interrupt};
-use crate::vm::binding::{copyin, copyout};
-use crate::vm::uvminit;
+use crate::vm::binding::copyin;
+use crate::vm::{uvminit, PageTableExtension};
 use crate::{config::NOFILE, riscv::paging::PageTable};
 use crate::{cstr, interrupt};
 
@@ -55,6 +55,23 @@ pub unsafe fn read_memory<T>(addr: usize) -> Option<T> {
     }
 
     Some(dst.assume_init())
+}
+
+// Copy to either a user address, or kernel address,
+// depending on usr_dst.
+// Returns 0 on success, -1 on error.
+pub unsafe fn copyout_either<T: ?Sized>(user_dst: bool, dst: usize, src: &T) -> bool {
+    let proc_context = current().unwrap().get_mut().context().unwrap();
+    if user_dst {
+        proc_context.pagetable.write(dst, src).is_ok()
+    } else {
+        core::ptr::copy(
+            <*const T>::cast::<u8>(src),
+            <*mut u8>::from_bits(dst),
+            core::mem::size_of_val(src),
+        );
+        true
+    }
 }
 
 pub fn id() -> Option<usize> {
@@ -192,19 +209,6 @@ pub fn free_pagetable(mut pagetable: PageTable, size: usize) {
         pagetable.unmap(0, crate::riscv::paging::pg_roundup(size) / PGSIZE, true);
     }
     pagetable.deallocate();
-}
-
-// Copy to either a user address, or kernel address,
-// depending on usr_dst.
-// Returns 0 on success, -1 on error.
-pub unsafe fn copyout_either(user_dst: bool, dst: usize, src: usize, len: usize) -> bool {
-    let proc_context = current().unwrap().get_mut().context().unwrap();
-    if user_dst {
-        copyout(proc_context.pagetable, dst, src, len) == 0
-    } else {
-        core::ptr::copy(<*const u8>::from_bits(src), <*mut u8>::from_bits(dst), len);
-        true
-    }
 }
 
 // Copy from either a user address, or kernel address,
@@ -379,12 +383,13 @@ pub unsafe fn wait(addr: Option<usize>) -> Option<usize> {
                 if let ProcessState::Zombie(_, exit_status) = process.state {
                     let pid = process.pid;
                     if let Some(addr) = addr {
-                        if copyout(
-                            current.get_mut().context().unwrap().pagetable,
-                            addr,
-                            &exit_status as *const _ as usize,
-                            core::mem::size_of_val(&exit_status),
-                        ) < 0
+                        if current
+                            .get_mut()
+                            .context()
+                            .unwrap()
+                            .pagetable
+                            .write(addr, &exit_status)
+                            .is_err()
                         {
                             return None;
                         }
@@ -527,7 +532,11 @@ mod binding {
 
     #[no_mangle]
     unsafe extern "C" fn either_copyout(user_dst: i32, dst: usize, src: usize, len: usize) -> i32 {
-        match copyout_either(user_dst != 0, dst, src, len) {
+        match copyout_either(
+            user_dst != 0,
+            dst,
+            core::slice::from_raw_parts(<*const u8>::from_bits(src), len),
+        ) {
             true => 0,
             false => -1,
         }

@@ -162,9 +162,8 @@ impl<'a, L: Lock<Target = Console>> LockGuard<'a, L> {
                 break;
             }
 
-            let mut cbuf = c;
             unsafe {
-                if !copyout_either(dst_user != 0, dst, core::ptr::addr_of_mut!(cbuf).addr(), 1) {
+                if !copyout_either(dst_user != 0, dst, &c) {
                     break;
                 }
             }

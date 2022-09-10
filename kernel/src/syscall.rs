@@ -12,7 +12,7 @@ use crate::{
     lock::{spin::SpinLock, Lock},
     log, process,
     riscv::paging::PGSIZE,
-    vm::binding::{copyinstr, copyout},
+    vm::{binding::copyinstr, PageTableExtension},
 };
 
 pub enum SystemCall {
@@ -437,20 +437,9 @@ fn sys_pipe() -> Result<u64, ()> {
         return Err(());
     };
 
-    if unsafe {
-        copyout(
-            context.pagetable,
-            fdarray,
-            core::ptr::addr_of!(fd0).addr(),
-            core::mem::size_of::<u32>(),
-        ) < 0
-            || copyout(
-                context.pagetable,
-                fdarray + core::mem::size_of::<u32>(),
-                core::ptr::addr_of!(fd1).addr(),
-                core::mem::size_of::<u32>(),
-            ) < 0
-    } {
+    let pair = [fd0 as u32, fd1 as u32];
+
+    if unsafe { context.pagetable.write(fdarray, &pair).is_err() } {
         context.ofile[fd0] = core::ptr::null_mut();
         context.ofile[fd1] = core::ptr::null_mut();
         unsafe {

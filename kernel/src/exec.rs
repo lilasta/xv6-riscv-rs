@@ -7,7 +7,7 @@ use crate::{
     log,
     process::{allocate_pagetable, free_pagetable, process::ProcessContext},
     riscv::paging::{pg_roundup, PageTable, PGSIZE},
-    vm::binding::copyout,
+    vm::PageTableExtension,
 };
 
 unsafe fn ptr_to_slice<'a, T>(start: *const *const T) -> &'a [*const T] {
@@ -138,7 +138,7 @@ pub unsafe fn execute(
             bad!(sz);
         }
 
-        if copyout(pagetable, sp, arg.as_ptr() as usize, len) < 0 {
+        if pagetable.write(sp, arg.to_bytes_with_nul()).is_err() {
             bad!(sz);
         }
 
@@ -154,13 +154,8 @@ pub unsafe fn execute(
         bad!(sz);
     }
 
-    if copyout(
-        pagetable,
-        sp,
-        ustack.as_ptr() as usize,
-        (argv.len() + 1) * core::mem::size_of::<usize>(),
-    ) < 0
-    {
+    let ustack_with_nul = &ustack[..(argv.len() + 1)];
+    if pagetable.write(sp, ustack_with_nul).is_err() {
         bad!(sz);
     }
 
