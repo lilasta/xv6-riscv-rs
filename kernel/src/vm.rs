@@ -6,7 +6,7 @@ use crate::{
     allocator::KernelAllocator,
     memory_layout::{symbol_addr, KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, UART0, VIRTIO0},
     process,
-    riscv::paging::{PageTable, PGSIZE, PTE},
+    riscv::paging::{pg_rounddown, PageTable, PGSIZE, PTE},
 };
 
 // kernel.ld sets this to end of kernel code.
@@ -86,6 +86,41 @@ pub unsafe fn uvminit(mut pagetable: PageTable, src: *const u8, size: usize) {
     core::ptr::copy_nonoverlapping(src, mem.as_ptr(), size);
 }
 
+pub trait PageTableExtension {
+    unsafe fn write<T: ?Sized>(&self, dst_va: usize, src: &T) -> Result<(), usize>;
+}
+
+impl PageTableExtension for PageTable {
+    unsafe fn write<T: ?Sized>(&self, mut dst_va: usize, src: &T) -> Result<(), usize> {
+        let src_size = core::mem::size_of_val(src);
+
+        let mut copied = 0;
+        while copied < src_size {
+            let va0 = pg_rounddown(dst_va);
+
+            let Some(pa0) = self.virtual_to_physical(va0) else {
+                return Err(copied);
+            };
+
+            let offset = dst_va - va0;
+            let remain = src_size - copied;
+            let bytes = (PGSIZE - offset).min(remain);
+
+            unsafe {
+                core::ptr::copy(
+                    <*const T>::cast::<u8>(src).add(copied),
+                    <*mut u8>::from_bits(pa0 + offset),
+                    bytes,
+                );
+            }
+
+            copied += bytes;
+            dst_va = va0 + PGSIZE;
+        }
+        Ok(())
+    }
+}
+
 pub mod binding {
     use core::arch::riscv64::sfence_vma;
 
@@ -112,32 +147,20 @@ pub mod binding {
     // Copy len bytes from src to virtual address dstva in a given page table.
     // Return 0 on success, -1 on error.
     #[no_mangle]
-    pub unsafe extern "C" fn copyout(
+    unsafe extern "C" fn copyout(
         pagetable: PageTable,
-        mut dst_va: usize,
-        mut src: usize,
-        mut len: usize,
+        dst_va: usize,
+        src: usize,
+        len: usize,
     ) -> i32 {
-        while len > 0 {
-            let va0 = pg_rounddown(dst_va);
-            let Some(pa0) = pagetable.virtual_to_physical(va0) else {
-                return -1;
-            };
-
-            let offset = dst_va - va0;
-            let n = (PGSIZE - offset).min(len);
-
-            core::ptr::copy(
-                <*const u8>::from_bits(src),
-                <*mut u8>::from_bits(pa0 + offset),
-                n,
-            );
-
-            len -= n;
-            src += n;
-            dst_va = va0 + PGSIZE;
+        let result = pagetable.write(
+            dst_va,
+            core::slice::from_raw_parts(<*const u8>::from_bits(src), len),
+        );
+        match result {
+            Ok(_) => 0,
+            Err(_) => -1,
         }
-        0
     }
 
     // Copy from user to kernel.

@@ -1,5 +1,7 @@
 use core::{ffi::CStr, mem::MaybeUninit, ptr::NonNull};
 
+use arrayvec::ArrayVec;
+
 use crate::{
     allocator::KernelAllocator,
     config::{MAXARG, MAXPATH, NDEV},
@@ -12,7 +14,7 @@ use crate::{
     lock::{spin::SpinLock, Lock},
     log, process,
     riscv::paging::PGSIZE,
-    vm::binding::{copyinstr, copyout},
+    vm::{binding::copyinstr, PageTableExtension},
 };
 
 pub enum SystemCall {
@@ -39,26 +41,13 @@ pub enum SystemCall {
     Close = 21,
 }
 
-pub unsafe fn read_string_from_process_memory(
-    addr: usize,
-    buf: usize,
-    max: usize,
-) -> Result<usize, i32> {
-    unsafe fn strlen(mut s: *const u8) -> usize {
-        let mut i = 0;
-        while *s != 0 {
-            s = s.add(1);
-            i += 1;
-        }
-        i
-    }
-
+pub fn read_string_from_process_memory(dst: &mut [u8], src: usize) -> Result<&CStr, i32> {
     let process = process::context().unwrap();
-    let err = copyinstr(process.pagetable, buf, addr, max);
-    if err < 0 {
-        Err(err)
+    let result = unsafe { copyinstr(process.pagetable, dst.as_mut_ptr().addr(), src, dst.len()) };
+    if result == 0 {
+        Ok(CStr::from_bytes_until_nul(dst).unwrap())
     } else {
-        Ok(strlen(buf as *const _))
+        Err(result)
     }
 }
 
@@ -85,9 +74,9 @@ fn arg_usize<const N: usize>() -> usize {
     arg_raw::<N>() as _
 }
 
-fn arg_string<const N: usize>(buf: usize, max: usize) -> Result<usize, i32> {
+fn arg_string<const N: usize>(buf: &mut [u8]) -> Result<&CStr, i32> {
     let addr = arg_usize::<N>();
-    unsafe { read_string_from_process_memory(addr, buf, max) }
+    read_string_from_process_memory(buf, addr)
 }
 
 fn arg_fd<const N: usize>() -> Result<(usize, *mut FileC), ()> {
@@ -226,34 +215,29 @@ fn sys_fstat() -> Result<u64, ()> {
 }
 
 fn sys_link() -> Result<u64, ()> {
-    let mut new = [0u8; MAXPATH];
     let mut old = [0u8; MAXPATH];
+    let mut new = [0u8; MAXPATH];
 
-    arg_string::<0>(old.as_mut_ptr().addr(), old.len()).or(Err(()))?;
-    arg_string::<1>(new.as_mut_ptr().addr(), new.len()).or(Err(()))?;
+    let old = arg_string::<0>(&mut old).or(Err(()))?;
+    let new = arg_string::<1>(&mut new).or(Err(()))?;
 
-    let old = unsafe { CStr::from_ptr(old.as_ptr().cast()).to_str().or(Err(()))? };
-    let new = unsafe { CStr::from_ptr(new.as_ptr().cast()).to_str().or(Err(()))? };
+    let old = old.to_str().or(Err(()))?;
+    let new = new.to_str().or(Err(()))?;
 
     fs::link(new, old).and(Ok(0))
 }
 
 fn sys_unlink() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
-
-    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
-
-    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
-
+    let path = arg_string::<0>(&mut path).or(Err(()))?;
+    let path = path.to_str().or(Err(()))?;
     fs::unlink(path).and(Ok(0))
 }
 
 fn sys_open() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
-
-    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
-
-    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
+    let path = arg_string::<0>(&mut path).or(Err(()))?;
+    let path = path.to_str().or(Err(()))?;
 
     const O_RDONLY: usize = 0x000;
     const O_WRONLY: usize = 0x001;
@@ -310,33 +294,24 @@ fn sys_open() -> Result<u64, ()> {
 
 fn sys_mkdir() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
-
-    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
-
-    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
-
+    let path = arg_string::<0>(&mut path).or(Err(()))?;
+    let path = path.to_str().or(Err(()))?;
     fs::make_directory(path).and(Ok(0))
 }
 
 fn sys_mknod() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
-
-    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
-
-    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
-
+    let path = arg_string::<0>(&mut path).or(Err(()))?;
+    let path = path.to_str().or(Err(()))?;
     let major = arg_usize::<1>();
     let minor = arg_usize::<2>();
-
     fs::make_special_file(path, major as u16, minor as u16).and(Ok(0))
 }
 
 fn sys_chdir() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
-
-    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
-
-    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
+    let path = arg_string::<0>(&mut path).or(Err(()))?;
+    let path = path.to_str().or(Err(()))?;
 
     let log = log::start();
     let inode = log.search(path).ok_or(())?;
@@ -353,18 +328,18 @@ fn sys_chdir() -> Result<u64, ()> {
 }
 
 fn sys_exec() -> Result<u64, ()> {
-    let mut path = [0i8; MAXPATH];
+    let mut path = [0u8; MAXPATH];
+    let path = arg_string::<0>(&mut path).or(Err(()))?;
+    let path = path.to_str().or(Err(()))?;
 
-    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
-
-    let mut argv = [core::ptr::null::<i8>(); MAXARG];
+    let mut argv = ArrayVec::new();
     let argv_user = arg_usize::<1>();
 
-    let deallocate = |argv: [*const i8; _]| {
-        for ptr in argv {
-            if !ptr.is_null() {
-                KernelAllocator::get().deallocate(NonNull::new(ptr.cast_mut()).unwrap());
-            }
+    let deallocate = |argv: ArrayVec<&CStr, MAXARG>| {
+        for s in argv {
+            let ptr = s.as_ptr().cast_mut();
+            let ptr = NonNull::new(ptr).unwrap();
+            KernelAllocator::get().deallocate(ptr);
         }
     };
 
@@ -375,11 +350,12 @@ fn sys_exec() -> Result<u64, ()> {
 
     let mut i = 0;
     loop {
-        if i >= argv.len() {
+        if i >= MAXARG {
             return bad(argv);
         }
 
-        let addr = unsafe { process::read_memory(argv_user + core::mem::size_of::<usize>() * i) };
+        let addr =
+            unsafe { process::read_memory::<usize>(argv_user + core::mem::size_of::<usize>() * i) };
         let Some(addr) = addr else {
             return bad(argv);
         };
@@ -388,20 +364,22 @@ fn sys_exec() -> Result<u64, ()> {
             break;
         }
 
-        let arg = KernelAllocator::get().allocate::<i8>();
-        match arg {
-            Some(arg) => argv[i] = arg.as_ptr().cast_const(),
-            None => return bad(argv),
-        }
-
-        if unsafe { read_string_from_process_memory(addr, argv[i].addr(), PGSIZE).is_err() } {
+        let mem = KernelAllocator::get().allocate::<u8>();
+        let Some(mem) = mem else {
             return bad(argv);
-        }
+        };
+
+        let buf = unsafe { core::slice::from_raw_parts_mut(mem.as_ptr(), PGSIZE) };
+        let Ok(cstr) = read_string_from_process_memory(buf, addr) else {
+            return bad(argv);
+        };
+
+        argv.push(cstr);
 
         i += 1;
     }
 
-    let ret = unsafe { execute(process::context().unwrap(), path.as_ptr(), argv.as_ptr()) };
+    let ret = unsafe { execute(process::context().unwrap(), path, &argv) };
     deallocate(argv);
     Ok(ret as u64)
 }
@@ -437,20 +415,9 @@ fn sys_pipe() -> Result<u64, ()> {
         return Err(());
     };
 
-    if unsafe {
-        copyout(
-            context.pagetable,
-            fdarray,
-            core::ptr::addr_of!(fd0).addr(),
-            core::mem::size_of::<u32>(),
-        ) < 0
-            || copyout(
-                context.pagetable,
-                fdarray + core::mem::size_of::<u32>(),
-                core::ptr::addr_of!(fd1).addr(),
-                core::mem::size_of::<u32>(),
-            ) < 0
-    } {
+    let pair = [fd0 as u32, fd1 as u32];
+
+    if unsafe { context.pagetable.write(fdarray, &pair).is_err() } {
         context.ofile[fd0] = core::ptr::null_mut();
         context.ofile[fd1] = core::ptr::null_mut();
         unsafe {

@@ -1,4 +1,4 @@
-use core::ffi::{c_char, CStr};
+use core::ffi::CStr;
 
 use crate::{
     config::MAXARG,
@@ -7,16 +7,8 @@ use crate::{
     log,
     process::{allocate_pagetable, free_pagetable, process::ProcessContext},
     riscv::paging::{pg_roundup, PageTable, PGSIZE},
-    vm::binding::copyout,
+    vm::PageTableExtension,
 };
-
-unsafe fn ptr_to_slice<'a, T>(start: *const *const T) -> &'a [*const T] {
-    let mut ptr = start;
-    while !(*ptr).is_null() {
-        ptr = ptr.offset(1);
-    }
-    core::slice::from_ptr_range(start..ptr)
-}
 
 fn load_seg(
     pagetable: &mut PageTable,
@@ -38,15 +30,9 @@ fn load_seg(
     true
 }
 
-pub unsafe fn execute(
-    current_context: &mut ProcessContext,
-    path: *const c_char,
-    argv: *const *const c_char,
-) -> i32 {
-    let path = CStr::from_ptr(path).to_str().unwrap();
-
+pub unsafe fn execute(current_context: &mut ProcessContext, path: &str, argv: &[&CStr]) -> i32 {
     let log = log::start();
-    let Some( ip) = log.search(path) else {
+    let Some(ip) = log.search(path) else {
         return -1;
     };
 
@@ -123,8 +109,7 @@ pub unsafe fn execute(
 
     // Push argument strings, prepare rest of stack in ustack.
     let mut ustack = [0usize; MAXARG];
-    let argv = ptr_to_slice(argv);
-    for (i, arg) in argv.iter().map(|arg| CStr::from_ptr(*arg)).enumerate() {
+    for (i, arg) in argv.iter().enumerate() {
         if i >= MAXARG {
             bad!(sz);
         }
@@ -138,7 +123,7 @@ pub unsafe fn execute(
             bad!(sz);
         }
 
-        if copyout(pagetable, sp, arg.as_ptr() as usize, len) < 0 {
+        if pagetable.write(sp, arg.to_bytes_with_nul()).is_err() {
             bad!(sz);
         }
 
@@ -154,13 +139,8 @@ pub unsafe fn execute(
         bad!(sz);
     }
 
-    if copyout(
-        pagetable,
-        sp,
-        ustack.as_ptr() as usize,
-        (argv.len() + 1) * core::mem::size_of::<usize>(),
-    ) < 0
-    {
+    let ustack_with_nul = &ustack[..(argv.len() + 1)];
+    if pagetable.write(sp, ustack_with_nul).is_err() {
         bad!(sz);
     }
 
