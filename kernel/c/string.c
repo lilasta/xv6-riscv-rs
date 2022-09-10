@@ -53,13 +53,6 @@ memmove(void *dst, const void *src, uint n)
   return dst;
 }
 
-// memcpy exists to placate GCC.  Use memmove.
-void *
-memcpy(void *dst, const void *src, uint n)
-{
-  return memmove(dst, src, n);
-}
-
 int strncmp(const char *p, const char *q, uint n)
 {
   while (n > 0 && *p && *p == *q)
@@ -80,28 +73,4 @@ strncpy(char *s, const char *t, int n)
   while (n-- > 0)
     *s++ = 0;
   return os;
-}
-
-// Like strncpy but guaranteed to NUL-terminate.
-char *
-safestrcpy(char *s, const char *t, int n)
-{
-  char *os;
-
-  os = s;
-  if (n <= 0)
-    return os;
-  while (--n > 0 && (*s++ = *t++) != 0)
-    ;
-  *s = 0;
-  return os;
-}
-
-int strlen(const char *s)
-{
-  int n;
-
-  for (n = 0; s[n]; n++)
-    ;
-  return n;
 }
