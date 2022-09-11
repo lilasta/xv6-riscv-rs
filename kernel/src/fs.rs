@@ -476,7 +476,8 @@ pub struct InodeC {
     minor: u16,
     nlink: u16,
     size: u32,
-    addrs: [u32; NDIRECT + 1],
+    addrs: [u32; NDIRECT],
+    chain: u32,
 }
 
 #[repr(C)]
@@ -697,11 +698,30 @@ impl<'a> InodeLockGuard<'a> {
     }
 
     pub fn truncate(&mut self) {
-        extern "C" {
-            fn itrunc(ip: *mut InodeC);
+        for addr in self.addrs {
+            if addr != 0 {
+                unsafe { bfree(self.dev, addr) };
+            }
+        }
+        self.addrs.fill(0);
+
+        if self.chain != 0 {
+            let buf = buffer::get(self.device_number(), self.chain as usize).unwrap();
+            let addrs = unsafe { core::slice::from_raw_parts(buf.as_ptr::<u32>(), NINDIRECT) };
+            for addr in addrs {
+                if *addr != 0 {
+                    unsafe {
+                        bfree(self.dev, *addr);
+                    }
+                }
+            }
+            buffer::release(buf);
+            unsafe { bfree(self.dev, self.chain) };
+            self.chain = 0;
         }
 
-        unsafe { itrunc(self.inode) };
+        self.size = 0;
+        self.update();
     }
 
     pub fn link(&mut self, name: &str, inode_number: usize) -> Result<(), ()> {
