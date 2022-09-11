@@ -11,7 +11,7 @@ use crate::{
     bitmap::Bitmap,
     buffer::{self, BSIZE},
     cache::CacheRc,
-    config::NINODE,
+    config::{NINODE, ROOTDEV},
     lock::{sleep::SleepLock, spin::SpinLock, Lock, LockGuard},
     log::{self, initlog, LogGuard},
 };
@@ -19,6 +19,7 @@ use crate::{
 // Directory is a file containing a sequence of dirent structures.
 pub const DIRSIZE: usize = 14;
 
+const ROOTINO: usize = 1; // root i-number
 const NDIRECT: usize = 12;
 const NINDIRECT: usize = BSIZE / core::mem::size_of::<u32>();
 
@@ -415,10 +416,6 @@ impl<'a> InodeOps for LogGuard<'a> {
     }
 
     fn search(&self, path: &str) -> Option<InodeLockGuard> {
-        extern "C" {
-            fn namei(path: *const c_char) -> *mut InodeC;
-        }
-
         unsafe {
             let inode = namei(path.as_ptr().cast());
             if inode.is_null() {
@@ -522,6 +519,10 @@ impl<'a> InodeLockGuard<'a> {
 
     pub const fn decrement_link(&mut self) {
         unsafe { (*self.inode).nlink -= 1 };
+    }
+
+    pub const fn size(&self) -> usize {
+        unsafe { (*self.inode).size as usize }
     }
 
     pub const fn device_number(&self) -> usize {
@@ -680,35 +681,57 @@ impl<'a> InodeLockGuard<'a> {
         unsafe { itrunc(self.inode) };
     }
 
-    pub fn link(&self, name: &str, inum: usize) -> Result<(), ()> {
+    pub fn link(&mut self, name: &str, inode_number: usize) -> Result<(), ()> {
         if !self.is_directory() {
             return Err(());
         }
 
-        extern "C" {
-            fn dirlink(dp: *mut InodeC, name: *const c_char, inum: u32) -> i32;
+        if self.lookup(name).is_some() {
+            return Err(());
         }
 
-        let name = CString::new(name).unwrap();
-
-        unsafe {
-            match dirlink(self.inode, name.as_ptr().cast(), inum as u32) {
-                0 => Ok(()),
-                _ => Err(()),
+        let entry_size = core::mem::size_of::<DirectoryEntry>();
+        for offset in (0..self.size()).step_by(entry_size) {
+            let mut entry = self.read::<DirectoryEntry>(offset).unwrap();
+            if entry.inode_number == 0 {
+                entry.name.fill(0);
+                entry.name[..name.len()].copy_from_slice(name.as_bytes());
+                entry.inode_number = inode_number as u16;
+                self.write(entry, offset).unwrap();
+                return Ok(());
             }
         }
+
+        // TODO: WHAT IS THIS
+        let mut entry = DirectoryEntry {
+            inode_number: inode_number as u16,
+            name: [0; _],
+        };
+        entry.name[..name.len()].copy_from_slice(name.as_bytes());
+        self.write(entry, self.size()).unwrap();
+        Ok(())
     }
 
     pub fn lookup(&self, name: &str) -> Option<(InodeLockGuard<'a>, usize)> {
-        if !self.is_directory() {
-            return None;
-        }
+        /*
+                if !self.is_directory() {
+                    return None;
+                }
 
+                let name = CString::new(name).unwrap();
+
+                for offset in (0..self.size()).step_by(core::mem::size_of::<DirectoryEntry>()) {
+                    let mut entry = self.read::<DirectoryEntry>(offset).unwrap();
+                    if entry.inode_number == 0 {
+                        continue;
+                    }
+
+                    if
+                }
+        */
         extern "C" {
             fn dirlookup(dp: *mut InodeC, name: *const c_char, poff: *mut u32) -> *mut InodeC;
         }
-
-        let name = CString::new(name).unwrap();
 
         unsafe {
             let mut poff = 0;
@@ -781,7 +804,7 @@ pub fn link(new: &str, old: &str) -> Result<(), ()> {
     };
 
     let mut name = [0u8; DIRSIZE + 1];
-    let Some(dir) = log.search_parent(new, &mut name) else {
+    let Some(mut dir) = log.search_parent(new, &mut name) else {
         return bad();
     };
 

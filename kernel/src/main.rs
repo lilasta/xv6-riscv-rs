@@ -70,6 +70,8 @@ mod undrop;
 mod virtio;
 mod vm;
 
+use core::fmt::Write;
+
 pub struct Print;
 
 impl core::fmt::Write for Print {
@@ -87,12 +89,11 @@ impl core::fmt::Write for Print {
 }
 
 pub macro print($($arg:tt)*) {{
-    use core::fmt::Write;
-    let _ = writeln!(crate::Print, "{}", format_args!($($arg)*));
+    let _ = write!(crate::Print, "{}", format_args!($($arg)*));
 }}
 
-pub macro println($fmt:expr, $($arg:tt)*) {
-    crate::print!(concat!($fmt, "\n"), $($arg)*)
+pub macro println($($arg:tt)*) {
+    let _ = writeln!(crate::Print, "{}", format_args!($($arg)*));
 }
 
 pub macro cstr($s:literal) {

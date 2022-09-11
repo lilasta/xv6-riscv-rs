@@ -494,37 +494,6 @@ dirlookup(struct inode *dp, char *name, uint *poff)
   return 0;
 }
 
-// Write a new directory entry (name, inum) into the directory dp.
-int dirlink(struct inode *dp, char *name, uint inum)
-{
-  int off;
-  struct dirent de;
-  struct inode *ip;
-
-  // Check that name is not present.
-  if ((ip = dirlookup(dp, name, 0)) != 0)
-  {
-    iput(ip);
-    return -1;
-  }
-
-  // Look for an empty dirent.
-  for (off = 0; off < dp->size; off += sizeof(de))
-  {
-    if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
-      panic("dirlink read");
-    if (de.inum == 0)
-      break;
-  }
-
-  strncpy(de.name, name, DIRSIZ);
-  de.inum = inum;
-  if (writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
-    panic("dirlink");
-
-  return 0;
-}
-
 // Paths
 
 // Copy the next path element from path into name.
