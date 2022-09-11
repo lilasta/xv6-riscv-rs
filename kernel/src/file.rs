@@ -61,7 +61,10 @@ impl File {
         match self {
             Self::Pipe { .. } => Err(()),
             Self::Inode { inode, .. } | Self::Device { inode, .. } => {
-                Ok(InodeLockGuard::new(*inode).stat())
+                let inode = InodeLockGuard::new(*inode);
+                let stat = inode.stat();
+                inode.unlock_without_put();
+                Ok(stat)
             }
         }
     }

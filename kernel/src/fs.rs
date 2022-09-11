@@ -5,6 +5,8 @@ use core::{
     ops::{Deref, DerefMut},
 };
 
+use alloc::ffi::CString;
+
 use crate::{
     bitmap::Bitmap,
     buffer::{self, BSIZE},
@@ -675,6 +677,8 @@ impl<'a> InodeLockGuard<'a> {
             fn dirlink(dp: *mut InodeC, name: *const c_char, inum: u32) -> i32;
         }
 
+        let name = CString::new(name).unwrap();
+
         unsafe {
             match dirlink(self.inode, name.as_ptr().cast(), inum as u32) {
                 0 => Ok(()),
@@ -691,6 +695,8 @@ impl<'a> InodeLockGuard<'a> {
         extern "C" {
             fn dirlookup(dp: *mut InodeC, name: *const c_char, poff: *mut u32) -> *mut InodeC;
         }
+
+        let name = CString::new(name).unwrap();
 
         unsafe {
             let mut poff = 0;
