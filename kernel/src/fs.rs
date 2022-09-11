@@ -14,6 +14,7 @@ use crate::{
     config::{NINODE, ROOTDEV},
     lock::{sleep::SleepLock, spin::SpinLock, Lock, LockGuard},
     log::{self, initlog, LogGuard},
+    process,
 };
 
 // Directory is a file containing a sequence of dirent structures.
@@ -416,13 +417,35 @@ impl<'a> InodeOps for LogGuard<'a> {
     }
 
     fn search(&self, path: &str) -> Option<InodeLockGuard> {
-        unsafe {
-            let inode = namei(path.as_ptr().cast());
-            if inode.is_null() {
-                None
-            } else {
-                Some(InodeLockGuard::new(inode))
+        /*
+        let mut inode = if path.starts_with("/") {
+            self.get(ROOTDEV, ROOTINO).unwrap()
+        } else {
+            InodeLockGuard::new(idup(process::context().unwrap().cwd))
+        };
+
+        for element in path.split_terminator("/") {
+            if element.is_empty() {
+                continue;
             }
+
+            if element == "." {
+                continue;
+            }
+
+            match inode.lookup(element) {
+                Some((next, _)) => inode = next,
+                _ => return None,
+            }
+        }
+
+        Some(inode)
+        */
+        let inode = namei(path.as_ptr().cast());
+        if inode.is_null() {
+            None
+        } else {
+            Some(InodeLockGuard::new(inode))
         }
     }
 
@@ -713,35 +736,38 @@ impl<'a> InodeLockGuard<'a> {
     }
 
     pub fn lookup(&self, name: &str) -> Option<(InodeLockGuard<'a>, usize)> {
-        /*
-                if !self.is_directory() {
-                    return None;
-                }
-
-                let name = CString::new(name).unwrap();
-
-                for offset in (0..self.size()).step_by(core::mem::size_of::<DirectoryEntry>()) {
-                    let mut entry = self.read::<DirectoryEntry>(offset).unwrap();
-                    if entry.inode_number == 0 {
-                        continue;
-                    }
-
-                    if
-                }
-        */
-        extern "C" {
-            fn dirlookup(dp: *mut InodeC, name: *const c_char, poff: *mut u32) -> *mut InodeC;
+        if !self.is_directory() {
+            return None;
         }
 
-        unsafe {
-            let mut poff = 0;
-            let inode = dirlookup(self.inode, name.as_ptr().cast(), &mut poff);
-            if inode.is_null() {
-                None
-            } else {
-                Some((InodeLockGuard::new(inode), poff as usize))
+        let name = CString::new(name).unwrap();
+
+        for offset in (0..self.size()).step_by(core::mem::size_of::<DirectoryEntry>()) {
+            let entry = self.read::<DirectoryEntry>(offset).unwrap();
+            if entry.inode_number == 0 {
+                continue;
+            }
+
+            let mut cmp = [0; DIRSIZE];
+            cmp[..name.as_bytes().len()].copy_from_slice(name.as_bytes());
+
+            if cmp == entry.name {
+                extern "C" {
+                    fn iget(device: u32, inode: u32) -> *mut InodeC;
+                }
+
+                unsafe {
+                    let inode = iget(self.device_number() as u32, entry.inode_number as u32);
+                    return if inode.is_null() {
+                        None
+                    } else {
+                        Some((InodeLockGuard::new(inode), offset))
+                    };
+                }
             }
         }
+
+        None
     }
 
     pub fn is_empty(&self) -> Option<bool> {

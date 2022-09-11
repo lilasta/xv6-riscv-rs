@@ -102,7 +102,6 @@ pub macro cstr($s:literal) {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    use core::fmt::Write;
     let _ = writeln!(Print, "{}", info);
     loop {}
 }
