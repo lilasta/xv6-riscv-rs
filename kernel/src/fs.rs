@@ -917,3 +917,15 @@ pub fn make_special_file(path: &str, major: u16, minor: u16) -> Result<(), ()> {
     log.create(path, 3, major, minor)?; // TODO: 3 == T_DEVICE
     Ok(())
 }
+
+mod binding {
+    use super::*;
+
+    #[no_mangle]
+    unsafe extern "C" fn ialloc(dev: u32, kind: u16) -> u32 {
+        let log = log::get_guard_without_start();
+        let result = FS.inode_alloc.allocate(dev as usize, kind, &log).unwrap();
+        core::mem::forget(log);
+        result as u32
+    }
+}
