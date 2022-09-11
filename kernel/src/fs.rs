@@ -22,6 +22,7 @@ pub const DIRSIZE: usize = 14;
 const NDIRECT: usize = 12;
 const NINDIRECT: usize = BSIZE / core::mem::size_of::<u32>();
 
+const MAXFILE: usize = NDIRECT + NINDIRECT;
 const INODES_PER_BLOCK: usize = BSIZE / core::mem::size_of::<Inode>();
 const FSMAGIC: u32 = 0x10203040;
 
@@ -136,8 +137,7 @@ impl<const N: usize> InodeAllocator<N> {
         })?;
 
         if is_new {
-            let read = self.read_inode(device, inode_index).unwrap();
-            *self.inodes[cache_index].lock() = read;
+            *self.inodes[cache_index].lock() = self.read_inode(device, inode_index).unwrap();
         }
 
         Some(InodeGuard {
@@ -549,14 +549,12 @@ impl<'a> InodeLockGuard<'a> {
     }
 
     pub fn stat(&self) -> Stat {
-        extern "C" {
-            fn stati(ip: *mut InodeC, stat: *mut Stat);
-        }
-
-        unsafe {
-            let mut stat = MaybeUninit::uninit();
-            stati(self.inode, stat.as_mut_ptr());
-            stat.assume_init()
+        Stat {
+            device: self.dev,
+            inode: self.inum,
+            kind: self.kind,
+            nlink: self.nlink,
+            size: self.size as usize,
         }
     }
 
@@ -612,14 +610,28 @@ impl<'a> InodeLockGuard<'a> {
         offset: usize,
         count: usize,
     ) -> Result<usize, usize> {
+        let type_size = core::mem::size_of::<T>();
+        let must_write = type_size * count;
+        /*
+
+        if offset > self.size as usize || offset.checked_add(must_write).is_none() {
+            return Err(0);
+        }
+
+        if offset + must_write > MAXFILE * BSIZE {
+            return Err(0);
+        }
+
+        let mut wrote = 0;
+        while wrote < must_write {
+            todo!()
+        } */
+
         extern "C" {
             fn writei(ip: *mut InodeC, user_src: i32, src: usize, off: u32, n: u32) -> i32;
         }
 
         unsafe {
-            let type_size = core::mem::size_of::<T>();
-            let must_write = type_size * count;
-
             let wrote = writei(
                 self.inode,
                 is_src_user as i32,
