@@ -66,11 +66,11 @@ fn print_ldflags() {
 }
 
 fn build_initcode(out_path: &PathBuf) {
-    println!("cargo:rerun-if-changed=c/initcode.S");
+    println!("cargo:rerun-if-changed=asm/initcode.S");
 
     Command::new(CC)
         .args(CFLAGS)
-        .args(&["-nostdinc", "-I.", "-Ikernel", "-c", "c/initcode.S", "-o"])
+        .args(&["-nostdinc", "-I.", "-Ikernel", "-c", "asm/initcode.S", "-o"])
         .arg(out_path.join("initcode.o"))
         .status()
         .unwrap();
