@@ -572,7 +572,13 @@ impl<'a> InodeLockGuard<'a> {
         }
     }
 
-    pub fn copy_to<T>(&self, dst: *mut T, offset: usize, count: usize) -> Result<(), usize> {
+    pub fn copy_to<T>(
+        &self,
+        is_dst_user: bool,
+        dst: *mut T,
+        offset: usize,
+        count: usize,
+    ) -> Result<usize, usize> {
         extern "C" {
             fn readi(ip: *mut InodeC, user_dst: i32, dst: usize, off: u32, n: u32) -> i32;
         }
@@ -581,36 +587,43 @@ impl<'a> InodeLockGuard<'a> {
             let type_size = core::mem::size_of::<T>();
             let must_read = type_size * count;
 
-            let read = readi(self.inode, 0, dst.addr(), offset as u32, must_read as u32) as usize;
+            let read = readi(
+                self.inode,
+                is_dst_user as i32,
+                dst.addr(),
+                offset as u32,
+                must_read as u32,
+            ) as usize;
 
             if read == must_read {
-                Ok(())
+                Ok(must_read)
             } else {
                 Err(read)
             }
         }
     }
 
-    pub fn read<T>(&self, offset: usize) -> Result<T, usize> {
-        let mut value = MaybeUninit::<T>::uninit();
-        self.copy_to(value.as_mut_ptr(), offset, 1)?;
-        Ok(unsafe { value.assume_init() })
-    }
-
-    pub fn write<T>(&mut self, mut value: T, offset: usize) -> Result<(), usize> {
+    pub fn copy_from<T>(
+        &self,
+        is_src_user: bool,
+        src: *const T,
+        offset: usize,
+        count: usize,
+    ) -> Result<usize, usize> {
         extern "C" {
             fn writei(ip: *mut InodeC, user_src: i32, src: usize, off: u32, n: u32) -> i32;
         }
 
         unsafe {
             let type_size = core::mem::size_of::<T>();
+            let must_write = type_size * count;
 
             let wrote = writei(
                 self.inode,
-                0,
-                core::ptr::addr_of_mut!(value).addr(),
+                is_src_user as i32,
+                src.addr(),
                 offset as u32,
-                type_size as u32,
+                must_write as u32,
             );
 
             let wrote = if wrote < 0 {
@@ -619,12 +632,22 @@ impl<'a> InodeLockGuard<'a> {
                 wrote as usize
             };
 
-            if wrote == type_size {
-                Ok(())
+            if wrote == must_write {
+                Ok(must_write)
             } else {
                 Err(wrote)
             }
         }
+    }
+
+    pub fn read<T>(&self, offset: usize) -> Result<T, usize> {
+        let mut value = MaybeUninit::<T>::uninit();
+        self.copy_to(false, value.as_mut_ptr(), offset, 1)?;
+        Ok(unsafe { value.assume_init() })
+    }
+
+    pub fn write<T>(&mut self, value: T, offset: usize) -> Result<(), usize> {
+        self.copy_from(false, &value, offset, 1).and(Ok(()))
     }
 
     pub fn update(&mut self) {
@@ -757,7 +780,25 @@ pub fn link(new: &str, old: &str) -> Result<(), ()> {
 }
 
 #[deprecated]
-pub fn put(ip: *mut InodeC) {
+pub fn namei(path: *const c_char) -> *mut InodeC {
+    extern "C" {
+        fn namei(path: *const c_char) -> *mut InodeC;
+    }
+
+    unsafe { namei(path) }
+}
+
+#[deprecated]
+pub fn idup(ip: *mut InodeC) -> *mut InodeC {
+    extern "C" {
+        fn idup(ip: *mut InodeC) -> *mut InodeC;
+    }
+
+    unsafe { idup(ip) }
+}
+
+#[deprecated]
+pub fn put(_log: &crate::log::LogGuard, ip: *mut InodeC) {
     extern "C" {
         fn iput(ip: *mut InodeC);
     }

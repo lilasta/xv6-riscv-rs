@@ -103,8 +103,7 @@ impl<const SIZE: usize> PipeInner<SIZE> {
     }
 }
 
-// TODO: Remove repr
-#[repr(C)]
+#[derive(Debug)]
 pub struct Pipe<const SIZE: usize> {
     inner: NonNull<SpinLock<PipeInner<SIZE>>>,
     write: bool,

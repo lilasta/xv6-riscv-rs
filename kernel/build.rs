@@ -12,7 +12,6 @@ const SRCS: &[&str] = &[
     "main.c",
     "fs.c",
     "sleeplock.c",
-    "file.c",
 ];
 
 const CFLAGS: &[&'static str] = &[

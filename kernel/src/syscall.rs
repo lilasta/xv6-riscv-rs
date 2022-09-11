@@ -1,13 +1,12 @@
 use core::{ffi::CStr, ptr::NonNull};
 
+use alloc::sync::Arc;
+
 use crate::{
     allocator::KernelAllocator,
     config::{MAXARG, MAXPATH, NDEV},
     exec::execute,
-    file::{
-        filealloc, fileclose, filedup, fileread, filestat, filewrite, FileC, FD_DEVICE, FD_INODE,
-        FD_PIPE,
-    },
+    file::File,
     fs::{self, InodeOps},
     lock::{spin::SpinLock, Lock},
     log,
@@ -92,21 +91,19 @@ fn arg_string<const N: usize>(buf: usize, max: usize) -> Result<usize, i32> {
     unsafe { read_string_from_process_memory(addr, buf, max) }
 }
 
-fn arg_fd<const N: usize>() -> Result<(usize, *mut FileC), ()> {
+fn arg_fd<const N: usize>() -> Result<(usize, &'static Arc<File>), ()> {
     let context = process::context().unwrap();
     let fd = arg_usize::<N>();
-    let f = context.ofile.get(fd).copied().ok_or(())?;
-    if f.is_null() {
-        return Err(());
-    }
-    Ok((fd, f.cast()))
+    let f = context.ofile.get(fd).ok_or(())?;
+    let f = f.as_ref().ok_or(())?;
+    Ok((fd, f))
 }
 
-fn fdalloc(f: *mut FileC) -> Result<usize, ()> {
+fn fdalloc(f: Arc<File>) -> Result<usize, ()> {
     let context = process::context().ok_or(())?;
     for (fd, file) in context.ofile.iter_mut().enumerate() {
-        if file.is_null() {
-            *file = f.cast();
+        if file.is_none() {
+            *file = Some(f);
             return Ok(fd);
         }
     }
@@ -192,38 +189,47 @@ fn sys_uptime() -> Result<u64, ()> {
 
 fn sys_dup() -> Result<u64, ()> {
     let (fd, f) = arg_fd::<0>()?;
-    fdalloc(f)?;
-    unsafe { filedup(f) };
+    fdalloc(f.clone())?;
     Ok(fd as u64)
 }
 
 fn sys_read() -> Result<u64, ()> {
     let (_, f) = arg_fd::<0>()?;
     let addr = arg_usize::<1>();
-    let n = arg_i32::<2>();
-    Ok(unsafe { fileread(f, addr, n) as u64 })
+    let n = arg_usize::<2>();
+    let result = f.read(addr, n);
+    result.map(|read| read as u64)
 }
 
 fn sys_write() -> Result<u64, ()> {
     let (_, f) = arg_fd::<0>()?;
 
     let addr = arg_usize::<1>();
-    let n = arg_i32::<2>();
-    Ok(unsafe { filewrite(f, addr, n) as u64 })
+    let n = arg_usize::<2>();
+    let result = f.write(addr, n);
+    result.map(|wrote| wrote as u64)
 }
 
 fn sys_close() -> Result<u64, ()> {
     let (fd, f) = arg_fd::<0>()?;
     let context = process::context().unwrap();
-    context.ofile[fd] = core::ptr::null_mut();
-    unsafe { fileclose(f) };
+    context.ofile[fd] = None;
     Ok(0)
 }
 
 fn sys_fstat() -> Result<u64, ()> {
     let (_, f) = arg_fd::<0>()?;
     let addr = arg_usize::<1>();
-    Ok(unsafe { filestat(f, addr) as u64 })
+
+    let context = process::context().unwrap();
+    let Ok(stat) = f.stat() else {
+        return Err(())
+    };
+
+    match unsafe { context.pagetable.write(addr, &stat) } {
+        Ok(_) => Ok(0),
+        Err(_) => Err(()),
+    }
 }
 
 fn sys_link() -> Result<u64, ()> {
@@ -278,28 +284,20 @@ fn sys_open() -> Result<u64, ()> {
         return Err(());
     }
 
-    let file = unsafe { filealloc() };
-    if file.is_null() {
-        return Err(());
-    }
+    let ip = core::ptr::addr_of_mut!(*inode).cast();
+    let readable = mode & O_WRONLY == 0;
+    let writable = mode & O_WRONLY != 0 || mode & O_RDWR != 0;
 
-    let file = unsafe { &mut *file };
-    let Ok(fd) =  fdalloc(file) else {
-        unsafe { fileclose(file) };
-        return Err(());
+    let file = if inode.is_device() {
+        File::new_device(ip, inode.device_major().unwrap(), readable, writable)
+    } else {
+        File::new_inode(ip, readable, writable)
     };
 
-    if inode.is_device() {
-        file.kind = FD_DEVICE;
-        file.major = inode.device_major().unwrap() as u32;
-    } else {
-        file.kind = FD_INODE;
-        file.off = 0;
-    }
-
-    file.ip = core::ptr::addr_of_mut!(*inode).cast();
-    file.readable = mode & O_WRONLY == 0;
-    file.writable = mode & O_WRONLY != 0 || mode & O_RDWR != 0;
+    let file = Arc::new(file);
+    let Ok(fd) =  fdalloc(file) else {
+        return Err(());
+    };
 
     if mode & O_TRUNC != 0 && inode.is_file() {
         inode.truncate();
@@ -347,8 +345,8 @@ fn sys_chdir() -> Result<u64, ()> {
     }
 
     let context = process::context().unwrap();
-    fs::put(context.cwd.cast());
-    context.cwd = inode.unlock_without_put().cast();
+    fs::put(&log, context.cwd);
+    context.cwd = inode.unlock_without_put();
 
     Ok(0)
 }
@@ -412,65 +410,27 @@ fn sys_pipe() -> Result<u64, ()> {
 
     let context = process::context().unwrap();
 
-    let rf = unsafe { filealloc() };
-    let wf = unsafe { filealloc() };
-    if rf.is_null() || wf.is_null() {
-        unsafe {
-            if !rf.is_null() {
-                fileclose(rf);
-            }
-            if !wf.is_null() {
-                fileclose(wf);
-            }
-        }
-        return Err(());
-    }
-
     let Some((read, write)) = Pipe::allocate() else {
-        unsafe {
-            fileclose(rf);
-            fileclose(wf);
-        }
         return Err(());
     };
 
+    let rf = Arc::new(File::new_pipe(read));
+    let wf = Arc::new(File::new_pipe(write));
+
     let Ok(fd0) = fdalloc(rf) else {
-        unsafe {
-            fileclose(rf);
-            fileclose(wf);
-        }
         return Err(());
     };
 
     let Ok(fd1) = fdalloc(wf) else {
-        context.ofile[fd0] = core::ptr::null_mut();
-        unsafe {
-            fileclose(rf);
-            fileclose(wf);
-        }
+        context.ofile[fd0] = None;
         return Err(());
     };
-
-    unsafe {
-        (*rf).kind = FD_PIPE;
-        (*rf).readable = true;
-        (*rf).writable = false;
-        core::ptr::write(&mut (*rf).pipe, read);
-        (*wf).kind = FD_PIPE;
-        (*wf).readable = false;
-        (*wf).writable = true;
-        core::ptr::write(&mut (*wf).pipe, write);
-    }
 
     let pair = [fd0 as u32, fd1 as u32];
 
     if unsafe { context.pagetable.write(fdarray, &pair).is_err() } {
-        context.ofile[fd0] = core::ptr::null_mut();
-        context.ofile[fd1] = core::ptr::null_mut();
-        unsafe {
-            fileclose(rf);
-            fileclose(wf);
-        }
+        context.ofile[fd0] = None;
+        context.ofile[fd1] = None;
         return Err(());
     }
 

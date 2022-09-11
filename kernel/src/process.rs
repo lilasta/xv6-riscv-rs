@@ -11,6 +11,7 @@ use core::mem::MaybeUninit;
 use crate::allocator::KernelAllocator;
 use crate::bitmap::Bitmap;
 use crate::config::{NCPU, NPROC, ROOTDEV};
+use crate::fs::InodeC;
 use crate::interrupt::InterruptGuard;
 use crate::lock::spin::SpinLock;
 use crate::lock::{Lock, LockGuard};
@@ -19,7 +20,7 @@ use crate::process::process::ProcessContext;
 use crate::riscv::{self, enable_interrupt};
 use crate::vm::{uvminit, PageTableExtension};
 use crate::{config::NOFILE, riscv::paging::PageTable};
-use crate::{cstr, interrupt};
+use crate::{cstr, fs, interrupt};
 
 use crate::{
     memory_layout::{TRAMPOLINE, TRAPFRAME},
@@ -186,10 +187,7 @@ pub unsafe fn setup_init_process() {
 
     // process.name = "initcode";
 
-    extern "C" {
-        fn namei(str: *const c_char) -> *mut c_void;
-    }
-    context.cwd = namei(cstr!("/").as_ptr());
+    context.cwd = fs::namei(cstr!("/").as_ptr());
 
     let mut process = table::table().allocate_process().unwrap();
     assert!(process.pid == 1);
@@ -274,23 +272,10 @@ pub unsafe fn fork() -> Option<usize> {
     *context_new.trapframe.as_mut() = process.context().unwrap().trapframe.as_ref().clone();
     context_new.trapframe.as_mut().a0 = 0;
 
-    extern "C" {
-        fn filedup(f: *mut c_void) -> *mut c_void;
-        fn idup(f: *mut c_void) -> *mut c_void;
+    for (i, opened) in process.context().unwrap().ofile.iter().enumerate() {
+        context_new.ofile[i] = opened.clone();
     }
-
-    for (from, to) in process
-        .context()
-        .unwrap()
-        .ofile
-        .iter()
-        .zip(context_new.ofile.iter_mut())
-    {
-        if !from.is_null() {
-            *to = filedup(*from);
-        }
-    }
-    context_new.cwd = idup(process.context().unwrap().cwd);
+    context_new.cwd = fs::idup(process.context().unwrap().cwd);
 
     process_new.name = process.name;
 
@@ -450,13 +435,12 @@ pub struct ProcessGlue {
     pub pid: *mut i32,           // Process ID
 
     // these are private to the process, so p->lock need not be held.
-    pub kstack: *mut usize,                // Virtual address of kernel stack
-    pub sz: *mut usize,                    // Size of process memory (bytes)
-    pub pagetable: *mut PageTable,         // User page table
-    pub trapframe: *mut TrapFrame,         // data page for trampoline.S
-    pub ofile: *mut [*mut c_void; NOFILE], // Open files
-    pub cwd: *mut *mut c_void,             // Current directory
-    pub name: *mut [c_char; 16],           // Process name (debugging)
+    pub kstack: *mut usize,        // Virtual address of kernel stack
+    pub sz: *mut usize,            // Size of process memory (bytes)
+    pub pagetable: *mut PageTable, // User page table
+    pub trapframe: *mut TrapFrame, // data page for trampoline.S
+    pub cwd: *mut *mut InodeC,     // Current directory
+    pub name: *mut [c_char; 16],   // Process name (debugging)
     pub original: *mut c_void,
 }
 
@@ -470,7 +454,6 @@ impl ProcessGlue {
             sz: core::ptr::null_mut(),
             pagetable: core::ptr::null_mut(),
             trapframe: core::ptr::null_mut(),
-            ofile: core::ptr::null_mut(),
             cwd: core::ptr::null_mut(),
             name: core::ptr::null_mut(),
             original: core::ptr::null_mut(),
@@ -500,7 +483,6 @@ impl ProcessGlue {
             sz: &mut context.sz,
             pagetable: &mut context.pagetable,
             trapframe: context.trapframe.as_ptr(),
-            ofile: &mut context.ofile,
             cwd: &mut context.cwd,
             name: &mut process.name,
             original,

@@ -29,7 +29,7 @@ fn load_seg(
         let pa = pagetable.virtual_to_physical(va + i).unwrap();
         let n = (size - i).min(PGSIZE);
         if inode
-            .copy_to(<*mut u8>::from_bits(pa), offset + i, n)
+            .copy_to(false, <*mut u8>::from_bits(pa), offset + i, n)
             .is_err()
         {
             return false;

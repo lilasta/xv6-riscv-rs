@@ -183,7 +183,10 @@ impl<'a, L: Lock<Target = Console>> LockGuard<'a, L> {
 }
 
 mod binding {
-    use crate::{file::devsw, lock::spin::SpinLock};
+    use crate::{
+        file::{devsw, DeviceFile},
+        lock::spin::SpinLock,
+    };
 
     use super::*;
 
@@ -204,18 +207,20 @@ mod binding {
 
         // connect read and write system calls
         // to consoleread and consolewrite.
-        devsw[1].read = consoleread;
-        devsw[1].write = consolewrite;
+        devsw[1] = Some(DeviceFile {
+            read: consoleread,
+            write: consolewrite,
+        });
     }
 
     #[no_mangle]
-    extern "C" fn consolewrite(src_user: i32, src: usize, n: i32) -> i32 {
-        Console::write(src_user as usize, src, n as usize) as i32
+    extern "C" fn consolewrite(src_user: i32, src: usize, n: usize) -> i32 {
+        Console::write(src_user as usize, src, n) as i32
     }
 
     #[no_mangle]
-    extern "C" fn consoleread(dst_user: i32, dst: usize, n: i32) -> i32 {
-        CONSOLE.lock().read(dst_user as usize, dst, n as usize)
+    extern "C" fn consoleread(dst_user: i32, dst: usize, n: usize) -> i32 {
+        CONSOLE.lock().read(dst_user as usize, dst, n)
     }
 
     #[no_mangle]

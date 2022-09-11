@@ -1,25 +1,29 @@
-use core::ffi::c_void;
+use core::sync::atomic::{AtomicUsize, Ordering::*};
 
 use crate::{
-    config::NDEV,
+    buffer::BSIZE,
+    config::{MAXOPBLOCKS, NDEV},
     fs::{self, InodeC, InodeLockGuard, Stat},
+    log,
     pipe::Pipe,
 };
 
 pub const PIPESIZE: usize = 512;
 
+#[derive(Debug)]
 pub enum File {
     Pipe {
         pipe: Pipe<PIPESIZE>,
     },
     Inode {
         inode: *mut InodeC,
-        offset: usize,
+        offset: AtomicUsize,
         readable: bool,
         writable: bool,
     },
     Device {
         inode: *mut InodeC,
+        major: usize,
         readable: bool,
         writable: bool,
     },
@@ -28,6 +32,29 @@ pub enum File {
 impl File {
     pub const fn new_pipe(pipe: Pipe<PIPESIZE>) -> Self {
         Self::Pipe { pipe }
+    }
+
+    pub const fn new_inode(inode: *mut InodeC, readable: bool, writable: bool) -> Self {
+        Self::Inode {
+            inode,
+            offset: AtomicUsize::new(0),
+            readable,
+            writable,
+        }
+    }
+
+    pub const fn new_device(
+        inode: *mut InodeC,
+        major: usize,
+        readable: bool,
+        writable: bool,
+    ) -> Self {
+        Self::Device {
+            inode,
+            major,
+            readable,
+            writable,
+        }
     }
 
     pub fn stat(&self) -> Result<Stat, ()> {
@@ -40,11 +67,117 @@ impl File {
     }
 
     pub fn read(&self, addr: usize, n: usize) -> Result<usize, ()> {
-        todo!()
+        match self {
+            Self::Pipe { pipe } => pipe.read(addr, n),
+            Self::Inode {
+                inode,
+                offset,
+                readable,
+                ..
+            } => {
+                if !*readable {
+                    return Err(());
+                }
+
+                let inode = InodeLockGuard::new(*inode);
+                let result =
+                    inode.copy_to(true, <*mut u8>::from_bits(addr), offset.load(Acquire), n);
+                inode.unlock_without_put();
+
+                let read = match result {
+                    Ok(read) => read,
+                    Err(read) => read,
+                };
+
+                offset.fetch_add(read, Release);
+                Ok(read)
+            }
+            Self::Device {
+                major, readable, ..
+            } => {
+                if !*readable {
+                    return Err(());
+                }
+
+                let device = unsafe { devsw.get(*major).ok_or(())? };
+                let result = (device.as_ref().unwrap().read)(1, addr, n);
+                if result < 0 {
+                    Err(())
+                } else {
+                    Ok(result as usize)
+                }
+            }
+        }
     }
 
-    pub fn write(&mut self, addr: usize, n: usize) -> Result<usize, ()> {
-        todo!()
+    pub fn write(&self, addr: usize, n: usize) -> Result<usize, ()> {
+        match self {
+            Self::Pipe { pipe } => pipe.write(addr, n),
+            Self::Inode {
+                inode,
+                offset,
+                writable,
+                ..
+            } => {
+                if !*writable {
+                    return Err(());
+                }
+
+                // write a few blocks at a time to avoid exceeding
+                // the maximum log transaction size, including
+                // i-node, indirect block, allocation blocks,
+                // and 2 blocks of slop for non-aligned writes.
+                // this really belongs lower down, since writei()
+                // might be writing a device like the console.
+                let max = ((MAXOPBLOCKS - 1 - 1 - 2) / 2) * BSIZE;
+                let mut i = 0;
+                while i < n {
+                    let n = (n - i).min(max);
+
+                    let log = log::start();
+                    let inode = InodeLockGuard::new(*inode);
+                    let result = inode.copy_from(
+                        true,
+                        <*const u8>::from_bits(addr + i),
+                        offset.load(Acquire),
+                        n,
+                    );
+                    let wrote = match result {
+                        Ok(wrote) => wrote,
+                        Err(wrote) => wrote,
+                    };
+                    offset.fetch_add(wrote, Release);
+                    inode.unlock_without_put();
+                    drop(log);
+
+                    if result.is_err() {
+                        break;
+                    }
+                    i += n;
+                }
+
+                if i == n {
+                    Ok(n)
+                } else {
+                    Err(())
+                }
+            }
+            Self::Device {
+                major, writable, ..
+            } => {
+                if !*writable {
+                    return Err(());
+                }
+
+                let device = unsafe { devsw.get(*major).ok_or(())? };
+                let result = (device.as_ref().unwrap().write)(1, addr, n);
+                if result < 0 {
+                    Err(())
+                } else {
+                    Ok(result as usize)
+                }
+            }
+        }
     }
 }
 
@@ -53,7 +186,8 @@ impl Drop for File {
         match self {
             Self::Pipe { .. } => {}
             Self::Inode { inode, .. } | Self::Device { inode, .. } => {
-                fs::put(*inode);
+                let log = log::start();
+                fs::put(&log, *inode);
             }
         }
     }
@@ -61,36 +195,8 @@ impl Drop for File {
 
 #[repr(C)]
 pub struct DeviceFile {
-    pub read: extern "C" fn(i32, usize, i32) -> i32,
-    pub write: extern "C" fn(i32, usize, i32) -> i32,
+    pub read: extern "C" fn(i32, usize, usize) -> i32,
+    pub write: extern "C" fn(i32, usize, usize) -> i32,
 }
 
-#[repr(C)]
-pub struct FileC {
-    pub kind: u32,
-    pub refcnt: u32,
-    pub readable: bool,
-    pub writable: bool,
-    pub ip: *mut c_void,
-    pub off: u32,
-    pub major: u32,
-    pub pipe: Pipe<PIPESIZE>,
-}
-
-extern "C" {
-    pub fn filedup(f: *mut FileC) -> *mut FileC;
-    pub fn fileread(f: *mut FileC, addr: usize, size: i32) -> i32;
-    pub fn filewrite(f: *mut FileC, addr: usize, size: i32) -> i32;
-    pub fn fileclose(f: *mut FileC);
-    pub fn filestat(f: *mut FileC, addr: usize) -> i32;
-    pub fn filealloc() -> *mut FileC;
-}
-
-pub const FD_NONE: u32 = 0;
-pub const FD_PIPE: u32 = 1;
-pub const FD_INODE: u32 = 2;
-pub const FD_DEVICE: u32 = 3;
-
-extern "C" {
-    pub static mut devsw: [DeviceFile; NDEV];
-}
+pub static mut devsw: [Option<DeviceFile>; NDEV] = [const { None }; _];

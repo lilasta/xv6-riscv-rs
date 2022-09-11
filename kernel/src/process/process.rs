@@ -3,9 +3,14 @@ use core::{
     ptr::NonNull,
 };
 
+use alloc::sync::Arc;
+
 use crate::{
     allocator::KernelAllocator,
     config::NOFILE,
+    file::File,
+    fs::{self, InodeC},
+    lock::spin::SpinLock,
     log, process,
     riscv::paging::{PageTable, PGSIZE},
 };
@@ -186,13 +191,13 @@ impl Process {
 
 #[derive(Debug)]
 pub struct ProcessContext {
-    pub kstack: usize,                 // Virtual address of kernel stack
-    pub sz: usize,                     // Size of process memory (bytes)
-    pub pagetable: PageTable,          // User page table
-    pub trapframe: NonNull<TrapFrame>, // data page for trampoline.S
-    pub context: CPUContext,           // swtch() here to run process
-    pub ofile: [*mut c_void; NOFILE],  // Open files
-    pub cwd: *mut c_void,              // Current directory
+    pub kstack: usize,                      // Virtual address of kernel stack
+    pub sz: usize,                          // Size of process memory (bytes)
+    pub pagetable: PageTable,               // User page table
+    pub trapframe: NonNull<TrapFrame>,      // data page for trampoline.S
+    pub context: CPUContext,                // swtch() here to run process
+    pub ofile: [Option<Arc<File>>; NOFILE], // Open files
+    pub cwd: *mut InodeC,                   // Current directory
 }
 
 impl ProcessContext {
@@ -212,28 +217,19 @@ impl ProcessContext {
             pagetable,
             trapframe,
             context,
-            ofile: [core::ptr::null_mut(); _],
+            ofile: [const { None }; _],
             cwd: core::ptr::null_mut(),
         })
     }
 
     // TODO: ProcessFiles
     pub fn release_files(&mut self) {
-        extern "C" {
-            fn fileclose(fd: *mut c_void);
-            fn iput(i: *mut c_void);
+        for opened in self.ofile.iter_mut() {
+            opened.take();
         }
 
-        for fd in self.ofile.iter_mut() {
-            if !fd.is_null() {
-                unsafe { fileclose(*fd) };
-                *fd = core::ptr::null_mut();
-            }
-        }
-
-        let _guard = log::start();
-        unsafe { iput(self.cwd) };
-        drop(_guard);
+        let log = log::start();
+        fs::put(&log, self.cwd);
     }
 
     pub fn resize_memory(&mut self, n: isize) -> Result<usize, ()> {
