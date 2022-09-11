@@ -472,13 +472,22 @@ impl DirectoryEntry {
     }
 }
 
+#[repr(C)]
+pub struct Stat {
+    device: u32,
+    inode: u32,
+    kind: u16,
+    nlink: u16,
+    size: usize,
+}
+
 pub struct InodeLockGuard<'a> {
     inode: *mut InodeC,
     lifetime: PhantomData<&'a ()>,
 }
 
 impl<'a> InodeLockGuard<'a> {
-    fn new(inode: *mut InodeC) -> Self {
+    pub fn new(inode: *mut InodeC) -> Self {
         extern "C" {
             fn ilock(ip: *mut InodeC);
         }
@@ -534,6 +543,18 @@ impl<'a> InodeLockGuard<'a> {
             Some(unsafe { (*self.inode).minor as usize })
         } else {
             None
+        }
+    }
+
+    pub fn stat(&self) -> Stat {
+        extern "C" {
+            fn stati(ip: *mut InodeC, stat: *mut Stat);
+        }
+
+        unsafe {
+            let mut stat = MaybeUninit::uninit();
+            stati(self.inode, stat.as_mut_ptr());
+            stat.assume_init()
         }
     }
 

@@ -1,14 +1,62 @@
 use core::ffi::c_void;
 
-use crate::{config::NDEV, pipe::Pipe};
+use crate::{
+    config::NDEV,
+    fs::{self, InodeC, InodeLockGuard, Stat},
+    pipe::Pipe,
+};
 
 pub const PIPESIZE: usize = 512;
 
-pub enum FileKind {
-    None,
-    Pipe,
-    Inode,
-    Device,
+pub enum File {
+    Pipe {
+        pipe: Pipe<PIPESIZE>,
+    },
+    Inode {
+        inode: *mut InodeC,
+        offset: usize,
+        readable: bool,
+        writable: bool,
+    },
+    Device {
+        inode: *mut InodeC,
+        readable: bool,
+        writable: bool,
+    },
+}
+
+impl File {
+    pub const fn new_pipe(pipe: Pipe<PIPESIZE>) -> Self {
+        Self::Pipe { pipe }
+    }
+
+    pub fn stat(&self) -> Result<Stat, ()> {
+        match self {
+            Self::Pipe { .. } => Err(()),
+            Self::Inode { inode, .. } | Self::Device { inode, .. } => {
+                Ok(InodeLockGuard::new(*inode).stat())
+            }
+        }
+    }
+
+    pub fn read(&self, addr: usize, n: usize) -> Result<usize, ()> {
+        todo!()
+    }
+
+    pub fn write(&mut self, addr: usize, n: usize) -> Result<usize, ()> {
+        todo!()
+    }
+}
+
+impl Drop for File {
+    fn drop(&mut self) {
+        match self {
+            Self::Pipe { .. } => {}
+            Self::Inode { inode, .. } | Self::Device { inode, .. } => {
+                fs::put(*inode);
+            }
+        }
+    }
 }
 
 #[repr(C)]

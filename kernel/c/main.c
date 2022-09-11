@@ -25,7 +25,6 @@ void main()
     plicinithart();     // ask PLIC for device interrupts
     binit();            // buffer cache
     iinit();            // inode table
-    fileinit();         // file table
     virtio_disk_init(); // emulated hard disk
     userinit();         // first user process
     __sync_synchronize();
