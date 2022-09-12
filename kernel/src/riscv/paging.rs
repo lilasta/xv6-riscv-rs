@@ -263,7 +263,7 @@ impl PageTable {
 
     // Allocate PTEs and physical memory to grow process from oldsz to
     // newsz, which need not be page aligned.  Returns new size or 0 on error.
-    pub fn grow(&mut self, old_size: usize, new_size: usize) -> Result<usize, ()> {
+    pub fn grow(&mut self, old_size: usize, new_size: usize, perm: u64) -> Result<usize, ()> {
         if new_size < old_size {
             return Ok(old_size);
         }
@@ -284,12 +284,7 @@ impl PageTable {
                 core::ptr::write_bytes(mem.as_ptr(), 0, PGSIZE);
             }
 
-            let result = self.map(
-                a,
-                mem.addr().get(),
-                PGSIZE,
-                PTE::W | PTE::X | PTE::R | PTE::U,
-            );
+            let result = self.map(a, mem.addr().get(), PGSIZE, perm | PTE::R | PTE::U);
 
             if result.is_err() {
                 KernelAllocator::get().deallocate_page(mem);

@@ -508,15 +508,6 @@ mod binding {
     }
 
     #[no_mangle]
-    unsafe extern "C" fn growproc(n: i32) -> i32 {
-        let p = current().unwrap().get_mut().context().unwrap();
-        match p.resize_memory(n as _) {
-            Ok(_) => 0,
-            Err(_) => -1,
-        }
-    }
-
-    #[no_mangle]
     unsafe extern "C" fn either_copyout(user_dst: i32, dst: usize, src: usize, len: usize) -> i32 {
         match copyout_either(
             user_dst != 0,

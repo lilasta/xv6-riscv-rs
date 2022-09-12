@@ -86,7 +86,6 @@ void printfinit(void);
 int cpuid(void);
 void exit(int);
 int fork(void);
-int growproc(int);
 int kill(int);
 struct proc myproc();
 void procinit(void);

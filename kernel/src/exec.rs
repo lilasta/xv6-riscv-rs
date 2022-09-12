@@ -7,9 +7,20 @@ use crate::{
     elf::{ELFHeader, ProgramHeader},
     fs::{InodeLockGuard, InodeOps},
     log, process,
-    riscv::paging::{pg_roundup, PageTable, PGSIZE},
+    riscv::paging::{pg_roundup, PageTable, PGSIZE, PTE},
     vm::PageTableExtension,
 };
+
+fn flags2perm(flags: u32) -> u64 {
+    let mut perm = 0;
+    if flags & 0x1 != 0 {
+        perm |= PTE::X;
+    }
+    if flags & 0x2 != 0 {
+        perm |= PTE::W;
+    }
+    perm
+}
 
 fn load_segment(
     pagetable: &mut PageTable,
@@ -35,11 +46,11 @@ pub unsafe fn execute(path: *const c_char, argv: &[CString]) -> Result<usize, ()
     let path = CStr::from_ptr(path).to_str().unwrap();
 
     let log = log::start();
-    let Some(ip) = log.search(path) else {
+    let Some(inode) = log.search(path) else {
         return Err(());
     };
 
-    let Ok(elf) = ip.read::<ELFHeader>(0) else {
+    let Ok(elf) = inode.read::<ELFHeader>(0) else {
         return Err(());
     };
 
@@ -64,9 +75,11 @@ pub unsafe fn execute(path: *const c_char, argv: &[CString]) -> Result<usize, ()
     let mut size = 0;
     let mut offset = elf.phoff;
     for _ in 0..elf.phnum {
-        let Ok(header) = ip.read::<ProgramHeader>(offset) else {
+        let Ok(header) = inode.read::<ProgramHeader>(offset) else {
             return bad(pagetable, size);
         };
+
+        offset += core::mem::size_of_val(&header);
 
         if header.kind != ProgramHeader::KIND_LOAD {
             continue;
@@ -84,18 +97,22 @@ pub unsafe fn execute(path: *const c_char, argv: &[CString]) -> Result<usize, ()
             return bad(pagetable, size);
         }
 
-        match pagetable.grow(size, header.vaddr + header.memsz) {
+        match pagetable.grow(size, header.vaddr + header.memsz, flags2perm(header.flags)) {
             Ok(new_size) => size = new_size,
             Err(_) => return bad(pagetable, size),
         }
 
-        if !load_segment(&mut pagetable, header.vaddr, &ip, header.off, header.filesz) {
+        if !load_segment(
+            &mut pagetable,
+            header.vaddr,
+            &inode,
+            header.off,
+            header.filesz,
+        ) {
             return bad(pagetable, size);
         }
-
-        offset += core::mem::size_of::<ProgramHeader>();
     }
-    drop(ip);
+    drop(inode);
     drop(log);
 
     let old_size = context.sz;
@@ -103,7 +120,7 @@ pub unsafe fn execute(path: *const c_char, argv: &[CString]) -> Result<usize, ()
     // Allocate two pages at the next page boundary.
     // Use the second as the user stack.
     let size = pg_roundup(size);
-    let Ok(size) = pagetable.grow(size, size + 2 * PGSIZE) else {
+    let Ok(size) = pagetable.grow(size, size + 2 * PGSIZE, PTE::W) else {
         return bad(pagetable, size);
     };
 

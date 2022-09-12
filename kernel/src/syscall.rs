@@ -13,7 +13,7 @@ use crate::{
     log,
     pipe::Pipe,
     process,
-    riscv::paging::PGSIZE,
+    riscv::paging::{PGSIZE, PTE},
     vm::{binding::copyinstr, PageTableExtension},
 };
 
@@ -161,10 +161,19 @@ fn sys_wait() -> Result<u64, ()> {
 
 fn sys_sbrk() -> Result<u64, ()> {
     let n = arg_i32::<0>() as isize;
-    process::context()
-        .unwrap()
-        .resize_memory(n)
-        .map(|old| old as u64)
+
+    let context = process::context().unwrap();
+    let size_old = context.sz;
+    let size_new = context.sz.wrapping_add_signed(n);
+
+    if n > 0 {
+        context.sz = context.pagetable.grow(size_old, size_new, PTE::W)?;
+    }
+    if n < 0 {
+        context.sz = context.pagetable.shrink(size_old, size_new)?;
+    }
+
+    Ok(size_old as u64)
 }
 
 fn sys_kill() -> Result<u64, ()> {

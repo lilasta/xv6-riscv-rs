@@ -1,7 +1,4 @@
-use core::{
-    ffi::{c_char, c_void},
-    ptr::NonNull,
-};
+use core::{ffi::c_char, ptr::NonNull};
 
 use alloc::sync::Arc;
 
@@ -10,7 +7,6 @@ use crate::{
     config::NOFILE,
     file::File,
     fs::{self, InodeC},
-    lock::spin::SpinLock,
     log, process,
     riscv::paging::{PageTable, PGSIZE},
 };
@@ -230,23 +226,6 @@ impl ProcessContext {
 
         let log = log::start();
         fs::put(&log, self.cwd);
-    }
-
-    pub fn resize_memory(&mut self, n: isize) -> Result<usize, ()> {
-        let old_size = self.sz;
-        let new_size = self.sz.wrapping_add_signed(n);
-
-        if old_size == new_size {
-            return Ok(old_size);
-        }
-
-        if n > 0 {
-            self.sz = self.pagetable.grow(old_size, new_size)?;
-        } else {
-            self.sz = self.pagetable.shrink(old_size, new_size)?;
-        }
-
-        return Ok(old_size);
     }
 }
 

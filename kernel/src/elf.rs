@@ -2,6 +2,7 @@
 
 // File header
 #[repr(C)]
+#[derive(Debug)]
 pub struct ELFHeader {
     pub magic: u32,
     pub elf: [u8; 12],
@@ -28,6 +29,7 @@ impl ELFHeader {
 
 // Program section header
 #[repr(C)]
+#[derive(Debug)]
 pub struct ProgramHeader {
     pub kind: u32,
     pub flags: u32,
