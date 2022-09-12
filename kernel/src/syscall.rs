@@ -1,6 +1,7 @@
 use core::{ffi::CStr, ptr::NonNull};
 
-use alloc::sync::Arc;
+use alloc::{ffi::CString, sync::Arc};
+use arrayvec::ArrayVec;
 
 use crate::{
     allocator::KernelAllocator,
@@ -356,53 +357,35 @@ fn sys_exec() -> Result<u64, ()> {
 
     arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
 
-    let mut argv = [core::ptr::null::<i8>(); MAXARG];
+    let mut argv = ArrayVec::<_, MAXARG>::new();
     let argv_user = arg_usize::<1>();
 
-    let deallocate = |argv: [*const i8; _]| {
-        for ptr in argv {
-            if !ptr.is_null() {
-                KernelAllocator::get().deallocate(NonNull::new(ptr.cast_mut()).unwrap());
-            }
-        }
-    };
-
-    let bad = |argv| {
-        deallocate(argv);
-        Err(())
-    };
-
-    let mut i = 0;
-    loop {
-        if i >= argv.len() {
-            return bad(argv);
-        }
-
-        let addr = unsafe { process::read_memory(argv_user + core::mem::size_of::<usize>() * i) };
+    for i in 0.. {
+        let addr = process::read_memory(argv_user + core::mem::size_of::<usize>() * i);
         let Some(addr) = addr else {
-            return bad(argv);
+            return Err(());
         };
 
         if addr == 0 {
             break;
         }
 
-        let arg = KernelAllocator::get().allocate::<i8>();
-        match arg {
-            Some(arg) => argv[i] = arg.as_ptr().cast_const(),
-            None => return bad(argv),
+        let Some(mem) = KernelAllocator::get().allocate_page() else {
+            return Err(());
+        };
+
+        if unsafe { read_string_from_process_memory(addr, mem.addr().get(), PGSIZE).is_err() } {
+            KernelAllocator::get().deallocate_page(mem);
+            return Err(());
         }
 
-        if unsafe { read_string_from_process_memory(addr, argv[i].addr(), PGSIZE).is_err() } {
-            return bad(argv);
+        let arg = unsafe { CString::from_raw(mem.as_ptr().cast()) };
+        if argv.try_push(arg).is_err() {
+            return Err(());
         }
-
-        i += 1;
     }
 
-    let ret = unsafe { execute(process::context().unwrap(), path.as_ptr(), argv.as_ptr()) };
-    deallocate(argv);
-    Ok(ret as u64)
+    unsafe { execute(path.as_ptr(), &argv).map(|argc| argc as u64) }
 }
 
 fn sys_pipe() -> Result<u64, ()> {

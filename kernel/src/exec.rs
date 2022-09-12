@@ -1,24 +1,17 @@
 use core::ffi::{c_char, CStr};
 
+use alloc::ffi::CString;
+
 use crate::{
     config::MAXARG,
     elf::{ELFHeader, ProgramHeader},
     fs::{InodeLockGuard, InodeOps},
-    log,
-    process::{allocate_pagetable, free_pagetable, process::ProcessContext},
+    log, process,
     riscv::paging::{pg_roundup, PageTable, PGSIZE},
     vm::PageTableExtension,
 };
 
-unsafe fn ptr_to_slice<'a, T>(start: *const *const T) -> &'a [*const T] {
-    let mut ptr = start;
-    while !(*ptr).is_null() {
-        ptr = ptr.offset(1);
-    }
-    core::slice::from_ptr_range(start..ptr)
-}
-
-fn load_seg(
+fn load_segment(
     pagetable: &mut PageTable,
     va: usize,
     inode: &InodeLockGuard,
@@ -38,95 +31,95 @@ fn load_seg(
     true
 }
 
-pub unsafe fn execute(
-    current_context: &mut ProcessContext,
-    path: *const c_char,
-    argv: *const *const c_char,
-) -> i32 {
+pub unsafe fn execute(path: *const c_char, argv: &[CString]) -> Result<usize, ()> {
     let path = CStr::from_ptr(path).to_str().unwrap();
 
     let log = log::start();
-    let Some( ip) = log.search(path) else {
-        return -1;
+    let Some(ip) = log.search(path) else {
+        return Err(());
     };
 
     let Ok(elf) = ip.read::<ELFHeader>(0) else {
-        return -1;
+        return Err(());
     };
 
     if !elf.validate_magic() {
-        return -1;
+        return Err(());
     }
 
-    let Ok(mut pagetable) = allocate_pagetable(current_context.trapframe.addr().get()) else {
-        return -1;
+    let Some(context) = process::context() else {
+        return Err(());
     };
 
-    macro bad($sz:ident) {{
-        free_pagetable(pagetable, $sz);
-        return -1;
-    }}
+    let Ok(mut pagetable) = process::allocate_pagetable(context.trapframe.addr().get()) else {
+        return Err(());
+    };
+
+    let bad = |pagetable, size| {
+        process::free_pagetable(pagetable, size);
+        Err(())
+    };
 
     // Load program into memory.
-    let mut sz = 0;
-    let mut off = elf.phoff;
+    let mut size = 0;
+    let mut offset = elf.phoff;
     for _ in 0..elf.phnum {
-        let Ok(ph) = ip.read::<ProgramHeader>(off) else {
-            bad!(sz);
+        let Ok(header) = ip.read::<ProgramHeader>(offset) else {
+            return bad(pagetable, size);
         };
 
-        if ph.kind != ProgramHeader::KIND_LOAD {
+        if header.kind != ProgramHeader::KIND_LOAD {
             continue;
         }
 
-        if ph.memsz < ph.filesz {
-            bad!(sz);
+        if header.memsz < header.filesz {
+            return bad(pagetable, size);
         }
 
-        if ph.vaddr + ph.memsz < ph.vaddr {
-            bad!(sz);
+        if header.vaddr + header.memsz < header.vaddr {
+            return bad(pagetable, size);
         }
 
-        match pagetable.grow(sz, ph.vaddr + ph.memsz) {
-            Ok(new_size) => sz = new_size,
-            Err(_) => bad!(sz),
+        if header.vaddr % PGSIZE != 0 {
+            return bad(pagetable, size);
         }
 
-        if ph.vaddr % PGSIZE != 0 {
-            bad!(sz);
+        match pagetable.grow(size, header.vaddr + header.memsz) {
+            Ok(new_size) => size = new_size,
+            Err(_) => return bad(pagetable, size),
         }
 
-        if !load_seg(&mut pagetable, ph.vaddr, &ip, ph.off, ph.filesz) {
-            bad!(sz);
+        if !load_segment(&mut pagetable, header.vaddr, &ip, header.off, header.filesz) {
+            return bad(pagetable, size);
         }
 
-        off += core::mem::size_of::<ProgramHeader>();
+        offset += core::mem::size_of::<ProgramHeader>();
     }
     drop(ip);
     drop(log);
 
-    let oldsz = current_context.sz;
+    let old_size = context.sz;
 
     // Allocate two pages at the next page boundary.
     // Use the second as the user stack.
-    let sz = pg_roundup(sz);
-    let Ok(sz1) = pagetable.grow(sz, sz + 2 * PGSIZE) else {
-        bad!(sz);
+    let size = pg_roundup(size);
+    let Ok(size) = pagetable.grow(size, size + 2 * PGSIZE) else {
+        return bad(pagetable, size);
     };
-    let sz = sz1;
+
     pagetable
-        .search_entry(sz - 2 * PGSIZE, false)
+        .search_entry(size - 2 * PGSIZE, false)
         .unwrap()
         .set_user_access(false);
-    let mut sp = sz;
+
+    let mut sp = size;
     let stackbase = sp - PGSIZE;
 
     // Push argument strings, prepare rest of stack in ustack.
     let mut ustack = [0usize; MAXARG];
-    let argv = ptr_to_slice(argv);
-    for (i, arg) in argv.iter().map(|arg| CStr::from_ptr(*arg)).enumerate() {
+    for (i, arg) in argv.iter().enumerate() {
         if i >= MAXARG {
-            bad!(sz);
+            return bad(pagetable, size);
         }
 
         let len = arg.to_bytes().len() + 1;
@@ -135,41 +128,40 @@ pub unsafe fn execute(
         sp -= sp % 16; // riscv sp must be 16-byte aligned
 
         if sp < stackbase {
-            bad!(sz);
+            return bad(pagetable, size);
         }
 
         if pagetable.write(sp, arg.to_bytes_with_nul()).is_err() {
-            bad!(sz);
+            return bad(pagetable, size);
         }
 
         ustack[i] = sp;
     }
-    ustack[argv.len()] = 0;
 
     // push the array of argv[] pointers.
     sp -= (argv.len() + 1) * core::mem::size_of::<usize>();
     sp -= sp % 16;
 
     if sp < stackbase {
-        bad!(sz);
+        return bad(pagetable, size);
     }
 
     let ustack_with_nul = &ustack[..(argv.len() + 1)];
     if pagetable.write(sp, ustack_with_nul).is_err() {
-        bad!(sz);
+        return bad(pagetable, size);
     }
 
     // arguments to user main(argc, argv)
     // argc is returned via the system call return
     // value, which goes in a0.
-    current_context.trapframe.as_mut().a1 = sp as u64;
+    context.trapframe.as_mut().a1 = sp as u64;
 
-    let old_pagetable = core::mem::replace(&mut current_context.pagetable, pagetable);
-    current_context.sz = sz;
-    current_context.trapframe.as_mut().epc = elf.entry as u64;
-    current_context.trapframe.as_mut().sp = sp as u64;
-    free_pagetable(old_pagetable, oldsz);
+    let old_pagetable = core::mem::replace(&mut context.pagetable, pagetable);
+    context.sz = size;
+    context.trapframe.as_mut().epc = elf.entry as u64;
+    context.trapframe.as_mut().sp = sp as u64;
+    process::free_pagetable(old_pagetable, old_size);
 
     // this ends up in a0, the first argument to main(argc, argv)
-    argv.len() as i32
+    Ok(argv.len())
 }
