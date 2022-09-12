@@ -159,7 +159,7 @@ impl<const N: usize> InodeAllocator<N> {
         if was_last {
             assert!(guard.inode.nlink == 0); // TODO: ?
 
-            truncate(&mut guard, log);
+            //truncate(&mut guard, log);
             self.deallocate(guard.device, guard.inode_index, log);
         }
     }
@@ -283,32 +283,6 @@ impl FileSystem {
     }
 }
 
-fn truncate(guard: &mut InodeGuard, log: &LogGuard) {
-    for block in guard.inode.addrs.iter_mut() {
-        if *block != 0 {
-            write_zeros_to_block(guard.device, *block as usize, log);
-            *block = 0;
-        }
-    }
-
-    if guard.inode.chain != 0 {
-        let buf = buffer::get(guard.device, guard.inode.chain as usize).unwrap();
-        let arr = unsafe { buf.as_uninit::<[u32; NINDIRECT]>().assume_init_ref() };
-        for block in arr {
-            if *block != 0 {
-                write_zeros_to_block(guard.device, *block as usize, log);
-            }
-        }
-        buffer::release(buf);
-        write_zeros_to_block(guard.device, guard.inode.chain as usize, log);
-        guard.inode.chain = 0;
-    }
-
-    guard.inode.size = 0;
-    //iupdate();
-    todo!()
-}
-
 fn write_zeros_to_block(device: usize, block: usize, log: &LogGuard) {
     let mut buf = buffer::get(device, block).unwrap();
     buf.write_zeros();
@@ -399,17 +373,28 @@ impl<'a> InodeOps for LogGuard<'a> {
                 inode.nlink = 1;
                 inode.update();
 
+                let bad = |mut inode: InodeLockGuard| {
+                    inode.nlink = 0;
+                    inode.update();
+                    Err(())
+                };
+
                 // TODO: T_DIR
                 // TODO: avoid unwrap (https://github.com/mit-pdos/xv6-riscv/blob/riscv/kernel/sysfile.c#L295)
                 if kind == 1 {
                     dir.increment_link();
                     dir.update();
 
-                    inode.link(".", inode.inode_number()).unwrap();
-                    inode.link("..", dir.inode_number()).unwrap();
+                    if inode.link(".", inode.inode_number()).is_err()
+                        || inode.link("..", dir.inode_number()).is_err()
+                    {
+                        return bad(inode);
+                    }
                 }
 
-                dir.link(name, inode.inode_number()).unwrap();
+                if dir.link(name, inode.inode_number()).is_err() {
+                    return bad(inode);
+                }
 
                 Ok(inode)
             }
@@ -762,8 +747,8 @@ impl<'a> InodeLockGuard<'a> {
             name: [0; _],
         };
         entry.name[..name.len()].copy_from_slice(name.as_bytes());
-        self.write(entry, self.size()).unwrap();
-        Ok(())
+        self.write(entry, self.size() - self.size() % entry_size)
+            .or(Err(()))
     }
 
     pub fn lookup(&self, name: &str) -> Option<(InodeLockGuard<'a>, usize)> {

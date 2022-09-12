@@ -34,6 +34,7 @@
 #![feature(once_cell)]
 #![feature(ptr_metadata)]
 #![feature(ptr_to_from_bits)]
+#![feature(result_option_inspect)]
 #![feature(slice_from_ptr_range)]
 #![feature(slice_ptr_get)]
 #![feature(stdsimd)]
@@ -92,9 +93,9 @@ pub macro print($($arg:tt)*) {{
     let _ = write!(crate::Print, "{}", format_args!($($arg)*));
 }}
 
-pub macro println($($arg:tt)*) {
+pub macro println($($arg:tt)*) {{
     let _ = writeln!(crate::Print, "{}", format_args!($($arg)*));
-}
+}}
 
 pub macro cstr($s:literal) {
     core::ffi::CStr::from_bytes_with_nul_unchecked(concat!($s, '\0').as_bytes())
