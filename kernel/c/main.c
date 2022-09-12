@@ -22,8 +22,6 @@ void main()
     trapinithart(); // install kernel trap vector
     plicinit();     // set up interrupt controller
     plicinithart(); // ask PLIC for device interrupts
-    binit();        // buffer cache
-    iinit();        // inode table
     userinit();     // first user process
     __sync_synchronize();
     started = 1;

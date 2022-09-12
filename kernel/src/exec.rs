@@ -5,7 +5,7 @@ use alloc::ffi::CString;
 use crate::{
     config::MAXARG,
     elf::{ELFHeader, ProgramHeader},
-    fs::{InodeLockGuard, InodeOps},
+    fs::{self, InodeReadOnlyGuard},
     log, process,
     riscv::paging::{pg_roundup, PageTable, PGSIZE, PTE},
     vm::PageTableExtension,
@@ -25,17 +25,14 @@ fn flags2perm(flags: u32) -> u64 {
 fn load_segment(
     pagetable: &mut PageTable,
     va: usize,
-    inode: &InodeLockGuard,
+    inode: &mut InodeReadOnlyGuard,
     offset: usize,
     size: usize,
 ) -> bool {
     for i in (0..size).step_by(PGSIZE) {
         let pa = pagetable.virtual_to_physical(va + i).unwrap();
         let n = (size - i).min(PGSIZE);
-        if inode
-            .copy_to(false, <*mut u8>::from_bits(pa), offset + i, n)
-            .is_err()
-        {
+        if inode.copy_to::<u8>(false, pa, offset + i, n).is_err() {
             return false;
         }
     }
@@ -46,9 +43,10 @@ pub unsafe fn execute(path: *const c_char, argv: &[CString]) -> Result<usize, ()
     let path = CStr::from_ptr(path).to_str().unwrap();
 
     let log = log::start();
-    let Some(inode) = log.search(path) else {
+    let Some(inode_ref) = fs::search_inode(path) else {
         return Err(());
     };
+    let mut inode = inode_ref.lock_rw(&log);
 
     let Ok(elf) = inode.read::<ELFHeader>(0) else {
         return Err(());
@@ -105,7 +103,7 @@ pub unsafe fn execute(path: *const c_char, argv: &[CString]) -> Result<usize, ()
         if !load_segment(
             &mut pagetable,
             header.vaddr,
-            &inode,
+            &mut inode,
             header.off,
             header.filesz,
         ) {
@@ -113,6 +111,7 @@ pub unsafe fn execute(path: *const c_char, argv: &[CString]) -> Result<usize, ()
         }
     }
     drop(inode);
+    drop(inode_ref);
     drop(log);
 
     let old_size = context.sz;

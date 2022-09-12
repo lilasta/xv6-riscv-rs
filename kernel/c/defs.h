@@ -11,7 +11,6 @@ struct superblock;
 struct trapframe;
 
 // bio.c
-void binit(void);
 struct buf bread(uint, uint);
 void brelse(struct buf);
 void bwrite(struct buf *);
@@ -40,7 +39,6 @@ struct inode *dirlookup(struct inode *, char *, uint *);
 uint ialloc(uint, short);
 struct inode *iget(uint, uint);
 struct inode *idup(struct inode *);
-void iinit();
 void ilock(struct inode *);
 void iput(struct inode *);
 void iunlock(struct inode *);

@@ -279,11 +279,13 @@ fn sys_open() -> Result<u64, ()> {
 
     let log = log::start();
     let mode = arg_usize::<1>();
-    let mut inode = if mode & O_CREATE != 0 {
+    let inode_ref = if mode & O_CREATE != 0 {
         log.create(path, 2, 0, 0) // TODO: 2 = T_FILE
     } else {
-        log.search(path).ok_or(())
+        fs::search_inode(path).ok_or(())
     }?;
+
+    let mut inode = inode_ref.lock_rw(&log);
 
     if inode.is_directory() && mode != O_RDONLY {
         return Err(());
@@ -293,14 +295,18 @@ fn sys_open() -> Result<u64, ()> {
         return Err(());
     }
 
-    let ip = core::ptr::addr_of_mut!(*inode).cast();
     let readable = mode & O_WRONLY == 0;
     let writable = mode & O_WRONLY != 0 || mode & O_RDWR != 0;
 
     let file = if inode.is_device() {
-        File::new_device(ip, inode.device_major().unwrap(), readable, writable)
+        File::new_device(
+            inode_ref.clone(),
+            inode.device_major().unwrap(),
+            readable,
+            writable,
+        )
     } else {
-        File::new_inode(ip, readable, writable)
+        File::new_inode(inode_ref.clone(), readable, writable)
     };
 
     let file = Arc::new(file);
@@ -312,7 +318,6 @@ fn sys_open() -> Result<u64, ()> {
         inode.truncate();
     }
 
-    inode.unlock_without_put();
     Ok(fd as u64)
 }
 
@@ -347,15 +352,16 @@ fn sys_chdir() -> Result<u64, ()> {
     let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
 
     let log = log::start();
-    let inode = log.search(path).ok_or(())?;
+    let inode_ref = fs::search_inode(path).ok_or(())?;
+    let inode = inode_ref.lock_ro();
 
     if !inode.is_directory() {
         return Err(());
     }
 
     let context = process::context().unwrap();
-    fs::put(&log, context.cwd);
-    context.cwd = inode.unlock_without_put();
+    let old = context.cwd.replace(inode_ref);
+    old.unwrap().drop_with_log(&log);
 
     Ok(0)
 }

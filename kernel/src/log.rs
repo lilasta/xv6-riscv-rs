@@ -34,6 +34,7 @@ const _: () = {
 };
 
 #[repr(C)]
+#[derive(Debug)]
 struct LogHeader {
     n: u32,
     block: [u32; LOGSIZE],
@@ -48,6 +49,7 @@ impl LogHeader {
     }
 }
 
+#[derive(Debug)]
 pub struct Log {
     start: usize,
     size: usize,
@@ -121,6 +123,7 @@ impl Log {
     }
 }
 
+#[derive(Debug)]
 pub struct LogGuard<'a> {
     log: &'a SpinLock<Log>,
 }

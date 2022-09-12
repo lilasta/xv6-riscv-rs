@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicUsize, Ordering::*};
 use crate::{
     buffer::BSIZE,
     config::{MAXOPBLOCKS, NDEV},
-    fs::{self, InodeC, InodeLockGuard, Stat},
+    fs::{InodeReference, Stat},
     log,
     pipe::Pipe,
 };
@@ -16,13 +16,13 @@ pub enum File {
         pipe: Pipe<PIPESIZE>,
     },
     Inode {
-        inode: *mut InodeC,
+        inode: InodeReference<'static>,
         offset: AtomicUsize,
         readable: bool,
         writable: bool,
     },
     Device {
-        inode: *mut InodeC,
+        inode: InodeReference<'static>,
         major: usize,
         readable: bool,
         writable: bool,
@@ -34,7 +34,7 @@ impl File {
         Self::Pipe { pipe }
     }
 
-    pub const fn new_inode(inode: *mut InodeC, readable: bool, writable: bool) -> Self {
+    pub const fn new_inode(inode: InodeReference<'static>, readable: bool, writable: bool) -> Self {
         Self::Inode {
             inode,
             offset: AtomicUsize::new(0),
@@ -44,7 +44,7 @@ impl File {
     }
 
     pub const fn new_device(
-        inode: *mut InodeC,
+        inode: InodeReference<'static>,
         major: usize,
         readable: bool,
         writable: bool,
@@ -60,12 +60,7 @@ impl File {
     pub fn stat(&self) -> Result<Stat, ()> {
         match self {
             Self::Pipe { .. } => Err(()),
-            Self::Inode { inode, .. } | Self::Device { inode, .. } => {
-                let inode = InodeLockGuard::new(*inode);
-                let stat = inode.stat();
-                inode.unlock_without_put();
-                Ok(stat)
-            }
+            Self::Inode { inode, .. } | Self::Device { inode, .. } => Ok(inode.lock_ro().stat()),
         }
     }
 
@@ -82,14 +77,13 @@ impl File {
                     return Err(());
                 }
 
-                let inode = InodeLockGuard::new(*inode);
-                let result =
-                    inode.copy_to(true, <*mut u8>::from_bits(addr), offset.load(Acquire), n);
-                inode.unlock_without_put();
+                let mut inode = inode.lock_ro();
+                let result = inode.copy_to::<u8>(true, addr, offset.load(Acquire), n);
+                drop(inode);
 
                 let read = match result {
                     Ok(read) => read,
-                    Err(read) => read,
+                    Err(_) => 0,
                 };
 
                 offset.fetch_add(read, Release);
@@ -138,14 +132,14 @@ impl File {
                     let n = (n - i).min(max);
 
                     let log = log::start();
-                    let mut inode = InodeLockGuard::new(*inode);
+                    let mut inode = inode.lock_rw(&log);
                     let result = inode.copy_from::<u8>(true, addr + i, offset.load(Acquire), n);
                     let wrote = match result {
                         Ok(wrote) => wrote,
-                        Err(wrote) => wrote,
+                        Err(_) => 0,
                     };
                     offset.fetch_add(wrote, Release);
-                    inode.unlock_without_put();
+                    drop(inode);
                     drop(log);
 
                     if result.is_err() {
@@ -174,18 +168,6 @@ impl File {
                 } else {
                     Ok(result as usize)
                 }
-            }
-        }
-    }
-}
-
-impl Drop for File {
-    fn drop(&mut self) {
-        match self {
-            Self::Pipe { .. } => {}
-            Self::Inode { inode, .. } | Self::Device { inode, .. } => {
-                let log = log::start();
-                fs::put(&log, *inode);
             }
         }
     }

@@ -11,16 +11,15 @@ use core::mem::MaybeUninit;
 use crate::allocator::KernelAllocator;
 use crate::bitmap::Bitmap;
 use crate::config::{NCPU, NPROC, ROOTDEV};
-use crate::fs::InodeC;
 use crate::interrupt::InterruptGuard;
 use crate::lock::spin::SpinLock;
 use crate::lock::{Lock, LockGuard};
 use crate::memory_layout::{kstack, kstack_index};
 use crate::process::process::ProcessContext;
+use crate::riscv::paging::PageTable;
 use crate::riscv::{self, enable_interrupt};
 use crate::vm::{uvminit, PageTableExtension};
-use crate::{config::NOFILE, riscv::paging::PageTable};
-use crate::{cstr, fs, interrupt};
+use crate::{fs, interrupt};
 
 use crate::{
     memory_layout::{TRAMPOLINE, TRAPFRAME},
@@ -172,7 +171,8 @@ pub unsafe fn setup_init_process() {
     // a user program that calls exec("/init")
     static INITCODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/initcode"));
 
-    let mut context = ProcessContext::allocate(finish_dispatch).unwrap();
+    let root = fs::search_inode(&"/").unwrap();
+    let mut context = ProcessContext::allocate(finish_dispatch, root).unwrap();
     uvminit(context.pagetable, INITCODE.as_ptr(), INITCODE.len());
     context.sz = PGSIZE;
 
@@ -180,8 +180,6 @@ pub unsafe fn setup_init_process() {
     context.trapframe.as_mut().sp = PGSIZE as _;
 
     // process.name = "initcode";
-
-    context.cwd = fs::namei(cstr!("/").as_ptr());
 
     let mut process = table::table().allocate_process().unwrap();
     assert!(process.pid == 1);
@@ -250,7 +248,11 @@ pub unsafe fn fork() -> Option<usize> {
     let p = current()?;
     let process = p.get_mut();
     let mut process_new = table::table().allocate_process()?;
-    let mut context_new = ProcessContext::allocate(finish_dispatch).ok()?;
+    let mut context_new = ProcessContext::allocate(
+        finish_dispatch,
+        process.context().unwrap().cwd.as_ref().cloned().unwrap(),
+    )
+    .ok()?;
 
     let size = process.context().unwrap().sz;
     if let Err(_) = process
@@ -269,7 +271,7 @@ pub unsafe fn fork() -> Option<usize> {
     for (i, opened) in process.context().unwrap().ofile.iter().enumerate() {
         context_new.ofile[i] = opened.clone();
     }
-    context_new.cwd = fs::idup(process.context().unwrap().cwd);
+    context_new.cwd = process.context().unwrap().cwd.clone();
 
     process_new.name = process.name;
 
@@ -433,7 +435,6 @@ pub struct ProcessGlue {
     pub sz: *mut usize,            // Size of process memory (bytes)
     pub pagetable: *mut PageTable, // User page table
     pub trapframe: *mut TrapFrame, // data page for trampoline.S
-    pub cwd: *mut *mut InodeC,     // Current directory
     pub name: *mut [c_char; 16],   // Process name (debugging)
     pub original: *mut c_void,
 }
@@ -448,7 +449,6 @@ impl ProcessGlue {
             sz: core::ptr::null_mut(),
             pagetable: core::ptr::null_mut(),
             trapframe: core::ptr::null_mut(),
-            cwd: core::ptr::null_mut(),
             name: core::ptr::null_mut(),
             original: core::ptr::null_mut(),
         }
@@ -477,7 +477,6 @@ impl ProcessGlue {
             sz: &mut context.sz,
             pagetable: &mut context.pagetable,
             trapframe: context.trapframe.as_ptr(),
-            cwd: &mut context.cwd,
             name: &mut process.name,
             original,
         }

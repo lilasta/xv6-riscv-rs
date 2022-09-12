@@ -96,7 +96,6 @@ struct proc
   uint64 *sz;                  // Size of process memory (bytes)
   pagetable_t *pagetable;      // User page table
   struct trapframe *trapframe; // data page for trampoline.S
-  struct inode **cwd;          // Current directory
   char *name;                  // Process name (debugging)
   void *original;
 };
