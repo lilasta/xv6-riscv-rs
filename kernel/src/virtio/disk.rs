@@ -291,11 +291,3 @@ pub unsafe fn interrupt_handler() {
         disk.used_index = disk.used_index.wrapping_add(1);
     }
 }
-
-#[no_mangle]
-extern "C" fn virtio_disk_init() {}
-
-#[no_mangle]
-pub extern "C" fn virtio_disk_intr() {
-    unsafe { interrupt_handler() }
-}

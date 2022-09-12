@@ -20,7 +20,6 @@ void bunpin(struct buf *);
 
 // console.c
 void consoleinit(void);
-void consoleintr(int);
 void consputc(int);
 
 // exec.c
@@ -84,17 +83,11 @@ void printfinit(void);
 
 // proc.c
 int cpuid(void);
-void exit(int);
-int fork(void);
-int kill(int);
 struct proc myproc();
-void procinit(void);
 void scheduler(void) __attribute__((noreturn));
 void sleep(void *, struct spinlock *);
 void userinit(void);
-int wait(uint64);
 void wakeup(void *);
-void yield(void);
 int either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 
@@ -131,26 +124,17 @@ void usertrapret(void);
 
 // uart.c
 void uartinit(void);
-void uartintr(void);
-void uartputc(int);
-void uartputc_sync(int);
 int uartgetc(void);
 
 // vm.c
 void kvminit(void);
 void kvminithart(void);
-int copyout(pagetable_t, uint64, char *, uint64);
-int copyin(pagetable_t, char *, uint64, uint64);
 
 // plic.c
 void plicinit(void);
 void plicinithart(void);
 int plic_claim(void);
 void plic_complete(int);
-
-// virtio_disk.c
-void virtio_disk_init(void);
-void virtio_disk_intr(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x) / sizeof((x)[0]))

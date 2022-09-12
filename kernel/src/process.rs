@@ -495,19 +495,6 @@ mod binding {
     }
 
     #[no_mangle]
-    unsafe extern "C" fn exit(status: i32) {
-        super::exit(status);
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn wait(addr: usize) -> i32 {
-        match super::wait(if addr == 0 { None } else { Some(addr) }) {
-            Some(pid) => pid as _,
-            None => -1,
-        }
-    }
-
-    #[no_mangle]
     unsafe extern "C" fn either_copyout(user_dst: i32, dst: usize, src: usize, len: usize) -> i32 {
         match copyout_either(
             user_dst != 0,
@@ -552,28 +539,7 @@ mod binding {
     }
 
     #[no_mangle]
-    extern "C" fn fork() -> i32 {
-        match unsafe { super::fork() } {
-            Some(pid) => pid as _,
-            None => -1,
-        }
-    }
-
-    #[no_mangle]
-    extern "C" fn r#yield() {
-        super::pause();
-    }
-
-    #[no_mangle]
-    extern "C" fn procinit() {}
-
-    #[no_mangle]
     extern "C" fn wakeup(chan: usize) {
         super::wakeup(chan);
-    }
-
-    #[no_mangle]
-    extern "C" fn kill(pid: i32) -> i32 {
-        super::kill(pid as usize) as i32
     }
 }

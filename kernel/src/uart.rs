@@ -6,6 +6,7 @@ use core::{
 };
 
 use crate::{
+    console::consoleintr,
     interrupt,
     lock::{spin::SpinLock, Lock, LockGuard},
     memory_layout::UART0,
@@ -231,7 +232,7 @@ impl UART {
         loop {
             let c = self.getc();
             match c {
-                Some(c) => unsafe { consoleintr(c as i32) },
+                Some(c) => consoleintr(c as i32),
                 None => break,
             }
         }
@@ -241,26 +242,11 @@ impl UART {
     }
 }
 
-extern "C" {
-    fn consoleintr(c: i32);
-}
-
 #[no_mangle]
 unsafe extern "C" fn uartinit() {
     UART::get().init();
 }
 
-#[no_mangle]
-unsafe extern "C" fn uartputc(c: i32) {
-    UART::get().putc(c as u8);
-}
-
-#[no_mangle]
-unsafe extern "C" fn uartputc_sync(c: i32) {
-    UART::get().putc_blocking(c as u8);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn uartintr() {
+pub unsafe fn uartintr() {
     UART::get().handle_interrupt();
 }

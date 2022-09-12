@@ -171,52 +171,11 @@ pub mod binding {
         sfence_vma(0, 0);
     }
 
-    // Copy from kernel to user.
-    // Copy len bytes from src to virtual address dstva in a given page table.
-    // Return 0 on success, -1 on error.
-    #[no_mangle]
-    unsafe extern "C" fn copyout(
-        pagetable: PageTable,
-        dst_va: usize,
-        src: usize,
-        len: usize,
-    ) -> i32 {
-        let result = pagetable.write(
-            dst_va,
-            core::slice::from_raw_parts(<*const u8>::from_bits(src), len),
-        );
-        match result {
-            Ok(_) => 0,
-            Err(_) => -1,
-        }
-    }
-
-    // Copy from user to kernel.
-    // Copy len bytes to dst from virtual address srcva in a given page table.
-    // Return 0 on success, -1 on error.
-    #[no_mangle]
-    unsafe extern "C" fn copyin(
-        pagetable: PageTable,
-        dst: usize,
-        src_va: usize,
-        len: usize,
-    ) -> i32 {
-        let result = pagetable.read(
-            core::slice::from_raw_parts_mut(<*mut u8>::from_bits(dst), len),
-            src_va,
-        );
-        match result {
-            Ok(_) => 0,
-            Err(_) => -1,
-        }
-    }
-
     // Copy a null-terminated string from user to kernel.
     // Copy bytes to dst from virtual address srcva in a given page table,
     // until a '\0', or max.
     // Return 0 on success, -1 on error.
-    #[no_mangle]
-    pub unsafe extern "C" fn copyinstr(
+    pub unsafe fn copyinstr(
         pagetable: PageTable,
         mut dst: usize,
         mut src_va: usize,

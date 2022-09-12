@@ -5,7 +5,7 @@ use crate::{
     riscv::{self, paging::PGSIZE, read_csr, read_reg, satp::make_satp, sstatus, write_csr},
     syscall::{clockintr, syscall},
     uart::uartintr,
-    virtio::disk::virtio_disk_intr,
+    virtio,
 };
 
 unsafe fn set_kernel_trap() {
@@ -169,7 +169,7 @@ fn device_interrupt_handler() -> usize {
         if irq == UART0_IRQ {
             unsafe { uartintr() };
         } else if irq == VIRTIO0_IRQ {
-            unsafe { virtio_disk_intr() };
+            unsafe { virtio::disk::interrupt_handler() };
         } else if irq != 0 {
             println!("unexpected interrupt irq={}", irq);
         }
@@ -183,7 +183,7 @@ fn device_interrupt_handler() -> usize {
 
     if cause == 0x8000000000000001 {
         if process::cpuid() == 0 {
-            unsafe { clockintr() };
+            clockintr();
         }
 
         unsafe { write_csr!(sip, read_csr!(sip) & !2) };

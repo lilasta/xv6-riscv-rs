@@ -10,7 +10,7 @@
 //!
 
 use crate::{
-    lock::{Lock, LockGuard},
+    lock::{spin::SpinLock, Lock, LockGuard},
     process::{self, copyout_either},
     uart::UART,
 };
@@ -182,15 +182,16 @@ impl<'a, L: Lock<Target = Console>> LockGuard<'a, L> {
     }
 }
 
+static CONSOLE: SpinLock<Console> = SpinLock::new(Console::new());
+
+pub fn consoleintr(c: i32) {
+    CONSOLE.lock().handle_interrupt(c as u8);
+}
+
 mod binding {
-    use crate::{
-        file::{devsw, DeviceFile},
-        lock::spin::SpinLock,
-    };
+    use crate::file::{devsw, DeviceFile};
 
     use super::*;
-
-    static CONSOLE: SpinLock<Console> = SpinLock::new(Console::new());
 
     #[no_mangle]
     unsafe extern "C" fn consputc(c: i32) {
@@ -221,10 +222,5 @@ mod binding {
     #[no_mangle]
     extern "C" fn consoleread(dst_user: i32, dst: usize, n: usize) -> i32 {
         CONSOLE.lock().read(dst_user as usize, dst, n)
-    }
-
-    #[no_mangle]
-    extern "C" fn consoleintr(c: i32) {
-        CONSOLE.lock().handle_interrupt(c as u8);
     }
 }

@@ -129,8 +129,7 @@ pub unsafe fn syscall() {
 
 static TICKS: SpinLock<u64> = SpinLock::new(0);
 
-#[no_mangle]
-pub unsafe extern "C" fn clockintr() {
+pub fn clockintr() {
     let mut ticks = TICKS.lock();
     *ticks += 1; // TODO: Overflow?
     process::wakeup(&TICKS as *const _ as usize);

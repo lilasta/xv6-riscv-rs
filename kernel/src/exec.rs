@@ -73,13 +73,13 @@ pub unsafe fn execute(path: *const c_char, argv: &[CString]) -> Result<usize, ()
 
     // Load program into memory.
     let mut size = 0;
-    let mut offset = elf.phoff;
-    for _ in 0..elf.phnum {
+    for offset in (elf.phoff..)
+        .step_by(core::mem::size_of::<ProgramHeader>())
+        .take(elf.phnum as usize)
+    {
         let Ok(header) = inode.read::<ProgramHeader>(offset) else {
             return bad(pagetable, size);
         };
-
-        offset += core::mem::size_of_val(&header);
 
         if header.kind != ProgramHeader::KIND_LOAD {
             continue;
