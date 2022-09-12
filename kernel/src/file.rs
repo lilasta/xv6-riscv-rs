@@ -138,13 +138,8 @@ impl File {
                     let n = (n - i).min(max);
 
                     let log = log::start();
-                    let inode = InodeLockGuard::new(*inode);
-                    let result = inode.copy_from(
-                        true,
-                        <*const u8>::from_bits(addr + i),
-                        offset.load(Acquire),
-                        n,
-                    );
+                    let mut inode = InodeLockGuard::new(*inode);
+                    let result = inode.copy_from::<u8>(true, addr + i, offset.load(Acquire), n);
                     let wrote = match result {
                         Ok(wrote) => wrote,
                         Err(wrote) => wrote,

@@ -14,7 +14,7 @@ use crate::{
     config::{NINODE, ROOTDEV},
     lock::{sleep::SleepLock, spin::SpinLock, Lock, LockGuard},
     log::{self, initlog, LogGuard},
-    process,
+    process::{self, copyin_either},
 };
 
 // Directory is a file containing a sequence of dirent structures.
@@ -629,15 +629,18 @@ impl<'a> InodeLockGuard<'a> {
     }
 
     pub fn copy_from<T>(
-        &self,
+        &mut self,
         is_src_user: bool,
-        src: *const T,
-        offset: usize,
+        mut src: usize,
+        mut offset: usize,
         count: usize,
     ) -> Result<usize, usize> {
+        extern "C" {
+            fn bmap(ip: *mut InodeC, bn: u32) -> u32;
+        }
+
         let type_size = core::mem::size_of::<T>();
         let must_write = type_size * count;
-        /*
 
         if offset > self.size as usize || offset.checked_add(must_write).is_none() {
             return Err(0);
@@ -649,33 +652,40 @@ impl<'a> InodeLockGuard<'a> {
 
         let mut wrote = 0;
         while wrote < must_write {
-            todo!()
-        } */
+            let addr = unsafe { bmap(self.inode, (offset / BSIZE) as u32) as usize };
+            if addr == 0 {
+                break;
+            }
 
-        extern "C" {
-            fn writei(ip: *mut InodeC, user_src: i32, src: usize, off: u32, n: u32) -> i32;
+            let mut buf = buffer::get(self.device_number(), addr).unwrap();
+            let len = (must_write - wrote).min(BSIZE - offset % BSIZE);
+            let dst = unsafe {
+                core::slice::from_raw_parts_mut(buf.as_mut_ptr::<u8>().add(offset % BSIZE), len)
+            };
+            if unsafe { !copyin_either(dst, is_src_user, src) } {
+                buffer::release(buf);
+                break;
+            }
+            let log = unsafe { log::get_guard_without_start() };
+            log.write(&buf);
+            buffer::release(buf);
+            core::mem::forget(log);
+
+            wrote += len;
+            offset += len;
+            src += len;
         }
 
-        unsafe {
-            let wrote = writei(
-                self.inode,
-                is_src_user as i32,
-                src.addr(),
-                offset as u32,
-                must_write as u32,
-            );
+        if offset > self.size() {
+            self.size = offset as u32;
+        }
 
-            let wrote = if wrote < 0 {
-                return Err(0);
-            } else {
-                wrote as usize
-            };
+        self.update();
 
-            if wrote == must_write {
-                Ok(must_write)
-            } else {
-                Err(wrote)
-            }
+        if wrote == must_write {
+            Ok(wrote)
+        } else {
+            Err(wrote)
         }
     }
 
@@ -686,7 +696,8 @@ impl<'a> InodeLockGuard<'a> {
     }
 
     pub fn write<T>(&mut self, value: T, offset: usize) -> Result<(), usize> {
-        self.copy_from(false, &value, offset, 1).and(Ok(()))
+        self.copy_from::<T>(false, <*const T>::addr(&value), offset, 1)
+            .and(Ok(()))
     }
 
     pub fn update(&mut self) {
