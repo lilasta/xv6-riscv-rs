@@ -166,55 +166,49 @@ pub unsafe fn initialize_for_core() {
     sfence_vma(0, 0);
 }
 
-pub mod binding {
-    use crate::riscv::paging::pg_rounddown;
+// Copy a null-terminated string from user to kernel.
+// Copy bytes to dst from virtual address srcva in a given page table,
+// until a '\0', or max.
+// Return 0 on success, -1 on error.
+pub unsafe fn copyinstr(
+    pagetable: PageTable,
+    mut dst: usize,
+    mut src_va: usize,
+    mut len: usize,
+) -> i32 {
+    unsafe fn strcpy(src: *const u8, dst: *mut u8, len: usize) -> bool {
+        for i in 0..len {
+            *dst.add(i) = *src.add(i);
 
-    use super::*;
-
-    // Copy a null-terminated string from user to kernel.
-    // Copy bytes to dst from virtual address srcva in a given page table,
-    // until a '\0', or max.
-    // Return 0 on success, -1 on error.
-    pub unsafe fn copyinstr(
-        pagetable: PageTable,
-        mut dst: usize,
-        mut src_va: usize,
-        mut len: usize,
-    ) -> i32 {
-        unsafe fn strcpy(src: *const u8, dst: *mut u8, len: usize) -> bool {
-            for i in 0..len {
-                *dst.add(i) = *src.add(i);
-
-                if *src.add(i) == ('\0' as u8) {
-                    return true;
-                }
+            if *src.add(i) == ('\0' as u8) {
+                return true;
             }
-            false
         }
+        false
+    }
 
-        while len > 0 {
-            let va0 = pg_rounddown(src_va);
-            let Some(pa0) = pagetable.virtual_to_physical(va0) else {
+    while len > 0 {
+        let va0 = pg_rounddown(src_va);
+        let Some(pa0) = pagetable.virtual_to_physical(va0) else {
                 return -1;
             };
 
-            let offset = src_va - va0;
-            let n = (PGSIZE - offset).min(len);
+        let offset = src_va - va0;
+        let n = (PGSIZE - offset).min(len);
 
-            let got_null = strcpy(
-                <*const u8>::from_bits(pa0 + offset),
-                <*mut u8>::from_bits(dst),
-                n,
-            );
+        let got_null = strcpy(
+            <*const u8>::from_bits(pa0 + offset),
+            <*mut u8>::from_bits(dst),
+            n,
+        );
 
-            if got_null {
-                return 0;
-            }
-
-            len -= n;
-            dst += n;
-            src_va = va0 + PGSIZE;
+        if got_null {
+            return 0;
         }
-        -1
+
+        len -= n;
+        dst += n;
+        src_va = va0 + PGSIZE;
     }
+    -1
 }

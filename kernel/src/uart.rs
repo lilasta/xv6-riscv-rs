@@ -242,11 +242,6 @@ impl UART {
     }
 }
 
-#[no_mangle]
-unsafe extern "C" fn uartinit() {
-    UART::get().init();
-}
-
 pub unsafe fn uartintr() {
     UART::get().handle_interrupt();
 }

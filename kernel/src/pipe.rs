@@ -167,30 +167,3 @@ impl<const SIZE: usize> Drop for Pipe<SIZE> {
         self.dropped = true;
     }
 }
-
-mod binding {
-    use crate::file::PIPESIZE;
-
-    use super::*;
-
-    #[no_mangle]
-    unsafe extern "C" fn pipeclose(pipe: *mut Pipe<PIPESIZE>, _: i32) {
-        core::ptr::drop_in_place(pipe);
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn pipewrite(pipe: *mut Pipe<PIPESIZE>, addr: usize, n: u32) -> i32 {
-        match (*pipe).write(addr, n as usize) {
-            Ok(i) => i as i32,
-            Err(_) => -1,
-        }
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn piperead(pipe: *mut Pipe<PIPESIZE>, addr: usize, n: u32) -> i32 {
-        match (*pipe).read(addr, n as usize) {
-            Ok(i) => i as i32,
-            Err(_) => -1,
-        }
-    }
-}

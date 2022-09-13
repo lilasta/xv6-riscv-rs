@@ -150,11 +150,6 @@ pub fn start() -> LogGuard<'static> {
     LOG.lock().start()
 }
 
-#[deprecated]
-pub unsafe fn get_guard_without_start() -> LogGuard<'static> {
-    LogGuard::new(&LOG)
-}
-
 fn read_header(log: &mut LockGuard<SpinLock<Log>>) -> Option<()> {
     let buf = buffer::get_with_unlock(log.device, log.start, log)?;
     unsafe { core::ptr::copy(buf.as_ptr(), &mut log.header, 1) };
@@ -221,15 +216,4 @@ pub unsafe extern "C" fn initlog(dev: u32, sb: *const SuperBlock) {
     read_header(&mut log).unwrap();
     install_blocks(&mut log, true);
     write_header(&mut log).unwrap();
-}
-
-#[no_mangle]
-extern "C" fn begin_op() {
-    let guard = LOG.lock().start();
-    core::mem::forget(guard);
-}
-
-#[no_mangle]
-extern "C" fn end_op() {
-    LOG.lock().end();
 }

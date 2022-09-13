@@ -14,7 +14,7 @@ use crate::{
     pipe::Pipe,
     process,
     riscv::paging::{PGSIZE, PTE},
-    vm::{binding::copyinstr, PageTableExtension},
+    vm::{copyinstr, PageTableExtension},
 };
 
 pub enum SystemCall {

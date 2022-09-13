@@ -22,16 +22,14 @@ pub unsafe fn initialize_for_core() {
 }
 
 // ask the PLIC what interrupt we should serve.
-#[no_mangle]
-pub unsafe extern "C" fn plic_claim() -> u32 {
+pub unsafe fn plic_claim() -> u32 {
     let hart = read_reg!(tp);
     let irq = <*mut u32>::from_bits(plic_sclaim(hart)).read();
     irq
 }
 
 // tell the PLIC we've served this IRQ.
-#[no_mangle]
-pub unsafe extern "C" fn plic_complete(irq: u32) {
+pub unsafe fn plic_complete(irq: u32) {
     let hart = read_reg!(tp);
     <*mut u32>::from_bits(plic_sclaim(hart)).write(irq);
 }

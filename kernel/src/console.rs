@@ -12,7 +12,7 @@
 use crate::{
     file::{devsw, DeviceFile},
     lock::{spin::SpinLock, Lock, LockGuard},
-    process::{self, copyout_either},
+    process::{self, copyin_either, copyout_either},
     uart::UART,
 };
 
@@ -62,10 +62,7 @@ impl Console {
         for i in 0..n {
             let mut c = 0;
 
-            extern "C" {
-                fn either_copyin(dst: *mut u8, user_src: i32, src: usize, len: usize) -> i32;
-            }
-            if unsafe { either_copyin(&mut c, src_user as _, src + i, 1) } == -1 {
+            if unsafe { !copyin_either(&mut c, src_user != 0, src + i) } {
                 return i;
             }
 
