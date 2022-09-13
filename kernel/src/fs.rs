@@ -5,8 +5,6 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use alloc::ffi::CString;
-
 use crate::{
     bitmap::Bitmap,
     buffer::{self, BSIZE},
@@ -16,9 +14,6 @@ use crate::{
     log::{self, initlog, LogGuard},
     process::{self, copyin_either, copyout_either},
 };
-
-// Directory is a file containing a sequence of dirent structures.
-pub const DIRSIZE: usize = 14;
 
 const ROOTINO: usize = 1; // root i-number
 const NDIRECT: usize = 12;
@@ -33,10 +28,12 @@ const FSMAGIC: u32 = 0x10203040;
 #[derive(Debug)]
 pub struct DirectoryEntry {
     inode_number: u16,
-    name: [u8; DIRSIZE],
+    name: [u8; Self::NAME_LENGTH],
 }
 
 impl DirectoryEntry {
+    pub const NAME_LENGTH: usize = 14;
+
     pub const fn unused() -> Self {
         Self {
             inode_number: 0,
@@ -116,10 +113,7 @@ impl<'i> InodeReference<'i> {
         guard
     }
 
-    pub fn lock_rw<'r, 'lg, 'l>(
-        &'r self,
-        log: &'lg LogGuard<'l>,
-    ) -> InodeReadWriteGuard<'r, 'i, 'lg, 'l> {
+    pub fn lock_rw<'r>(&'r self, log: &'r LogGuard<'r>) -> InodeReadWriteGuard<'r, 'i> {
         InodeReadWriteGuard {
             guard: self.lock_ro(),
             log,
@@ -152,7 +146,7 @@ impl<'r, 'i> Drop for InodeReadOnlyGuard<'r, 'i> {
     fn drop(&mut self) {}
 }
 
-impl<'r, 'i, 'lg, 'l> Drop for InodeReadWriteGuard<'r, 'i, 'lg, 'l> {
+impl<'r, 'i> Drop for InodeReadWriteGuard<'r, 'i> {
     fn drop(&mut self) {}
 }
 
@@ -166,12 +160,12 @@ pub struct InodeReadOnlyGuard<'r, 'i> {
 }
 
 #[derive(Debug)]
-pub struct InodeReadWriteGuard<'r, 'i, 'lg, 'l> {
+pub struct InodeReadWriteGuard<'r, 'i> {
     guard: InodeReadOnlyGuard<'r, 'i>,
-    log: &'lg LogGuard<'l>,
+    log: &'r LogGuard<'r>,
 }
 
-impl<'r, 'i, 'lg, 'l> InodeReadWriteGuard<'r, 'i, 'lg, 'l> {
+impl<'r, 'i> InodeReadWriteGuard<'r, 'i> {
     pub fn copy_from<T>(
         &mut self,
         is_src_user: bool,
@@ -287,29 +281,30 @@ impl<'r, 'i, 'lg, 'l> InodeReadWriteGuard<'r, 'i, 'lg, 'l> {
             return Err(());
         }
 
+        let new_entry = {
+            let mut entry = DirectoryEntry {
+                inode_number: inode_number as u16,
+                name: [0; _],
+            };
+            entry.name[..name.len()].copy_from_slice(name.as_bytes());
+            entry
+        };
+
         let entry_size = core::mem::size_of::<DirectoryEntry>();
         for offset in (0..self.size()).step_by(entry_size) {
-            let mut entry = self.read::<DirectoryEntry>(offset).unwrap();
+            let entry = self.read::<DirectoryEntry>(offset).unwrap();
             if entry.inode_number == 0 {
-                entry.name.fill(0);
-                entry.name[..name.len()].copy_from_slice(name.as_bytes());
-                entry.inode_number = inode_number as u16;
-                self.write(entry, offset).unwrap();
+                self.write(new_entry, offset).unwrap();
                 return Ok(());
             }
         }
 
-        let mut entry = DirectoryEntry {
-            inode_number: inode_number as u16,
-            name: [0; _],
-        };
-        entry.name[..name.len()].copy_from_slice(name.as_bytes());
-        self.write(entry, self.size() - self.size() % entry_size)
-            .or(Err(()))
+        let insert_offset = self.size() - self.size() % entry_size;
+        self.write(new_entry, insert_offset).or(Err(()))
     }
 }
 
-impl<'r, 'i, 'lg, 'l> Deref for InodeReadWriteGuard<'r, 'i, 'lg, 'l> {
+impl<'r, 'i> Deref for InodeReadWriteGuard<'r, 'i> {
     type Target = InodeReadOnlyGuard<'r, 'i>;
 
     fn deref(&self) -> &Self::Target {
@@ -317,7 +312,7 @@ impl<'r, 'i, 'lg, 'l> Deref for InodeReadWriteGuard<'r, 'i, 'lg, 'l> {
     }
 }
 
-impl<'r, 'i, 'lg, 'l> DerefMut for InodeReadWriteGuard<'r, 'i, 'lg, 'l> {
+impl<'r, 'i> DerefMut for InodeReadWriteGuard<'r, 'i> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.guard
     }
@@ -510,20 +505,22 @@ impl<'r, 'i> InodeReadOnlyGuard<'r, 'i> {
             return None;
         }
 
-        let name = CString::new(name).unwrap();
-
         for offset in (0..self.size()).step_by(core::mem::size_of::<DirectoryEntry>()) {
             let entry = self.read::<DirectoryEntry>(offset).unwrap();
             if entry.inode_number == 0 {
                 continue;
             }
 
-            let mut cmp = [0; DIRSIZE];
-            cmp[..name.as_bytes().len()].copy_from_slice(name.as_bytes());
+            if name.len() > DirectoryEntry::NAME_LENGTH {
+                return None;
+            }
+
+            let mut cmp = [0; DirectoryEntry::NAME_LENGTH];
+            cmp[..name.len()].copy_from_slice(name.as_bytes());
 
             if cmp == entry.name {
-                let mut fs = INODE_ALLOC.lock();
-                return fs
+                return INODE_ALLOC
+                    .lock()
                     .get(self.device_number(), entry.inode_number as usize)
                     .map(|inode| (inode, offset));
             }
@@ -599,7 +596,7 @@ impl<const N: usize> InodeAllocator<N> {
         device: usize,
         kind: u16,
         log: &LogGuard,
-    ) -> Option<usize> {
+    ) -> Result<usize, ()> {
         for inum in 1..(unsafe { SUPERBLOCK.ninodes as usize }) {
             let block_index = self.inode_block_at(inum);
             let in_block_index = inum % INODES_PER_BLOCK;
@@ -618,13 +615,13 @@ impl<const N: usize> InodeAllocator<N> {
                 log.write(&mut block);
                 buffer::release_with_unlock(block, self);
 
-                return Some(inum);
+                return Ok(inum);
             }
 
             buffer::release_with_unlock(block, self);
         }
 
-        None
+        Err(())
     }
 
     // TODO:
@@ -793,16 +790,20 @@ impl<'a> InodeOps<'a> for LogGuard<'a> {
 
         match dir.lookup(name) {
             // TODO: T_FILE
-            Some((inode, _))
-                if kind == 2 && (inode.lock_ro().is_file() || inode.lock_ro().is_device()) =>
-            {
-                Ok(inode)
+            Some((inode_ref, _)) => {
+                drop(dir);
+                let inode = inode_ref.lock_ro();
+                return if kind == 2 && (inode.is_file() || inode.is_device()) {
+                    drop(inode);
+                    Ok(inode_ref)
+                } else {
+                    Err(())
+                };
             }
-            Some(_) => Err(()),
             None => {
-                let mut alloc = INODE_ALLOC.lock();
-                let inode_number = alloc.allocate(dir.device_number(), kind, self).unwrap();
-                drop(alloc);
+                let inode_number = INODE_ALLOC
+                    .lock()
+                    .allocate(dir.device_number(), kind, self)?;
 
                 let inode_ref = get(dir.device_number(), inode_number).unwrap();
                 let mut inode = inode_ref.lock_rw(self);
@@ -819,9 +820,6 @@ impl<'a> InodeOps<'a> for LogGuard<'a> {
 
                 // TODO: T_DIR
                 if kind == 1 {
-                    dir.increment_link();
-                    dir.update();
-
                     if inode.link(".", inode.inode_number()).is_err()
                         || inode.link("..", dir.inode_number()).is_err()
                     {
@@ -831,6 +829,12 @@ impl<'a> InodeOps<'a> for LogGuard<'a> {
 
                 if dir.link(name, inode.inode_number()).is_err() {
                     return bad(inode);
+                }
+
+                // TODO: T_DIR
+                if kind == 1 {
+                    dir.increment_link();
+                    dir.update();
                 }
 
                 drop(inode);
@@ -856,23 +860,29 @@ pub fn link(new: &str, old: &str) -> Result<(), ()> {
     ip.update();
     drop(ip);
 
-    let bad = || {
-        let inode = get(dev, inum).unwrap();
-        inode.lock_ro().decrement_link();
+    let bad = |inode_ref: InodeReference, log| {
+        let mut inode = inode_ref.lock_rw(&log);
+        inode.decrement_link();
+        inode.update();
+        drop(inode);
+        drop(inode_ref);
+        drop(log);
         Err(())
     };
 
     let Some((dir, name)) = search_parent_inode(new) else {
-        return bad();
+        return bad(inode_ref, log);
     };
     let mut dir = dir.lock_rw(&log);
 
     if dir.device_number() != dev {
-        return bad();
+        drop(dir);
+        return bad(inode_ref, log);
     }
 
     if dir.link(name, inum).is_err() {
-        return bad();
+        drop(dir);
+        return bad(inode_ref, log);
     }
 
     drop(dir);
@@ -905,10 +915,10 @@ pub fn unlink(path: &str) -> Result<(), ()> {
         dir.decrement_link();
         dir.update();
     }
+    drop(dir);
 
     ip.decrement_link();
     ip.update();
-    drop(dir);
     drop(ip);
     drop(log);
     Ok(())
