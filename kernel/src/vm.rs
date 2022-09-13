@@ -1,12 +1,16 @@
 //! the kernel's page table.
 
-use core::ptr::NonNull;
+use core::{arch::riscv64::sfence_vma, ptr::NonNull};
 
 use crate::{
     allocator::KernelAllocator,
     memory_layout::{symbol_addr, KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, UART0, VIRTIO0},
     process,
-    riscv::paging::{pg_rounddown, PageTable, PGSIZE, PTE},
+    riscv::{
+        paging::{pg_rounddown, PageTable, PGSIZE, PTE},
+        satp::make_satp,
+        write_csr,
+    },
 };
 
 // kernel.ld sets this to end of kernel code.
@@ -149,27 +153,23 @@ impl PageTableExtension for PageTable {
     }
 }
 
-pub mod binding {
-    use core::arch::riscv64::sfence_vma;
+static mut KERNEL_PAGETABLE: PageTable = PageTable::invalid();
 
-    use crate::riscv::{paging::pg_rounddown, satp::make_satp, write_csr};
+pub unsafe fn initialize() {
+    KERNEL_PAGETABLE = make_pagetable_for_kernel();
+}
+
+// Switch h/w page table register to the kernel's page table,
+// and enable paging.
+pub unsafe fn initialize_for_core() {
+    write_csr!(satp, make_satp(KERNEL_PAGETABLE.as_u64()));
+    sfence_vma(0, 0);
+}
+
+pub mod binding {
+    use crate::riscv::paging::pg_rounddown;
 
     use super::*;
-
-    static mut KERNEL_PAGETABLE: PageTable = PageTable::invalid();
-
-    #[no_mangle]
-    unsafe extern "C" fn kvminit() {
-        KERNEL_PAGETABLE = make_pagetable_for_kernel();
-    }
-
-    // Switch h/w page table register to the kernel's page table,
-    // and enable paging.
-    #[no_mangle]
-    unsafe extern "C" fn kvminithart() {
-        write_csr!(satp, make_satp(KERNEL_PAGETABLE.as_u64()));
-        sfence_vma(0, 0);
-    }
 
     // Copy a null-terminated string from user to kernel.
     // Copy bytes to dst from virtual address srcva in a given page table,

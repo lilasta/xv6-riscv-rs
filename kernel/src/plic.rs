@@ -5,15 +5,13 @@ use crate::{
     riscv::read_reg,
 };
 
-#[no_mangle]
-unsafe extern "C" fn plicinit() {
+pub unsafe fn initialize() {
     // set desired IRQ priorities non-zero (otherwise disabled).
     <*mut u32>::from_bits(PLIC + UART0_IRQ * 4).write(1);
     <*mut u32>::from_bits(PLIC + VIRTIO0_IRQ * 4).write(1);
 }
 
-#[no_mangle]
-unsafe extern "C" fn plicinithart() {
+pub unsafe fn initialize_for_core() {
     let hart = read_reg!(tp);
 
     // set uart's enable bit for this hart's S-mode.

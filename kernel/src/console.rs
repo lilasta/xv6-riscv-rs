@@ -10,6 +10,7 @@
 //!
 
 use crate::{
+    file::{devsw, DeviceFile},
     lock::{spin::SpinLock, Lock, LockGuard},
     process::{self, copyout_either},
     uart::UART,
@@ -188,39 +189,29 @@ pub fn consoleintr(c: i32) {
     CONSOLE.lock().handle_interrupt(c as u8);
 }
 
-mod binding {
-    use crate::file::{devsw, DeviceFile};
+pub unsafe fn initialize() {
+    UART::get().init();
 
-    use super::*;
+    // connect read and write system calls
+    // to consoleread and consolewrite.
+    devsw[1] = Some(DeviceFile {
+        read: consoleread,
+        write: consolewrite,
+    });
+}
 
-    #[no_mangle]
-    unsafe extern "C" fn consputc(c: i32) {
-        if c == 0x100 {
-            Console::backspace();
-        } else {
-            Console::putc(c as u8);
-        }
+pub unsafe fn putc(c: i32) {
+    if c == 0x100 {
+        Console::backspace();
+    } else {
+        Console::putc(c as u8);
     }
+}
 
-    #[no_mangle]
-    unsafe extern "C" fn consoleinit() {
-        UART::get().init();
+extern "C" fn consolewrite(src_user: i32, src: usize, n: usize) -> i32 {
+    Console::write(src_user as usize, src, n) as i32
+}
 
-        // connect read and write system calls
-        // to consoleread and consolewrite.
-        devsw[1] = Some(DeviceFile {
-            read: consoleread,
-            write: consolewrite,
-        });
-    }
-
-    #[no_mangle]
-    extern "C" fn consolewrite(src_user: i32, src: usize, n: usize) -> i32 {
-        Console::write(src_user as usize, src, n) as i32
-    }
-
-    #[no_mangle]
-    extern "C" fn consoleread(dst_user: i32, dst: usize, n: usize) -> i32 {
-        CONSOLE.lock().read(dst_user as usize, dst, n)
-    }
+extern "C" fn consoleread(dst_user: i32, dst: usize, n: usize) -> i32 {
+    CONSOLE.lock().read(dst_user as usize, dst, n)
 }

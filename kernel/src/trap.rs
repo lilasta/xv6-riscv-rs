@@ -20,8 +20,7 @@ unsafe fn set_user_trap() {
     unsafe { write_csr!(stvec, vec) };
 }
 
-#[no_mangle]
-extern "C" fn trapinithart() {
+pub fn initialize() {
     unsafe { set_kernel_trap() };
 }
 

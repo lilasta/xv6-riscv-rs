@@ -71,43 +71,72 @@ mod undrop;
 mod virtio;
 mod vm;
 
-use core::fmt::Write;
+use core::{
+    fmt::Write,
+    sync::atomic::{AtomicBool, Ordering},
+};
+
+use lock::spin::SpinLock;
+use lock::Lock;
 
 pub struct Print;
 
 impl core::fmt::Write for Print {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        extern "C" {
-            fn consputc(c: i32);
-        }
-
         for ch in s.chars() {
-            unsafe { consputc(ch as i32) };
+            unsafe { console::putc(ch as i32) };
         }
 
         core::fmt::Result::Ok(())
     }
 }
 
+static PRINT: SpinLock<Print> = SpinLock::new(Print);
+
 pub macro print($($arg:tt)*) {{
-    let _ = write!(crate::Print, "{}", format_args!($($arg)*));
+    let _ = write!(PRINT.lock(), "{}", format_args!($($arg)*));
 }}
 
 pub macro println($($arg:tt)*) {{
-    let _ = writeln!(crate::Print, "{}", format_args!($($arg)*));
+    let _ = writeln!(PRINT.lock(), "{}", format_args!($($arg)*));
 }}
-
-pub macro cstr($s:literal) {
-    core::ffi::CStr::from_bytes_with_nul_unchecked(concat!($s, '\0').as_bytes())
-}
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    let _ = writeln!(Print, "{}", info);
+    let _ = writeln!(PRINT.lock(), "{}", info);
     loop {}
 }
 
 #[alloc_error_handler]
 fn alloc_error(layout: core::alloc::Layout) -> ! {
     panic!("Cannot alloc: {:?}", layout);
+}
+
+static STARTED: AtomicBool = AtomicBool::new(false);
+
+#[no_mangle]
+unsafe extern "C" fn main() {
+    if process::cpuid() == 0 {
+        console::initialize();
+        println!("");
+        println!("xv6 kernel is booting");
+        println!("");
+        allocator::initialize(); // physical page allocator
+        vm::initialize(); // create kernel page table
+        vm::initialize_for_core(); // turn on paging
+        trap::initialize(); // install kernel trap vector
+        plic::initialize(); // set up interrupt controller
+        plic::initialize_for_core(); // ask PLIC for device interrupts
+        process::setup_init_process(); // first user process
+        STARTED.store(true, Ordering::SeqCst);
+    } else {
+        while !STARTED.load(Ordering::SeqCst) {}
+
+        println!("hart {} starting", process::cpuid());
+        vm::initialize_for_core(); // turn on paging
+        trap::initialize(); // install kernel trap vector
+        plic::initialize_for_core(); // ask PLIC for device interrupts
+    }
+
+    process::scheduler();
 }

@@ -726,6 +726,7 @@ unsafe fn deallocate_block(device: usize, block: usize, log: &LogGuard) {
     };
 
     bitmap.deallocate(block % BITMAP_BITS).unwrap();
+    assert!(bitmap.get(block % BITMAP_BITS) == Some(false));
 
     log.write(&bitmap_buf);
 

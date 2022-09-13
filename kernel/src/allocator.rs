@@ -123,24 +123,6 @@ unsafe impl GlobalAlloc for SpinLock<KernelAllocator> {
     }
 }
 
-mod binding {
-    use super::*;
-
-    #[no_mangle]
-    unsafe extern "C" fn kinit() {
-        KernelAllocator::get().initialize();
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn kfree(pa: NonNull<u8>) {
-        KernelAllocator::get().deallocate_page(pa);
-    }
-
-    #[no_mangle]
-    unsafe extern "C" fn kalloc() -> usize {
-        match KernelAllocator::get().allocate_page() {
-            Some(ptr) => ptr.addr().get(),
-            None => 0,
-        }
-    }
+pub fn initialize() {
+    KernelAllocator::get().initialize();
 }

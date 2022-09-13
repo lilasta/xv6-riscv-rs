@@ -5,14 +5,6 @@ const CC: &'static str = "riscv64-elf-gcc";
 const LD: &'static str = "riscv64-elf-ld";
 const OBJCOPY: &'static str = "riscv64-elf-objcopy";
 
-const SRCS: &[&str] = &[
-    "printf.c",
-    "spinlock.c",
-    "string.c",
-    "main.c",
-    "sleeplock.c",
-];
-
 const CFLAGS: &[&'static str] = &[
     "-Wall",
     "-Werror",
@@ -43,14 +35,13 @@ fn main() {
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let out_dir = PathBuf::from(out_dir);
     build_initcode(&out_dir);
-    build_c();
 }
 
 fn print_rerun() {
-    let paths = std::fs::read_dir("c").unwrap();
+    let paths = std::fs::read_dir("asm").unwrap();
     for path in paths {
         println!(
-            "cargo:rerun-if-changed=c/{}",
+            "cargo:rerun-if-changed=asm/{}",
             path.unwrap().file_name().to_str().unwrap()
         );
     }
@@ -88,29 +79,4 @@ fn build_initcode(out_path: &PathBuf) {
         .arg(out_path.join("initcode"))
         .status()
         .unwrap();
-}
-
-fn build_c() {
-    let mut build = cc::Build::new();
-
-    // set compiler
-    build.compiler(CC);
-
-    // enable flags
-    for flag in CFLAGS {
-        build.flag(flag);
-    }
-
-    // set include dir
-    build.include("c/");
-
-    // compile
-    for file in SRCS {
-        let name = file.split('.').next().unwrap();
-        build
-            .clone()
-            .file(&format!("c/{}", file))
-            .compile(&format!("lib{}.a", name));
-        println!("cargo:rustc-link-lib=static={}", name);
-    }
 }
