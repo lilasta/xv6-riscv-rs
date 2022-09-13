@@ -142,7 +142,7 @@ impl File {
                     drop(inode);
                     drop(log);
 
-                    if result.is_err() {
+                    if wrote != n {
                         break;
                     }
                     i += n;

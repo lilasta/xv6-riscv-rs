@@ -220,7 +220,7 @@ fn sys_write() -> Result<u64, ()> {
 }
 
 fn sys_close() -> Result<u64, ()> {
-    let (fd, f) = arg_fd::<0>()?;
+    let (fd, _) = arg_fd::<0>()?;
     let context = process::context().unwrap();
     context.ofile[fd] = None;
     Ok(0)
