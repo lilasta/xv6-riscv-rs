@@ -271,7 +271,6 @@ pub unsafe fn fork() -> Option<usize> {
     for (i, opened) in process.context().unwrap().ofile.iter().enumerate() {
         context_new.ofile[i] = opened.clone();
     }
-    context_new.cwd = process.context().unwrap().cwd.clone();
 
     process_new.name = process.name;
 

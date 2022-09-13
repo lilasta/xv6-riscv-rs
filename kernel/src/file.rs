@@ -160,7 +160,6 @@ impl File {
                 if !*writable {
                     return Err(());
                 }
-
                 let device = unsafe { devsw.get(*major).ok_or(())? };
                 let result = (device.as_ref().unwrap().write)(1, addr, n);
                 if result < 0 {
