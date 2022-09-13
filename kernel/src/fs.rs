@@ -183,9 +183,7 @@ impl<'r, 'i, 'lg, 'l> InodeReadWriteGuard<'r, 'i, 'lg, 'l> {
 
             // TODO: REMOVE THIS HACK:
             let log = unsafe { <*const _>::as_ref(self.log).unwrap() };
-            let Some(block) = self.offset_to_block(offset, Some(log)) else {
-                break;
-            };
+            let block = self.offset_to_block(offset, Some(log)).unwrap();
 
             let mut buf = buffer::get(self.device_number(), block).unwrap();
 
@@ -403,7 +401,7 @@ impl<'r, 'i> InodeReadOnlyGuard<'r, 'i> {
             return Some(*addr as usize);
         }
 
-        if NDIRECT < index && index < NDIRECT + NINDIRECT {
+        if NDIRECT <= index && index < NDIRECT + NINDIRECT {
             let index = index - NDIRECT;
 
             if self.inode.chain == 0 {
@@ -461,9 +459,7 @@ impl<'r, 'i> InodeReadOnlyGuard<'r, 'i> {
         while read < n {
             let offset = offset + read;
 
-            let Some(block) = self.offset_to_block(offset, None) else {
-                break;
-            };
+            let block = self.offset_to_block(offset, None).unwrap();
 
             let buf = buffer::get(self.device_number(), block).unwrap();
 

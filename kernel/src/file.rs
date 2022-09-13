@@ -78,14 +78,7 @@ impl File {
                 }
 
                 let mut inode = inode.lock_ro();
-                let result = inode.copy_to::<u8>(true, addr, offset.load(Acquire), n);
-                drop(inode);
-
-                let read = match result {
-                    Ok(read) => read,
-                    Err(_) => 0,
-                };
-
+                let read = inode.copy_to::<u8>(true, addr, offset.load(Acquire), n)?;
                 offset.fetch_add(read, Release);
                 Ok(read)
             }

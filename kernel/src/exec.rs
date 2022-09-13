@@ -32,7 +32,7 @@ fn load_segment(
     for i in (0..size).step_by(PGSIZE) {
         let pa = pagetable.virtual_to_physical(va + i).unwrap();
         let n = (size - i).min(PGSIZE);
-        if inode.copy_to::<u8>(false, pa, offset + i, n).is_err() {
+        if inode.copy_to::<u8>(false, pa, offset + i, n) != Ok(n) {
             return false;
         }
     }
