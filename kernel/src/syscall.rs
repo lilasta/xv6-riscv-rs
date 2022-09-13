@@ -1,4 +1,4 @@
-use core::{ffi::CStr, ptr::NonNull};
+use core::ffi::CStr;
 
 use alloc::{ffi::CString, sync::Arc};
 use arrayvec::ArrayVec;
@@ -358,6 +358,7 @@ fn sys_chdir() -> Result<u64, ()> {
     if !inode.is_directory() {
         return Err(());
     }
+    drop(inode);
 
     let context = process::context().unwrap();
     let old = context.cwd.replace(inode_ref);

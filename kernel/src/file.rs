@@ -89,7 +89,7 @@ impl File {
                     return Err(());
                 }
 
-                let device = unsafe { devsw.get(*major).ok_or(())? };
+                let device = unsafe { DEVICEFILES.get(*major).ok_or(())? };
                 let result = (device.as_ref().unwrap().read)(1, addr, n);
                 if result < 0 {
                     Err(())
@@ -153,7 +153,7 @@ impl File {
                 if !*writable {
                     return Err(());
                 }
-                let device = unsafe { devsw.get(*major).ok_or(())? };
+                let device = unsafe { DEVICEFILES.get(*major).ok_or(())? };
                 let result = (device.as_ref().unwrap().write)(1, addr, n);
                 if result < 0 {
                     Err(())
@@ -171,4 +171,4 @@ pub struct DeviceFile {
     pub write: extern "C" fn(i32, usize, usize) -> i32,
 }
 
-pub static mut devsw: [Option<DeviceFile>; NDEV] = [const { None }; _];
+pub static mut DEVICEFILES: [Option<DeviceFile>; NDEV] = [const { None }; _];

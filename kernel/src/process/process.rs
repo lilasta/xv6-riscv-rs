@@ -6,8 +6,8 @@ use crate::{
     allocator::KernelAllocator,
     config::NOFILE,
     file::File,
-    fs::{self, InodeReference},
-    log, process,
+    fs::InodeReference,
+    process,
     riscv::paging::{PageTable, PGSIZE},
 };
 

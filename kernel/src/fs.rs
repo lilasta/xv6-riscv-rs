@@ -105,10 +105,12 @@ impl<'i> InodeReference<'i> {
             reflife: PhantomData,
         };
 
-        // TODO: HACK
-        if self.is_initialized.load(Ordering::SeqCst) == false {
+        if self
+            .is_initialized
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
             guard.initialize();
-            self.is_initialized.store(true, Ordering::SeqCst);
         }
 
         guard
@@ -139,8 +141,19 @@ impl<'a> Clone for InodeReference<'a> {
 impl<'a> Drop for InodeReference<'a> {
     fn drop(&mut self) {
         let log = log::start();
-        INODE_ALLOC.lock().release(self, &log)
+        let mut alloc = INODE_ALLOC.lock();
+        alloc.release(self, &log);
+        drop(alloc);
+        drop(log);
     }
+}
+
+impl<'r, 'i> Drop for InodeReadOnlyGuard<'r, 'i> {
+    fn drop(&mut self) {}
+}
+
+impl<'r, 'i, 'lg, 'l> Drop for InodeReadWriteGuard<'r, 'i, 'lg, 'l> {
+    fn drop(&mut self) {}
 }
 
 #[derive(Debug)]
@@ -787,10 +800,9 @@ impl<'a> InodeOps<'a> for LogGuard<'a> {
             }
             Some(_) => Err(()),
             None => {
-                let inode_number = INODE_ALLOC
-                    .lock()
-                    .allocate(dir.device_number(), kind, self)
-                    .unwrap();
+                let mut alloc = INODE_ALLOC.lock();
+                let inode_number = alloc.allocate(dir.device_number(), kind, self).unwrap();
+                drop(alloc);
 
                 let inode_ref = get(dir.device_number(), inode_number).unwrap();
                 let mut inode = inode_ref.lock_rw(self);
@@ -821,6 +833,8 @@ impl<'a> InodeOps<'a> for LogGuard<'a> {
                     return bad(inode);
                 }
 
+                drop(inode);
+                drop(dir);
                 Ok(inode_ref)
             }
         }
@@ -861,6 +875,8 @@ pub fn link(new: &str, old: &str) -> Result<(), ()> {
         return bad();
     }
 
+    drop(dir);
+    drop(log);
     Ok(())
 }
 
@@ -892,6 +908,9 @@ pub fn unlink(path: &str) -> Result<(), ()> {
 
     ip.decrement_link();
     ip.update();
+    drop(dir);
+    drop(ip);
+    drop(log);
     Ok(())
 }
 
@@ -912,64 +931,61 @@ pub fn get(device: usize, inode: usize) -> Option<InodeReference<'static>> {
 }
 
 pub fn search_inode(path: &str) -> Option<InodeReference<'static>> {
-    let mut inode = if path.starts_with("/") {
+    let mut inode_ref = if path.starts_with("/") {
         get(ROOTDEV, ROOTINO).unwrap()
     } else {
         process::context().unwrap().cwd.as_ref().cloned().unwrap()
     };
 
-    for element in path.split_terminator("/") {
+    for element in path.split("/") {
         if element.is_empty() {
             continue;
         }
 
-        if element == "." {
-            continue;
+        let mut inode = inode_ref.lock_ro();
+        if !inode.is_directory() {
+            return None;
         }
 
-        let mut locked = inode.lock_ro();
-        match locked.lookup(element) {
+        match inode.lookup(element) {
             Some((next, _)) => {
-                drop(locked);
-                inode = next;
+                drop(inode);
+                inode_ref = next;
             }
             _ => return None,
         }
     }
 
-    Some(inode)
+    Some(inode_ref)
 }
 
 pub fn search_parent_inode(path: &str) -> Option<(InodeReference<'static>, &str)> {
-    let mut inode = if path.starts_with("/") {
+    let mut inode_ref = if path.starts_with("/") {
         get(ROOTDEV, ROOTINO).unwrap()
     } else {
         process::context().unwrap().cwd.as_ref().cloned().unwrap()
     };
 
-    let mut iter = path.split_inclusive("/").peekable();
+    let mut iter = path.split("/").peekable();
     while let Some(element) = iter.next() {
-        if !inode.lock_ro().is_directory() {
+        if element.is_empty() {
+            continue;
+        }
+
+        let mut inode = inode_ref.lock_ro();
+        if !inode.is_directory() {
             return None;
         }
 
-        if element == "/" {
-            continue;
-        }
-
-        if element == "." {
-            continue;
-        }
-
         if iter.peek().is_none() {
-            return Some((inode, element));
+            drop(inode);
+            return Some((inode_ref, element));
         }
 
-        let mut locked = inode.lock_ro();
-        match locked.lookup(element) {
+        match inode.lookup(element) {
             Some((next, _)) => {
-                drop(locked);
-                inode = next;
+                drop(inode);
+                inode_ref = next;
             }
             _ => return None,
         }

@@ -10,7 +10,7 @@
 //!
 
 use crate::{
-    file::{devsw, DeviceFile},
+    file::{DeviceFile, DEVICEFILES},
     lock::{spin::SpinLock, Lock, LockGuard},
     process::{self, copyin_either, copyout_either},
     uart::UART,
@@ -191,7 +191,7 @@ pub unsafe fn initialize() {
 
     // connect read and write system calls
     // to consoleread and consolewrite.
-    devsw[1] = Some(DeviceFile {
+    DEVICEFILES[1] = Some(DeviceFile {
         read: consoleread,
         write: consolewrite,
     });

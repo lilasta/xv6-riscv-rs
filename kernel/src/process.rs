@@ -5,7 +5,6 @@ mod scheduler;
 mod table;
 mod trapframe;
 
-use core::ffi::{c_char, c_void};
 use core::mem::MaybeUninit;
 
 use crate::allocator::KernelAllocator;
@@ -30,7 +29,6 @@ use crate::{
 use self::context::CPUContext;
 use self::cpu::CPU;
 use self::process::{Process, ProcessState};
-use self::trapframe::TrapFrame;
 
 fn current() -> Option<&'static SpinLock<Process>> {
     cpu().assigned_process()
