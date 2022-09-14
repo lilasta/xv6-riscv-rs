@@ -168,13 +168,13 @@ pub unsafe fn setup_init_process() {
     // a user program that calls exec("/init")
     static INITCODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/initcode"));
 
-    let root = fs::search_inode(&"/").unwrap();
-    let mut context = ProcessContext::allocate(finish_dispatch, root).unwrap();
+    let mut context = ProcessContext::allocate(finish_dispatch).unwrap();
     uvminit(context.pagetable, INITCODE.as_ptr(), INITCODE.len());
     context.sz = PGSIZE;
 
     context.trapframe.as_mut().epc = 0;
     context.trapframe.as_mut().sp = PGSIZE as _;
+    context.cwd = fs::search_inode(&"/");
 
     // process.name = "initcode";
 
@@ -245,11 +245,7 @@ pub unsafe fn fork() -> Option<usize> {
     let p = current()?;
     let process = p.get_mut();
     let mut process_new = table::table().allocate_process()?;
-    let mut context_new = ProcessContext::allocate(
-        finish_dispatch,
-        process.context().unwrap().cwd.as_ref().cloned().unwrap(),
-    )
-    .ok()?;
+    let mut context_new = ProcessContext::allocate(finish_dispatch).ok()?;
 
     let size = process.context().unwrap().sz;
     if let Err(_) = process
@@ -268,6 +264,7 @@ pub unsafe fn fork() -> Option<usize> {
     for (i, opened) in process.context().unwrap().ofile.iter().enumerate() {
         context_new.ofile[i] = opened.clone();
     }
+    context_new.cwd = Some(process.context().unwrap().cwd.as_ref().cloned().unwrap());
 
     process_new.name = process.name;
 
@@ -291,7 +288,10 @@ pub unsafe fn exit(status: i32) {
     assert!(process.pid != 1);
 
     let context = process.context().unwrap();
-    context.release_files();
+    for opened in context.ofile.iter_mut() {
+        opened.take();
+    }
+    context.cwd.take();
 
     let _guard = (*table::wait_lock()).lock();
     //table::table().remove_parent(process.pid as usize);

@@ -361,9 +361,8 @@ fn sys_chdir() -> Result<u64, ()> {
     drop(inode);
 
     let context = process::context().unwrap();
-    let old = context.cwd.replace(inode_ref);
-    old.unwrap().drop_with_log(&log);
-
+    context.cwd.take().unwrap().drop_with_log(&log);
+    context.cwd.replace(inode_ref);
     Ok(0)
 }
 

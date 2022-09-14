@@ -276,7 +276,9 @@ impl<'r, 'i> InodeReadWriteGuard<'r, 'i> {
                 inode_number: inode_number as u16,
                 name: [0; _],
             };
-            entry.name[..name.len()].copy_from_slice(name.as_bytes());
+
+            let len = name.len().min(DirectoryEntry::NAME_LENGTH);
+            entry.name[..len].copy_from_slice(&name.as_bytes()[..len]);
             entry
         };
 
@@ -482,12 +484,9 @@ impl<'r, 'i> InodeReadOnlyGuard<'r, 'i> {
                 continue;
             }
 
-            if name.len() > DirectoryEntry::NAME_LENGTH {
-                return None;
-            }
-
             let mut cmp = [0; DirectoryEntry::NAME_LENGTH];
-            cmp[..name.len()].copy_from_slice(name.as_bytes());
+            let len = name.len().min(DirectoryEntry::NAME_LENGTH);
+            cmp[..len].copy_from_slice(&name.as_bytes()[..len]);
 
             if cmp == entry.name {
                 return INODE_ALLOC
@@ -629,19 +628,18 @@ impl<const N: usize> InodeAllocator<N> {
 
     pub fn release(self: &mut SpinLockGuard<Self>, inode_ref: &InodeReference, log: &LogGuard) {
         let refcnt = self.cache.reference_count(inode_ref.cache_index).unwrap();
-        let mut inode = inode_ref.lock_rw(log);
-        if refcnt == 1
-            && inode_ref.is_initialized.load(Ordering::SeqCst)
-            && inode.counf_of_link() == 0
-        {
-            // TODO: FIX
-            assert!(inode.inode.nlink == 0);
+        if refcnt == 1 && inode_ref.is_initialized.load(Ordering::SeqCst) {
             SpinLock::unlock_temporarily(self, move || {
-                inode.truncate();
-                inode.inode.kind = 0;
-                inode.update();
-                inode_ref.is_initialized.store(false, Ordering::SeqCst);
-                drop(inode);
+                let mut inode = inode_ref.lock_rw(log);
+                if inode.counf_of_link() == 0 {
+                    // TODO: FIX
+                    assert!(inode.inode.nlink == 0);
+                    inode.truncate();
+                    inode.inode.kind = 0;
+                    inode.update();
+                    inode_ref.is_initialized.store(false, Ordering::SeqCst);
+                    drop(inode);
+                }
             });
         }
         self.cache.release(inode_ref.cache_index).unwrap();
@@ -745,9 +743,9 @@ impl<'a> InodeOps<'a> for LogGuard<'a> {
                 };
             }
             None => {
-                let inode_number = INODE_ALLOC
-                    .lock()
-                    .allocate(dir.device_number(), kind, self)?;
+                let mut alloc = INODE_ALLOC.lock();
+                let inode_number = alloc.allocate(dir.device_number(), kind, self)?;
+                drop(alloc);
 
                 let inode_ref = get(dir.device_number(), inode_number).unwrap();
                 let mut inode = inode_ref.lock_rw(self);
@@ -830,6 +828,7 @@ pub fn link(new: &str, old: &str) -> Result<(), ()> {
     }
 
     drop(dir);
+    drop(inode_ref);
     drop(log);
     Ok(())
 }

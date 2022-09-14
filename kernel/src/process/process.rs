@@ -197,7 +197,7 @@ pub struct ProcessContext {
 }
 
 impl ProcessContext {
-    pub fn allocate(jump: extern "C" fn(), cwd: InodeReference<'static>) -> Result<Self, ()> {
+    pub fn allocate(jump: extern "C" fn()) -> Result<Self, ()> {
         let trapframe = KernelAllocator::get().allocate().ok_or(())?;
         let pagetable = process::allocate_pagetable(trapframe.addr().get())?;
 
@@ -214,17 +214,8 @@ impl ProcessContext {
             trapframe,
             context,
             ofile: [const { None }; _],
-            cwd: Some(cwd),
+            cwd: None,
         })
-    }
-
-    // TODO: ProcessFiles
-    pub fn release_files(&mut self) {
-        for opened in self.ofile.iter_mut() {
-            opened.take();
-        }
-
-        self.cwd.take();
     }
 }
 
