@@ -26,10 +26,6 @@ impl<const SIZE: usize> PipeInner<SIZE> {
         }
     }
 
-    pub const fn is_used(&self) -> bool {
-        !self.write_open && !self.read_open
-    }
-
     pub fn close_read(&mut self) {
         self.read_open = false;
         process::wakeup(core::ptr::addr_of!(self.write).addr());
@@ -107,7 +103,6 @@ impl<const SIZE: usize> PipeInner<SIZE> {
 pub struct Pipe<const SIZE: usize> {
     inner: Arc<SpinLock<PipeInner<SIZE>>>,
     write: bool,
-    dropped: bool, // TODO: delete this HACK
 }
 
 impl<const SIZE: usize> Pipe<SIZE> {
@@ -116,13 +111,8 @@ impl<const SIZE: usize> Pipe<SIZE> {
         let read = Self {
             inner: inner.clone(),
             write: false,
-            dropped: false,
         };
-        let write = Self {
-            inner,
-            write: true,
-            dropped: false,
-        };
+        let write = Self { inner, write: true };
         Some((read, write))
     }
 
