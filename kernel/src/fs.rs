@@ -569,7 +569,7 @@ impl<const N: usize> InodeAllocator<N> {
             let block_index = self.inode_block_at(inum);
             let in_block_index = inum % INODES_PER_BLOCK;
 
-            let mut block = buffer::get(device, block_index).unwrap();
+            let mut block = buffer::get_with_unlock(device, block_index, self).unwrap();
             let inodes = unsafe { block.read_array_with_unlock::<Inode, _>(self) };
 
             let inode = &mut inodes[in_block_index];

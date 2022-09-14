@@ -149,6 +149,9 @@ impl<const BSIZE: usize, const CSIZE: usize> BufferCache<BSIZE, CSIZE> {
         }
     }
 
+    /// バッファを取得します。
+    /// もし目的のバッファが使用中であればスリープして待機するため、
+    /// スピンロックを保持している場合はこの関数を使用する前に解除する必要があります。
     pub fn get(&self, device: usize, block: usize) -> Option<BufferGuard<BSIZE, CSIZE>> {
         // キャッシュのロックを保持しておきます
         let mut cache = self.cache.lock();
@@ -198,4 +201,12 @@ static CACHE: BufferCache<BSIZE, NBUF> = BufferCache::new();
 
 pub fn get(device: usize, block: usize) -> Option<BufferGuard<'static, BSIZE, NBUF>> {
     CACHE.get(device, block)
+}
+
+pub fn get_with_unlock<T>(
+    device: usize,
+    block: usize,
+    lock: &mut SpinLockGuard<T>,
+) -> Option<BufferGuard<'static, BSIZE, NBUF>> {
+    SpinLock::unlock_temporarily(lock, || CACHE.get(device, block))
 }
