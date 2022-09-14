@@ -1,12 +1,12 @@
-use core::{mem::MaybeUninit, ptr::NonNull};
+use alloc::sync::Arc;
 
 use crate::{
-    allocator::KernelAllocator,
     process,
     spinlock::{SpinLock, SpinLockGuard},
     vm::PageTableExtension,
 };
 
+#[derive(Debug)]
 struct PipeInner<const SIZE: usize> {
     data: [u8; SIZE],
     read: usize,
@@ -105,22 +105,16 @@ impl<const SIZE: usize> PipeInner<SIZE> {
 
 #[derive(Debug)]
 pub struct Pipe<const SIZE: usize> {
-    inner: NonNull<SpinLock<PipeInner<SIZE>>>,
+    inner: Arc<SpinLock<PipeInner<SIZE>>>,
     write: bool,
     dropped: bool, // TODO: delete this HACK
 }
 
 impl<const SIZE: usize> Pipe<SIZE> {
     pub fn allocate() -> Option<(Self, Self)> {
-        let mut inner: NonNull<MaybeUninit<_>> = KernelAllocator::get().allocate()?;
-        let inner = unsafe {
-            inner
-                .as_mut()
-                .write(SpinLock::new(PipeInner::<SIZE>::new()));
-            inner.cast()
-        };
+        let inner = Arc::new(SpinLock::new(PipeInner::<SIZE>::new()));
         let read = Self {
-            inner,
+            inner: inner.clone(),
             write: false,
             dropped: false,
         };
@@ -134,7 +128,7 @@ impl<const SIZE: usize> Pipe<SIZE> {
 
     pub fn write(&self, addr: usize, n: usize) -> Result<usize, ()> {
         match self.write {
-            true => unsafe { self.inner.as_ref().lock().write(addr, n) },
+            true => self.inner.lock().write(addr, n),
             false => Err(()),
         }
     }
@@ -142,28 +136,16 @@ impl<const SIZE: usize> Pipe<SIZE> {
     pub fn read(&self, addr: usize, n: usize) -> Result<usize, ()> {
         match self.write {
             true => Err(()),
-            false => unsafe { self.inner.as_ref().lock().read(addr, n) },
+            false => self.inner.lock().read(addr, n),
         }
     }
 }
 
 impl<const SIZE: usize> Drop for Pipe<SIZE> {
     fn drop(&mut self) {
-        if self.dropped {
-            return;
-        }
-
-        let mut inner = unsafe { self.inner.as_ref().lock() };
         match self.write {
-            true => inner.close_write(),
-            false => inner.close_read(),
+            true => self.inner.lock().close_write(),
+            false => self.inner.lock().close_read(),
         }
-
-        if inner.is_used() {
-            drop(inner);
-            KernelAllocator::get().deallocate(self.inner);
-        }
-
-        self.dropped = true;
     }
 }
