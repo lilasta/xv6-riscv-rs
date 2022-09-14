@@ -1,13 +1,7 @@
-use core::{
-    mem::MaybeUninit,
-    ops::{Deref, DerefMut},
-};
-
 use crate::{
     cache::CacheRc,
     config::NBUF,
     lock::{sleep::SleepLock, spin::SpinLock, Lock, LockGuard},
-    undrop::Undroppable,
     virtio,
 };
 
@@ -34,167 +28,174 @@ impl<const SIZE: usize> Buffer<SIZE> {
     pub const fn zeroed() -> Self {
         Self { data: [0; _] }
     }
-
-    pub const fn size(&self) -> usize {
-        SIZE
-    }
-
-    pub const fn as_ptr<T>(&self) -> *const T
-    where
-        [(); check_buffer_conversion::<T, SIZE>()]:,
-    {
-        self.data.as_ptr().cast()
-    }
-
-    pub const fn as_mut_ptr<T>(&mut self) -> *mut T
-    where
-        [(); check_buffer_conversion::<T, SIZE>()]:,
-    {
-        self.data.as_mut_ptr().cast()
-    }
-
-    pub const fn as_uninit<T>(&self) -> &MaybeUninit<T>
-    where
-        [(); check_buffer_conversion::<T, SIZE>()]:,
-    {
-        let ptr = self.data.as_ptr();
-        let ptr = ptr.cast::<MaybeUninit<T>>();
-        unsafe { &*ptr }
-    }
-
-    pub const fn as_uninit_mut<T>(&mut self) -> &mut MaybeUninit<T>
-    where
-        [(); check_buffer_conversion::<T, SIZE>()]:,
-    {
-        let ptr = self.data.as_mut_ptr();
-        let ptr = ptr.cast::<MaybeUninit<T>>();
-        unsafe { &mut *ptr }
-    }
-
-    pub fn write_zeros(&mut self) {
-        self.data.fill(0);
-    }
 }
 
-pub struct BufferGuard<'a> {
+pub struct BufferGuard<'a, const BSIZE: usize, const CSIZE: usize> {
+    cache: &'a BufferCache<BSIZE, CSIZE>,
     buffer: LockGuard<'a, SleepLock<Buffer<BSIZE>>>,
+    is_valid: bool,
     in_use: bool,
     block_number: usize,
     cache_index: usize,
 }
 
-impl<'a> BufferGuard<'a> {
+impl<'a, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, BSIZE, CSIZE> {
+    pub const fn size(&self) -> usize {
+        BSIZE
+    }
+
     pub const fn block_number(&self) -> usize {
         self.block_number
     }
-}
 
-impl<'a> Deref for BufferGuard<'a> {
-    type Target = Buffer<BSIZE>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.buffer
+    pub fn pin(&self) {
+        self.cache.pin(self);
     }
-}
 
-impl<'a> DerefMut for BufferGuard<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.buffer
+    pub fn unpin(&self) {
+        self.cache.unpin(self);
     }
-}
 
-pub struct BufferCache<const SIZE: usize> {
-    cache: SpinLock<CacheRc<BufferKey, SIZE>>,
-    buffers: [SleepLock<Buffer<BSIZE>>; SIZE],
-}
+    pub fn clear(&mut self) {
+        self.buffer.data.fill(0);
+        self.is_valid = true;
+    }
 
-impl<const SIZE: usize> BufferCache<SIZE> {
-    pub const fn new() -> Self {
-        Self {
-            cache: SpinLock::new(CacheRc::new()),
-            buffers: [const { SleepLock::new(Buffer::zeroed()) }; _],
+    pub unsafe fn read_array<T>(&mut self) -> &mut [T] {
+        if !self.is_valid {
+            virtio::disk::read(
+                self.buffer.data.as_mut_ptr().addr(),
+                self.block_number(),
+                self.size(),
+            );
+            self.is_valid = true;
+        }
+
+        core::slice::from_raw_parts_mut(
+            self.buffer.data.as_mut_ptr().cast::<T>(),
+            BSIZE / core::mem::size_of::<T>(),
+        )
+    }
+
+    pub unsafe fn read<T>(&mut self) -> &mut T
+    where
+        [(); check_buffer_conversion::<T, BSIZE>()]:,
+    {
+        if !self.is_valid {
+            virtio::disk::read(
+                self.buffer.data.as_mut_ptr().addr(),
+                self.block_number(),
+                self.size(),
+            );
+            self.is_valid = true;
+        }
+        self.as_mut().unwrap()
+    }
+
+    pub unsafe fn write<T>(&mut self, src: T)
+    where
+        [(); check_buffer_conversion::<T, BSIZE>()]:,
+    {
+        self.buffer.data.as_mut_ptr().cast::<T>().write(src);
+        virtio::disk::write(
+            self.buffer.data.as_mut_ptr().addr(),
+            self.block_number(),
+            self.size(),
+        );
+        self.is_valid = true;
+    }
+
+    pub unsafe fn as_ref<T>(&self) -> Option<&T>
+    where
+        [(); check_buffer_conversion::<T, BSIZE>()]:,
+    {
+        if self.is_valid {
+            self.buffer.data.as_ptr().cast::<T>().as_ref()
+        } else {
+            None
         }
     }
 
-    pub fn get(&self, device: usize, block: usize) -> Option<BufferGuard> {
+    pub unsafe fn as_mut<T>(&mut self) -> Option<&mut T>
+    where
+        [(); check_buffer_conversion::<T, BSIZE>()]:,
+    {
+        if self.is_valid {
+            self.buffer.data.as_mut_ptr().cast::<T>().as_mut()
+        } else {
+            None
+        }
+    }
+
+    pub unsafe fn read_array_with_unlock<T, L: Lock>(
+        &mut self,
+        lock: &mut LockGuard<L>,
+    ) -> &mut [T] {
+        Lock::unlock_temporarily(lock, || self.read_array::<T>())
+    }
+
+    pub unsafe fn read_with_unlock<T, L: Lock>(&mut self, lock: &mut LockGuard<L>) -> &mut T
+    where
+        [(); check_buffer_conversion::<T, BSIZE>()]:,
+    {
+        Lock::unlock_temporarily(lock, || self.read::<T>())
+    }
+
+    pub unsafe fn write_with_unlock<T, L: Lock>(&mut self, src: T, lock: &mut LockGuard<L>)
+    where
+        [(); check_buffer_conversion::<T, BSIZE>()]:,
+    {
+        Lock::unlock_temporarily(lock, || self.write(src));
+    }
+}
+
+impl<'a, const BSIZE: usize, const CSIZE: usize> Drop for BufferGuard<'a, BSIZE, CSIZE> {
+    fn drop(&mut self) {
+        self.cache.release(self);
+    }
+}
+
+pub struct BufferCache<const BSIZE: usize, const CSIZE: usize> {
+    buffers: [SleepLock<Buffer<BSIZE>>; CSIZE],
+    cache: SpinLock<CacheRc<BufferKey, CSIZE>>,
+}
+
+impl<const BSIZE: usize, const CSIZE: usize> BufferCache<BSIZE, CSIZE> {
+    pub const fn new() -> Self {
+        Self {
+            buffers: [const { SleepLock::new(Buffer::zeroed()) }; _],
+            cache: SpinLock::new(CacheRc::new()),
+        }
+    }
+
+    pub fn get(&self, device: usize, block: usize) -> Option<BufferGuard<BSIZE, CSIZE>> {
         let (index, is_new) = self.cache.lock().get(BufferKey { device, block })?;
 
-        let mut guard: BufferGuard = BufferGuard {
+        Some(BufferGuard {
+            cache: self,
             buffer: self.buffers[index].lock(),
+            is_valid: !is_new,
             in_use: false,
             block_number: block,
             cache_index: index,
-        };
-
-        if is_new {
-            unsafe {
-                virtio::disk::read(
-                    guard.buffer.as_mut_ptr::<u8>().addr(),
-                    guard.block_number(),
-                    guard.buffer.size(),
-                )
-            };
-        }
-
-        Some(guard)
+        })
     }
 
-    pub fn release(&self, buffer: BufferGuard) {
+    fn release(&self, buffer: &BufferGuard<BSIZE, CSIZE>) {
         self.cache.lock().release(buffer.cache_index).unwrap();
     }
 
-    pub fn pin(&self, guard: &BufferGuard) {
+    pub fn pin(&self, guard: &BufferGuard<BSIZE, CSIZE>) {
         self.cache.lock().pin(guard.cache_index).unwrap();
     }
 
-    pub fn unpin(&self, guard: &BufferGuard) {
+    pub fn unpin(&self, guard: &BufferGuard<BSIZE, CSIZE>) {
         self.cache.lock().unpin(guard.cache_index).unwrap();
     }
 }
 
-static CACHE: BufferCache<NBUF> = BufferCache::new();
+static CACHE: BufferCache<BSIZE, NBUF> = BufferCache::new();
 
-pub fn get(device: usize, block: usize) -> Option<Undroppable<BufferGuard<'static>>> {
-    CACHE.get(device, block).map(Undroppable::new)
-}
-
-pub fn get_with_unlock<L: Lock>(
-    device: usize,
-    block: usize,
-    lock: &mut LockGuard<L>,
-) -> Option<Undroppable<BufferGuard<'static>>> {
-    Lock::unlock_temporarily(lock, || get(device, block))
-}
-
-pub fn write(guard: &mut Undroppable<BufferGuard>) {
-    unsafe {
-        virtio::disk::write(
-            guard.buffer.as_mut_ptr::<u8>().addr(),
-            guard.block_number(),
-            guard.buffer.size(),
-        )
-    };
-}
-
-pub fn write_with_unlock<L: Lock>(
-    buffer: &mut Undroppable<BufferGuard<'static>>,
-    lock: &mut LockGuard<L>,
-) {
-    Lock::unlock_temporarily(lock, || write(buffer));
-}
-
-pub fn release(buffer: Undroppable<BufferGuard>) {
-    CACHE.release(Undroppable::into_inner(buffer));
-}
-
-pub fn release_with_unlock<L: Lock>(buffer: Undroppable<BufferGuard>, lock: &mut LockGuard<L>) {
-    Lock::unlock_temporarily(lock, || release(buffer));
-}
-
-pub fn pin(guard: &BufferGuard) {
-    CACHE.pin(guard);
-}
-
-pub fn unpin(guard: &BufferGuard) {
-    CACHE.unpin(guard);
+pub fn get(device: usize, block: usize) -> Option<BufferGuard<'static, BSIZE, NBUF>> {
+    CACHE.get(device, block)
 }

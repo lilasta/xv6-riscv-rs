@@ -23,7 +23,7 @@
 
 use crate::{
     buffer::{self, BufferGuard, BSIZE},
-    config::{LOGSIZE, MAXOPBLOCKS},
+    config::{LOGSIZE, MAXOPBLOCKS, NBUF},
     fs::SuperBlock,
     lock::{spin::SpinLock, Lock, LockGuard},
     process,
@@ -34,7 +34,7 @@ const _: () = {
 };
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct LogHeader {
     n: u32,
     block: [u32; LOGSIZE],
@@ -107,7 +107,7 @@ impl Log {
         process::wakeup(core::ptr::addr_of!(**self).addr());
     }
 
-    fn write(&mut self, buf: &BufferGuard) {
+    fn write(&mut self, buf: &BufferGuard<BSIZE, NBUF>) {
         assert!((self.header.n as usize) < LOGSIZE);
         assert!((self.header.n as usize) < self.size - 1);
         assert!(self.outstanding > 0);
@@ -115,8 +115,7 @@ impl Log {
         let len = self.header.n as usize;
         let block = buf.block_number() as u32;
         if !self.header.block[0..len].contains(&block) {
-            buffer::pin(buf);
-
+            buf.pin();
             self.header.block[len] = block;
             self.header.n += 1;
         }
@@ -133,7 +132,7 @@ impl<'a> LogGuard<'a> {
         Self { log }
     }
 
-    pub fn write(&self, buf: &BufferGuard) {
+    pub fn write(&self, buf: &BufferGuard<BSIZE, NBUF>) {
         self.log.lock().write(buf);
     }
 }
@@ -151,39 +150,34 @@ pub fn start() -> LogGuard<'static> {
 }
 
 fn read_header(log: &mut LockGuard<SpinLock<Log>>) -> Option<()> {
-    let buf = buffer::get_with_unlock(log.device, log.start, log)?;
-    unsafe { core::ptr::copy(buf.as_ptr(), &mut log.header, 1) };
-    buffer::release_with_unlock(buf, log);
+    let mut buf = buffer::get(log.device, log.start)?;
+    unsafe {
+        log.header = buf.read_with_unlock::<LogHeader, _>(log).clone();
+    }
     Some(())
 }
 
 fn write_header(log: &mut LockGuard<SpinLock<Log>>) -> Option<()> {
-    let mut buf = buffer::get_with_unlock(log.device, log.start, log)?;
-    unsafe { core::ptr::copy(&log.header, buf.as_mut_ptr(), 1) };
-    buffer::write_with_unlock(&mut buf, log);
-    buffer::release_with_unlock(buf, log);
+    let mut buf = buffer::get(log.device, log.start)?;
+    unsafe {
+        buf.write_with_unlock(log.header.clone(), log);
+    }
     Some(())
 }
 
 fn install_blocks(log: &mut LockGuard<SpinLock<Log>>, recovering: bool) {
     for tail in 0..(log.header.n as usize) {
-        let from = buffer::get_with_unlock(log.device, log.start + tail + 1, log).unwrap();
-        let mut to =
-            buffer::get_with_unlock(log.device, log.header.block[tail] as usize, log).unwrap();
+        let mut from = buffer::get(log.device, log.start + tail + 1).unwrap();
+        let mut to = buffer::get(log.device, log.header.block[tail] as usize).unwrap();
 
         unsafe {
-            let src = from.as_ptr::<u8>();
-            let dst = to.as_mut_ptr::<u8>();
-            core::ptr::copy(src, dst, BSIZE);
+            let from = from.read_with_unlock::<[u8; BSIZE], _>(log);
+            to.write_with_unlock(from, log);
         }
-        buffer::write_with_unlock(&mut to, log);
 
         if !recovering {
-            buffer::unpin(&to);
+            to.unpin();
         }
-
-        buffer::release_with_unlock(from, log);
-        buffer::release_with_unlock(to, log);
     }
 
     log.header.n = 0;
@@ -191,18 +185,13 @@ fn install_blocks(log: &mut LockGuard<SpinLock<Log>>, recovering: bool) {
 
 fn write_log(log: &mut LockGuard<SpinLock<Log>>) {
     for tail in 0..(log.header.n as usize) {
-        let mut to = buffer::get_with_unlock(log.device, log.start + tail + 1, log).unwrap();
-        let from =
-            buffer::get_with_unlock(log.device, log.header.block[tail] as usize, log).unwrap();
+        let mut to = buffer::get(log.device, log.start + tail + 1).unwrap();
+        let mut from = buffer::get(log.device, log.header.block[tail] as usize).unwrap();
 
         unsafe {
-            let src = from.as_ptr::<u8>();
-            let dst = to.as_mut_ptr::<u8>();
-            core::ptr::copy(src, dst, BSIZE);
+            let from = from.read_with_unlock::<[u8; BSIZE], _>(log);
+            to.write_with_unlock(from, log);
         }
-        buffer::write_with_unlock(&mut to, log);
-        buffer::release_with_unlock(from, log);
-        buffer::release_with_unlock(to, log);
     }
 }
 
