@@ -11,12 +11,11 @@ use crate::allocator::KernelAllocator;
 use crate::bitmap::Bitmap;
 use crate::config::{NCPU, NPROC, ROOTDEV};
 use crate::interrupt::InterruptGuard;
-use crate::lock::spin::SpinLock;
-use crate::lock::{Lock, LockGuard};
 use crate::memory_layout::{kstack, kstack_index};
 use crate::process::process::ProcessContext;
 use crate::riscv::paging::PageTable;
 use crate::riscv::{self, enable_interrupt};
+use crate::spinlock::{SpinLock, SpinLockGuard};
 use crate::vm::{uvminit, PageTableExtension};
 use crate::{fs, interrupt};
 
@@ -222,7 +221,7 @@ pub fn free_pagetable(mut pagetable: PageTable, size: usize) {
     pagetable.deallocate();
 }
 
-pub fn sleep<L: Lock>(token: usize, guard: &mut LockGuard<L>) {
+pub fn sleep<T>(token: usize, guard: &mut SpinLockGuard<T>) {
     // Must acquire p->lock in order to
     // change p->state and then call sched.
     // Once we hold p->lock, we can be
@@ -231,7 +230,7 @@ pub fn sleep<L: Lock>(token: usize, guard: &mut LockGuard<L>) {
     // so it's okay to release lk.
 
     let mut process = cpu().pause().unwrap();
-    L::unlock_temporarily(guard, || {
+    SpinLock::unlock_temporarily(guard, || {
         // Go to sleep.
         process.state.sleep(token).unwrap();
         return_to_scheduler(process);
@@ -275,7 +274,7 @@ pub unsafe fn fork() -> Option<usize> {
     let pid = process_new.pid;
 
     let parent_ptr = &mut process_new.parent as *mut *mut _ as *mut *mut SpinLock<Process>;
-    Lock::unlock_temporarily(&mut process_new, || {
+    SpinLock::unlock_temporarily(&mut process_new, || {
         let _guard = (*table::wait_lock()).lock();
         *parent_ptr = p as *const _ as *mut _;
         //table::table().register_parent(process.pid as _, pid as _);
@@ -337,7 +336,7 @@ pub extern "C" fn scheduler() {
     }
 }
 
-fn return_to_scheduler(mut process: LockGuard<'static, SpinLock<Process>>) {
+fn return_to_scheduler(mut process: SpinLockGuard<'static, Process>) {
     assert!(!interrupt::is_enabled());
     assert!(interrupt::get_depth() == 1);
     assert!(!process.state.is_running());

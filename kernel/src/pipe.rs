@@ -2,8 +2,8 @@ use core::{mem::MaybeUninit, ptr::NonNull};
 
 use crate::{
     allocator::KernelAllocator,
-    lock::{spin::SpinLock, Lock, LockGuard},
     process,
+    spinlock::{SpinLock, SpinLockGuard},
     vm::PageTableExtension,
 };
 
@@ -40,7 +40,7 @@ impl<const SIZE: usize> PipeInner<SIZE> {
         process::wakeup(core::ptr::addr_of!(self.read).addr());
     }
 
-    pub fn write(self: &mut LockGuard<SpinLock<Self>>, addr: usize, n: usize) -> Result<usize, ()> {
+    pub fn write(self: &mut SpinLockGuard<Self>, addr: usize, n: usize) -> Result<usize, ()> {
         let mut i = 0;
         while i < n {
             if !self.read_open || process::is_killed() == Some(true) {
@@ -67,7 +67,7 @@ impl<const SIZE: usize> PipeInner<SIZE> {
         Ok(i)
     }
 
-    pub fn read(self: &mut LockGuard<SpinLock<Self>>, addr: usize, n: usize) -> Result<usize, ()> {
+    pub fn read(self: &mut SpinLockGuard<Self>, addr: usize, n: usize) -> Result<usize, ()> {
         while self.read == self.write && self.write_open {
             if process::is_killed() == Some(true) {
                 return Err(());

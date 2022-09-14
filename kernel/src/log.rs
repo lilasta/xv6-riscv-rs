@@ -25,8 +25,8 @@ use crate::{
     buffer::{self, BufferGuard, BSIZE},
     config::{LOGSIZE, MAXOPBLOCKS, NBUF},
     fs::SuperBlock,
-    lock::{spin::SpinLock, Lock, LockGuard},
     process,
+    spinlock::{SpinLock, SpinLockGuard},
 };
 
 const _: () = {
@@ -71,7 +71,7 @@ impl Log {
         }
     }
 
-    fn start<'a>(mut self: LockGuard<'a, SpinLock<Self>>) -> LogGuard<'a> {
+    fn start<'a>(mut self: SpinLockGuard<'a, Self>) -> LogGuard<'a> {
         loop {
             if self.committing {
                 process::sleep(core::ptr::addr_of!(*self).addr(), &mut self);
@@ -79,12 +79,12 @@ impl Log {
                 process::sleep(core::ptr::addr_of!(*self).addr(), &mut self);
             } else {
                 self.outstanding += 1;
-                return LogGuard::new(Lock::unlock(self));
+                return LogGuard::new(SpinLock::unlock(self));
             }
         }
     }
 
-    fn commit(self: &mut LockGuard<SpinLock<Log>>) {
+    fn commit(self: &mut SpinLockGuard<Self>) {
         self.committing = true;
         if self.header.n > 0 {
             write_log(self);
@@ -95,7 +95,7 @@ impl Log {
         self.committing = false;
     }
 
-    fn end(self: &mut LockGuard<SpinLock<Self>>) {
+    fn end(self: &mut SpinLockGuard<Self>) {
         assert!(!self.committing);
 
         self.outstanding -= 1;
@@ -149,7 +149,7 @@ pub fn start() -> LogGuard<'static> {
     LOG.lock().start()
 }
 
-fn read_header(log: &mut LockGuard<SpinLock<Log>>) -> Option<()> {
+fn read_header(log: &mut SpinLockGuard<Log>) -> Option<()> {
     let mut buf = buffer::get(log.device, log.start)?;
     unsafe {
         log.header = buf.read_with_unlock::<LogHeader, _>(log).clone();
@@ -157,7 +157,7 @@ fn read_header(log: &mut LockGuard<SpinLock<Log>>) -> Option<()> {
     Some(())
 }
 
-fn write_header(log: &mut LockGuard<SpinLock<Log>>) -> Option<()> {
+fn write_header(log: &mut SpinLockGuard<Log>) -> Option<()> {
     let mut buf = buffer::get(log.device, log.start)?;
     unsafe {
         let header = log.header.clone();
@@ -166,7 +166,7 @@ fn write_header(log: &mut LockGuard<SpinLock<Log>>) -> Option<()> {
     Some(())
 }
 
-fn install_blocks(log: &mut LockGuard<SpinLock<Log>>, recovering: bool) {
+fn install_blocks(log: &mut SpinLockGuard<Log>, recovering: bool) {
     for tail in 0..(log.header.n as usize) {
         let mut from = buffer::get(log.device, log.start + tail + 1).unwrap();
         let mut to = buffer::get(log.device, log.header.block[tail] as usize).unwrap();
@@ -184,7 +184,7 @@ fn install_blocks(log: &mut LockGuard<SpinLock<Log>>, recovering: bool) {
     log.header.n = 0;
 }
 
-fn write_log(log: &mut LockGuard<SpinLock<Log>>) {
+fn write_log(log: &mut SpinLockGuard<Log>) {
     for tail in 0..(log.header.n as usize) {
         let mut to = buffer::get(log.device, log.start + tail + 1).unwrap();
         let mut from = buffer::get(log.device, log.header.block[tail] as usize).unwrap();

@@ -5,9 +5,9 @@
 use core::{alloc::GlobalAlloc, ptr::NonNull};
 
 use crate::{
-    lock::{spin::SpinLock, Lock, LockGuard},
     memory_layout::{symbol_addr, PHYSTOP},
     riscv::paging::{pg_roundup, PGSIZE},
+    spinlock::{SpinLock, SpinLockGuard},
 };
 
 struct Block {
@@ -24,7 +24,7 @@ impl KernelAllocator {
     }
 
     // Singleton
-    pub fn get() -> LockGuard<'static, SpinLock<KernelAllocator>> {
+    pub fn get() -> SpinLockGuard<'static, KernelAllocator> {
         #[global_allocator]
         static mut ALLOCATOR: SpinLock<KernelAllocator> = SpinLock::new(KernelAllocator::uninit());
         unsafe { ALLOCATOR.lock() }

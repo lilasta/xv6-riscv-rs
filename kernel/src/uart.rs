@@ -8,9 +8,9 @@ use core::{
 use crate::{
     console::consoleintr,
     interrupt,
-    lock::{spin::SpinLock, Lock, LockGuard},
     memory_layout::UART0,
     process,
+    spinlock::{SpinLock, SpinLockGuard},
 };
 
 mod reg {
@@ -111,7 +111,7 @@ impl UART {
         self.panicked.load(Relaxed)
     }
 
-    fn send<L: Lock<Target = TransmitBuffer>>(&self, mut tx: LockGuard<L>) {
+    fn send(&self, mut tx: SpinLockGuard<TransmitBuffer>) {
         use reg::*;
 
         loop {

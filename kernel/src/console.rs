@@ -11,8 +11,8 @@
 
 use crate::{
     file::{DeviceFile, DEVICEFILES},
-    lock::{spin::SpinLock, Lock, LockGuard},
     process::{self, copyin_either, copyout_either},
+    spinlock::{SpinLock, SpinLockGuard},
     uart::UART,
 };
 
@@ -128,7 +128,7 @@ impl Console {
     }
 }
 
-impl<'a, L: Lock<Target = Console>> LockGuard<'a, L> {
+impl<'a> SpinLockGuard<'a, Console> {
     //
     // user read()s from the console go here.
     // copy (up to) a whole input line to dst.

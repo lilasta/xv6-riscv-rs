@@ -1,11 +1,10 @@
 use core::{
     cell::UnsafeCell,
+    ops::{Deref, DerefMut},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering::*},
 };
 
 use crate::{interrupt, process};
-
-use super::Lock;
 
 #[derive(Debug)]
 pub struct SpinLock<T> {
@@ -33,20 +32,8 @@ impl<T> SpinLock<T> {
         // TODO: Orderingは正しいのか?
         self.is_locked() && self.cpuid.load(Acquire) == process::cpuid()
     }
-}
 
-impl<T> Lock for SpinLock<T> {
-    type Target = T;
-
-    unsafe fn get(&self) -> &T {
-        &*self.value.get()
-    }
-
-    unsafe fn get_mut(&self) -> &mut T {
-        &mut *self.value.get()
-    }
-
-    unsafe fn raw_lock(&self) {
+    pub fn lock(&self) -> SpinLockGuard<T> {
         // disable interrupts to avoid deadlock.
         interrupt::push_off();
 
@@ -72,9 +59,11 @@ impl<T> Lock for SpinLock<T> {
 
         // Record info about lock acquisition for holding() and debugging.
         self.cpuid.store(process::cpuid(), Release);
+
+        SpinLockGuard::new(self)
     }
 
-    unsafe fn raw_unlock(&self) {
+    unsafe fn unlock_raw(&self) {
         // 同じCPUによってロックされているかチェック
         assert!(self.is_held_by_current_cpu());
 
@@ -100,6 +89,65 @@ impl<T> Lock for SpinLock<T> {
 
         interrupt::pop_off();
     }
+
+    pub fn unlock<'a>(guard: SpinLockGuard<'a, T>) -> &'a Self {
+        let this = guard.lock;
+        drop(guard);
+        this
+    }
+
+    pub fn unlock_temporarily<R>(guard: &mut SpinLockGuard<T>, f: impl FnOnce() -> R) -> R {
+        let lock = guard.lock;
+
+        unsafe { core::ptr::drop_in_place(guard) };
+        let ret = f();
+        unsafe { core::ptr::write(guard, lock.lock()) };
+        ret
+    }
+
+    pub fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        let mut guard = self.lock();
+        f(guard.deref_mut())
+    }
+
+    pub unsafe fn get(&self) -> &T {
+        &*self.value.get()
+    }
+
+    pub unsafe fn get_mut(&self) -> &mut T {
+        &mut *self.value.get()
+    }
 }
 
 unsafe impl<T> Sync for SpinLock<T> {}
+
+#[derive(Debug)]
+pub struct SpinLockGuard<'a, T> {
+    lock: &'a SpinLock<T>,
+}
+
+impl<'a, T> SpinLockGuard<'a, T> {
+    const fn new(lock: &'a SpinLock<T>) -> Self {
+        Self { lock }
+    }
+}
+
+impl<'a, T> Deref for SpinLockGuard<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.lock.value.get() }
+    }
+}
+
+impl<'a, T> DerefMut for SpinLockGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.lock.value.get() }
+    }
+}
+
+impl<'a, T> Drop for SpinLockGuard<'a, T> {
+    fn drop(&mut self) {
+        unsafe { self.lock.unlock_raw() }
+    }
+}

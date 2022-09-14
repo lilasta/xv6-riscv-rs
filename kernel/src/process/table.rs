@@ -4,8 +4,8 @@ use arrayvec::ArrayVec;
 
 use crate::{
     config::NPROC,
-    lock::{spin::SpinLock, Lock, LockGuard},
     process,
+    spinlock::{SpinLock, SpinLockGuard},
 };
 
 use super::Process;
@@ -38,7 +38,7 @@ impl ProcessTable {
         self.next_pid.fetch_add(1, AcqRel)
     }
 
-    pub fn allocate_process(&mut self) -> Option<LockGuard<SpinLock<Process>>> {
+    pub fn allocate_process(&mut self) -> Option<SpinLockGuard<Process>> {
         for process in self.procs.iter() {
             let mut process = process.lock();
             if process.state.is_unused() {

@@ -9,11 +9,11 @@ use crate::{
     exec::execute,
     file::File,
     fs::{self, InodeOps},
-    lock::{spin::SpinLock, Lock},
     log,
     pipe::Pipe,
     process,
     riscv::paging::{PGSIZE, PTE},
+    spinlock::SpinLock,
     vm::{copyinstr, PageTableExtension},
 };
 

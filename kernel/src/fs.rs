@@ -10,9 +10,10 @@ use crate::{
     buffer::{self, BSIZE},
     cache::CacheRc,
     config::{NINODE, ROOTDEV},
-    lock::{sleep::SleepLock, spin::SpinLock, Lock, LockGuard},
     log::{self, initlog, LogGuard},
     process::{self, copyin_either, copyout_either},
+    sleeplock::{SleepLock, SleepLockGuard},
+    spinlock::{SpinLock, SpinLockGuard},
 };
 
 const ROOTINO: usize = 1; // root i-number
@@ -155,7 +156,7 @@ pub struct InodeReadOnlyGuard<'r, 'i> {
     device: usize,
     inode_number: usize,
     cache_index: usize,
-    inode: LockGuard<'i, SleepLock<Inode>>,
+    inode: SleepLockGuard<'i, Inode>,
     reflife: PhantomData<&'r ()>,
 }
 
@@ -563,7 +564,7 @@ impl<const N: usize> InodeAllocator<N> {
     }
 
     fn allocate(
-        self: &mut LockGuard<SpinLock<Self>>,
+        self: &mut SpinLockGuard<Self>,
         device: usize,
         kind: u16,
         log: &LogGuard,
@@ -589,7 +590,7 @@ impl<const N: usize> InodeAllocator<N> {
 
     // TODO:
     pub fn get(
-        self: &mut LockGuard<'static, SpinLock<Self>>,
+        self: &mut SpinLockGuard<'static, Self>,
         device: usize,
         inode_number: usize,
     ) -> Option<InodeReference<'static>> {
@@ -614,7 +615,7 @@ impl<const N: usize> InodeAllocator<N> {
     }
 
     pub fn duplicate<'a>(
-        self: &mut LockGuard<'a, SpinLock<Self>>,
+        self: &mut SpinLockGuard<'a, Self>,
         inode: &InodeReference<'a>,
     ) -> InodeReference<'a> {
         self.cache
@@ -626,11 +627,7 @@ impl<const N: usize> InodeAllocator<N> {
         InodeReference { ..*inode }
     }
 
-    pub fn release(
-        self: &mut LockGuard<SpinLock<Self>>,
-        inode_ref: &InodeReference,
-        log: &LogGuard,
-    ) {
+    pub fn release(self: &mut SpinLockGuard<Self>, inode_ref: &InodeReference, log: &LogGuard) {
         let refcnt = self.cache.reference_count(inode_ref.cache_index).unwrap();
         let mut inode = inode_ref.lock_rw(log);
         if refcnt == 1
@@ -639,7 +636,7 @@ impl<const N: usize> InodeAllocator<N> {
         {
             // TODO: FIX
             assert!(inode.inode.nlink == 0);
-            Lock::unlock_temporarily(self, move || {
+            SpinLock::unlock_temporarily(self, move || {
                 inode.truncate();
                 inode.inode.kind = 0;
                 inode.update();

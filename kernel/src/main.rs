@@ -55,13 +55,14 @@ mod file;
 mod fs;
 mod interrupt;
 mod kernelvec;
-mod lock;
 mod log;
 mod memory_layout;
 mod pipe;
 mod plic;
 mod process;
 mod riscv;
+mod sleeplock;
+mod spinlock;
 mod start;
 mod syscall;
 mod trampoline;
@@ -76,8 +77,7 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use lock::spin::SpinLock;
-use lock::Lock;
+use spinlock::SpinLock;
 
 pub struct Print;
 

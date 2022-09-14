@@ -1,7 +1,8 @@
 use crate::{
     cache::CacheRc,
     config::NBUF,
-    lock::{sleep::SleepLock, spin::SpinLock, Lock, LockGuard},
+    sleeplock::{SleepLock, SleepLockGuard},
+    spinlock::{SpinLock, SpinLockGuard},
     virtio,
 };
 
@@ -32,7 +33,7 @@ impl<const SIZE: usize> Buffer<SIZE> {
 
 pub struct BufferGuard<'a, const BSIZE: usize, const CSIZE: usize> {
     cache: &'a BufferCache<BSIZE, CSIZE>,
-    buffer: LockGuard<'a, SleepLock<Buffer<BSIZE>>>,
+    buffer: SleepLockGuard<'a, Buffer<BSIZE>>,
     is_valid: bool,
     in_use: bool,
     block_number: usize,
@@ -106,25 +107,25 @@ impl<'a, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, BSIZE, CSIZE> {
         self.is_valid = true;
     }
 
-    pub unsafe fn read_array_with_unlock<T, L: Lock>(
+    pub unsafe fn read_array_with_unlock<T, LT>(
         &mut self,
-        lock: &mut LockGuard<L>,
+        lock: &mut SpinLockGuard<LT>,
     ) -> &mut [T] {
-        Lock::unlock_temporarily(lock, || self.read_array::<T>())
+        SpinLock::unlock_temporarily(lock, || self.read_array::<T>())
     }
 
-    pub unsafe fn read_with_unlock<T, L: Lock>(&mut self, lock: &mut LockGuard<L>) -> &mut T
+    pub unsafe fn read_with_unlock<T, LT>(&mut self, lock: &mut SpinLockGuard<LT>) -> &mut T
     where
         [(); check_buffer_conversion::<T, BSIZE>()]:,
     {
-        Lock::unlock_temporarily(lock, || self.read::<T>())
+        SpinLock::unlock_temporarily(lock, || self.read::<T>())
     }
 
-    pub unsafe fn write_with_unlock<T, L: Lock>(&mut self, src: &T, lock: &mut LockGuard<L>)
+    pub unsafe fn write_with_unlock<T, LT>(&mut self, src: &T, lock: &mut SpinLockGuard<LT>)
     where
         [(); check_buffer_conversion::<T, BSIZE>()]:,
     {
-        Lock::unlock_temporarily(lock, || self.write(src));
+        SpinLock::unlock_temporarily(lock, || self.write(src));
     }
 }
 

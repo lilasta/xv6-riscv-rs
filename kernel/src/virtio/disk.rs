@@ -3,9 +3,9 @@ use core::{mem::MaybeUninit, ptr::NonNull};
 use crate::{
     allocator::KernelAllocator,
     bitmap::Bitmap,
-    lock::{spin::SpinLock, Lock},
     memory_layout::VIRTIO0,
     process,
+    spinlock::SpinLock,
     virtio::{feature, status},
 };
 
