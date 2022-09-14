@@ -72,38 +72,22 @@ mod undrop;
 mod virtio;
 mod vm;
 
-use core::{
-    fmt::Write,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use core::fmt::Write;
+use core::sync::atomic::{AtomicBool, Ordering};
 
-use spinlock::SpinLock;
-
-pub struct Print;
-
-impl core::fmt::Write for Print {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for ch in s.chars() {
-            unsafe { console::putc(ch as i32) };
-        }
-
-        core::fmt::Result::Ok(())
-    }
-}
-
-static PRINT: SpinLock<Print> = SpinLock::new(Print);
+use crate::console::CONSOLE;
 
 pub macro print($($arg:tt)*) {{
-    let _ = write!(PRINT.lock(), "{}", format_args!($($arg)*));
+    let _ = write!(CONSOLE.lock(), "{}", format_args!($($arg)*));
 }}
 
 pub macro println($($arg:tt)*) {{
-    let _ = writeln!(PRINT.lock(), "{}", format_args!($($arg)*));
+    let _ = writeln!(CONSOLE.lock(), "{}", format_args!($($arg)*));
 }}
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    let _ = writeln!(PRINT.lock(), "{}", info);
+    let _ = writeln!(CONSOLE.lock(), "{}", info);
     loop {}
 }
 

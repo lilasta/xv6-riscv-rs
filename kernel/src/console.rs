@@ -180,7 +180,17 @@ impl<'a> SpinLockGuard<'a, Console> {
     }
 }
 
-static CONSOLE: SpinLock<Console> = SpinLock::new(Console::new());
+impl core::fmt::Write for Console {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for ch in s.chars() {
+            Console::putc(ch as u8);
+        }
+
+        core::fmt::Result::Ok(())
+    }
+}
+
+pub static CONSOLE: SpinLock<Console> = SpinLock::new(Console::new());
 
 pub fn consoleintr(c: i32) {
     CONSOLE.lock().handle_interrupt(c as u8);
@@ -195,14 +205,6 @@ pub unsafe fn initialize() {
         read: consoleread,
         write: consolewrite,
     });
-}
-
-pub unsafe fn putc(c: i32) {
-    if c == 0x100 {
-        Console::backspace();
-    } else {
-        Console::putc(c as u8);
-    }
 }
 
 extern "C" fn consolewrite(src_user: i32, src: usize, n: usize) -> i32 {
