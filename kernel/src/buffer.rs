@@ -89,7 +89,8 @@ impl<'a, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, BSIZE, CSIZE> {
             );
             self.is_valid = true;
         }
-        self.as_mut().unwrap()
+
+        &mut *self.buffer.data.as_mut_ptr().cast::<T>()
     }
 
     pub unsafe fn write<T>(&mut self, src: &T)
@@ -103,28 +104,6 @@ impl<'a, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, BSIZE, CSIZE> {
             self.size(),
         );
         self.is_valid = true;
-    }
-
-    pub unsafe fn as_ref<T>(&self) -> Option<&T>
-    where
-        [(); check_buffer_conversion::<T, BSIZE>()]:,
-    {
-        if self.is_valid {
-            self.buffer.data.as_ptr().cast::<T>().as_ref()
-        } else {
-            None
-        }
-    }
-
-    pub unsafe fn as_mut<T>(&mut self) -> Option<&mut T>
-    where
-        [(); check_buffer_conversion::<T, BSIZE>()]:,
-    {
-        if self.is_valid {
-            self.buffer.data.as_mut_ptr().cast::<T>().as_mut()
-        } else {
-            None
-        }
     }
 
     pub unsafe fn read_array_with_unlock<T, L: Lock>(
