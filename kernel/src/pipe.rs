@@ -7,7 +7,45 @@ use crate::{
 };
 
 #[derive(Debug)]
-struct PipeInner<const SIZE: usize> {
+pub enum Pipe<const SIZE: usize> {
+    Read(Arc<SpinLock<PipeInner<SIZE>>>),
+    Write(Arc<SpinLock<PipeInner<SIZE>>>),
+}
+
+impl<const SIZE: usize> Pipe<SIZE> {
+    pub fn allocate() -> Option<(Self, Self)> {
+        let inner = Arc::new(SpinLock::new(PipeInner::<SIZE>::new()));
+        let read = Self::Read(inner.clone());
+        let write = Self::Write(inner);
+        Some((read, write))
+    }
+
+    pub fn write(&self, addr: usize, n: usize) -> Result<usize, ()> {
+        match self {
+            Self::Read(_) => Err(()),
+            Self::Write(inner) => inner.lock().write(addr, n),
+        }
+    }
+
+    pub fn read(&self, addr: usize, n: usize) -> Result<usize, ()> {
+        match self {
+            Self::Read(inner) => inner.lock().read(addr, n),
+            Self::Write(_) => Err(()),
+        }
+    }
+}
+
+impl<const SIZE: usize> Drop for Pipe<SIZE> {
+    fn drop(&mut self) {
+        match self {
+            Self::Read(inner) => inner.lock().close_read(),
+            Self::Write(inner) => inner.lock().close_write(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PipeInner<const SIZE: usize> {
     data: [u8; SIZE],
     read: usize,
     write: usize,
@@ -16,7 +54,7 @@ struct PipeInner<const SIZE: usize> {
 }
 
 impl<const SIZE: usize> PipeInner<SIZE> {
-    pub const fn new() -> Self {
+    const fn new() -> Self {
         Self {
             data: [0; _],
             read: 0,
@@ -26,17 +64,19 @@ impl<const SIZE: usize> PipeInner<SIZE> {
         }
     }
 
-    pub fn close_read(&mut self) {
+    fn close_read(&mut self) {
+        assert!(self.read_open);
         self.read_open = false;
         process::wakeup(core::ptr::addr_of!(self.write).addr());
     }
 
-    pub fn close_write(&mut self) {
+    fn close_write(&mut self) {
+        assert!(self.write_open);
         self.write_open = false;
         process::wakeup(core::ptr::addr_of!(self.read).addr());
     }
 
-    pub fn write(self: &mut SpinLockGuard<Self>, addr: usize, n: usize) -> Result<usize, ()> {
+    fn write(self: &mut SpinLockGuard<Self>, addr: usize, n: usize) -> Result<usize, ()> {
         let mut i = 0;
         while i < n {
             if !self.read_open || process::is_killed() == Some(true) {
@@ -63,7 +103,7 @@ impl<const SIZE: usize> PipeInner<SIZE> {
         Ok(i)
     }
 
-    pub fn read(self: &mut SpinLockGuard<Self>, addr: usize, n: usize) -> Result<usize, ()> {
+    fn read(self: &mut SpinLockGuard<Self>, addr: usize, n: usize) -> Result<usize, ()> {
         while self.read == self.write && self.write_open {
             if process::is_killed() == Some(true) {
                 return Err(());
@@ -96,46 +136,5 @@ impl<const SIZE: usize> PipeInner<SIZE> {
 
         process::wakeup(core::ptr::addr_of!(self.write).addr());
         Ok(total_read)
-    }
-}
-
-#[derive(Debug)]
-pub struct Pipe<const SIZE: usize> {
-    inner: Arc<SpinLock<PipeInner<SIZE>>>,
-    write: bool,
-}
-
-impl<const SIZE: usize> Pipe<SIZE> {
-    pub fn allocate() -> Option<(Self, Self)> {
-        let inner = Arc::new(SpinLock::new(PipeInner::<SIZE>::new()));
-        let read = Self {
-            inner: inner.clone(),
-            write: false,
-        };
-        let write = Self { inner, write: true };
-        Some((read, write))
-    }
-
-    pub fn write(&self, addr: usize, n: usize) -> Result<usize, ()> {
-        match self.write {
-            true => self.inner.lock().write(addr, n),
-            false => Err(()),
-        }
-    }
-
-    pub fn read(&self, addr: usize, n: usize) -> Result<usize, ()> {
-        match self.write {
-            true => Err(()),
-            false => self.inner.lock().read(addr, n),
-        }
-    }
-}
-
-impl<const SIZE: usize> Drop for Pipe<SIZE> {
-    fn drop(&mut self) {
-        match self.write {
-            true => self.inner.lock().close_write(),
-            false => self.inner.lock().close_read(),
-        }
     }
 }
