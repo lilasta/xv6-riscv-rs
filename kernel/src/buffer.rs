@@ -92,11 +92,11 @@ impl<'a, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, BSIZE, CSIZE> {
         self.as_mut().unwrap()
     }
 
-    pub unsafe fn write<T>(&mut self, src: T)
+    pub unsafe fn write<T>(&mut self, src: &T)
     where
         [(); check_buffer_conversion::<T, BSIZE>()]:,
     {
-        self.buffer.data.as_mut_ptr().cast::<T>().write(src);
+        self.buffer.data.as_mut_ptr().cast::<T>().copy_from(src, 1);
         virtio::disk::write(
             self.buffer.data.as_mut_ptr().addr(),
             self.block_number(),
@@ -141,7 +141,7 @@ impl<'a, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, BSIZE, CSIZE> {
         Lock::unlock_temporarily(lock, || self.read::<T>())
     }
 
-    pub unsafe fn write_with_unlock<T, L: Lock>(&mut self, src: T, lock: &mut LockGuard<L>)
+    pub unsafe fn write_with_unlock<T, L: Lock>(&mut self, src: &T, lock: &mut LockGuard<L>)
     where
         [(); check_buffer_conversion::<T, BSIZE>()]:,
     {

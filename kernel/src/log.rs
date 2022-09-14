@@ -160,7 +160,8 @@ fn read_header(log: &mut LockGuard<SpinLock<Log>>) -> Option<()> {
 fn write_header(log: &mut LockGuard<SpinLock<Log>>) -> Option<()> {
     let mut buf = buffer::get(log.device, log.start)?;
     unsafe {
-        buf.write_with_unlock(log.header.clone(), log);
+        let header = log.header.clone();
+        buf.write_with_unlock(&header, log);
     }
     Some(())
 }

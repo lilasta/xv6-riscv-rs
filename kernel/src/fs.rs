@@ -454,7 +454,7 @@ impl<'r, 'i> InodeReadOnlyGuard<'r, 'i> {
                 return Err(());
             }
 
-            read += src.len();
+            read += len;
         }
 
         Ok(read)
