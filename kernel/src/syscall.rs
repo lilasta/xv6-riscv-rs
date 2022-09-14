@@ -279,13 +279,13 @@ fn sys_open() -> Result<u64, ()> {
 
     let log = log::start();
     let mode = arg_usize::<1>();
-    let inode_ref = if mode & O_CREATE != 0 {
-        log.create(path, 2, 0, 0) // TODO: 2 = T_FILE
+    let (inode_ref, mut inode) = if mode & O_CREATE != 0 {
+        log.create(path, 2, 0, 0)? // TODO: 2 = T_FILE
     } else {
-        fs::search_inode(path).ok_or(())
-    }?;
-
-    let mut inode = inode_ref.lock_rw(&log);
+        let inode_ref = fs::search_inode(path).ok_or(())?;
+        let inode = inode_ref.lock_rw(&log);
+        (inode_ref, inode)
+    };
 
     if inode.is_directory() && mode != O_RDONLY {
         return Err(());
@@ -317,6 +317,9 @@ fn sys_open() -> Result<u64, ()> {
     if mode & O_TRUNC != 0 && inode.is_file() {
         inode.truncate();
     }
+
+    drop(inode);
+    drop(inode_ref);
 
     Ok(fd as u64)
 }

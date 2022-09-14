@@ -1,5 +1,4 @@
 use core::{
-    marker::PhantomData,
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
     sync::atomic::{AtomicBool, Ordering},
@@ -94,13 +93,12 @@ pub struct InodeReference<'i> {
 }
 
 impl<'i> InodeReference<'i> {
-    pub fn lock_ro<'r>(&'r self) -> InodeReadOnlyGuard<'r, 'i> {
+    pub fn lock_ro(&self) -> InodeReadOnlyGuard<'i> {
         let mut guard = InodeReadOnlyGuard {
             device: self.device,
             inode_number: self.inode_number,
             cache_index: self.cache_index,
             inode: self.inode.lock(),
-            reflife: PhantomData,
         };
 
         if self
@@ -114,7 +112,7 @@ impl<'i> InodeReference<'i> {
         guard
     }
 
-    pub fn lock_rw<'r>(&'r self, log: &'r LogGuard<'r>) -> InodeReadWriteGuard<'r, 'i> {
+    pub fn lock_rw<'r>(&self, log: &'r LogGuard<'r>) -> InodeReadWriteGuard<'r, 'i> {
         InodeReadWriteGuard {
             guard: self.lock_ro(),
             log,
@@ -143,30 +141,29 @@ impl<'a> Drop for InodeReference<'a> {
     }
 }
 
-impl<'r, 'i> Drop for InodeReadOnlyGuard<'r, 'i> {
+impl<'i> Drop for InodeReadOnlyGuard<'i> {
     fn drop(&mut self) {}
 }
 
-impl<'r, 'i> Drop for InodeReadWriteGuard<'r, 'i> {
+impl<'l, 'i> Drop for InodeReadWriteGuard<'l, 'i> {
     fn drop(&mut self) {}
 }
 
 #[derive(Debug)]
-pub struct InodeReadOnlyGuard<'r, 'i> {
+pub struct InodeReadOnlyGuard<'i> {
     device: usize,
     inode_number: usize,
     cache_index: usize,
     inode: SleepLockGuard<'i, Inode>,
-    reflife: PhantomData<&'r ()>,
 }
 
 #[derive(Debug)]
-pub struct InodeReadWriteGuard<'r, 'i> {
-    guard: InodeReadOnlyGuard<'r, 'i>,
-    log: &'r LogGuard<'r>,
+pub struct InodeReadWriteGuard<'l, 'i> {
+    guard: InodeReadOnlyGuard<'i>,
+    log: &'l LogGuard<'l>,
 }
 
-impl<'r, 'i> InodeReadWriteGuard<'r, 'i> {
+impl<'l, 'i> InodeReadWriteGuard<'l, 'i> {
     pub fn copy_from<T>(
         &mut self,
         is_src_user: bool,
@@ -296,21 +293,21 @@ impl<'r, 'i> InodeReadWriteGuard<'r, 'i> {
     }
 }
 
-impl<'r, 'i> Deref for InodeReadWriteGuard<'r, 'i> {
-    type Target = InodeReadOnlyGuard<'r, 'i>;
+impl<'l, 'i> Deref for InodeReadWriteGuard<'l, 'i> {
+    type Target = InodeReadOnlyGuard<'i>;
 
     fn deref(&self) -> &Self::Target {
         &self.guard
     }
 }
 
-impl<'r, 'i> DerefMut for InodeReadWriteGuard<'r, 'i> {
+impl<'l, 'i> DerefMut for InodeReadWriteGuard<'l, 'i> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.guard
     }
 }
 
-impl<'r, 'i> InodeReadOnlyGuard<'r, 'i> {
+impl<'i> InodeReadOnlyGuard<'i> {
     pub fn is_directory(&self) -> bool {
         self.inode.kind == 1
     }
@@ -629,18 +626,17 @@ impl<const N: usize> InodeAllocator<N> {
     pub fn release(self: &mut SpinLockGuard<Self>, inode_ref: &InodeReference, log: &LogGuard) {
         let refcnt = self.cache.reference_count(inode_ref.cache_index).unwrap();
         if refcnt == 1 && inode_ref.is_initialized.load(Ordering::SeqCst) {
-            SpinLock::unlock_temporarily(self, move || {
-                let mut inode = inode_ref.lock_rw(log);
-                if inode.counf_of_link() == 0 {
-                    // TODO: FIX
+            let mut inode = inode_ref.lock_rw(log);
+            if inode.counf_of_link() == 0 {
+                SpinLock::unlock_temporarily(self, move || {
                     assert!(inode.inode.nlink == 0);
                     inode.truncate();
                     inode.inode.kind = 0;
                     inode.update();
                     inode_ref.is_initialized.store(false, Ordering::SeqCst);
                     drop(inode);
-                }
-            });
+                });
+            }
         }
         self.cache.release(inode_ref.cache_index).unwrap();
     }
@@ -710,23 +706,23 @@ extern "C" fn fsinit(device: u32) {
 }
 
 pub trait InodeOps<'a> {
-    fn create(
-        &self,
+    fn create<'b>(
+        &'b self,
         path: &str,
         kind: u16,
         major: u16,
         minor: u16,
-    ) -> Result<InodeReference<'a>, ()>;
+    ) -> Result<(InodeReference<'a>, InodeReadWriteGuard<'b, 'a>), ()>;
 }
 
 impl<'a> InodeOps<'a> for LogGuard<'a> {
-    fn create(
-        &self,
+    fn create<'b>(
+        &'b self,
         path: &str,
         kind: u16,
         major: u16,
         minor: u16,
-    ) -> Result<InodeReference<'a>, ()> {
+    ) -> Result<(InodeReference<'a>, InodeReadWriteGuard<'b, 'a>), ()> {
         let (dir, name) = search_parent_inode(path).ok_or(())?;
         let mut dir = dir.lock_rw(self);
 
@@ -734,10 +730,9 @@ impl<'a> InodeOps<'a> for LogGuard<'a> {
             // TODO: T_FILE
             Some((inode_ref, _)) => {
                 drop(dir);
-                let inode = inode_ref.lock_ro();
+                let inode = inode_ref.lock_rw(self);
                 return if kind == 2 && (inode.is_file() || inode.is_device()) {
-                    drop(inode);
-                    Ok(inode_ref)
+                    Ok((inode_ref, inode))
                 } else {
                     Err(())
                 };
@@ -779,9 +774,8 @@ impl<'a> InodeOps<'a> for LogGuard<'a> {
                     dir.update();
                 }
 
-                drop(inode);
                 drop(dir);
-                Ok(inode_ref)
+                Ok((inode_ref, inode))
             }
         }
     }
@@ -869,13 +863,17 @@ pub fn unlink(path: &str) -> Result<(), ()> {
 
 pub fn make_directory(path: &str) -> Result<(), ()> {
     let log = log::start();
-    log.create(path, 1, 0, 0)?; // TODO: 1 == T_DIR
+    let (r, i) = log.create(path, 1, 0, 0)?; // TODO: 1 == T_DIR
+    drop(i);
+    drop(r);
     Ok(())
 }
 
 pub fn make_special_file(path: &str, major: u16, minor: u16) -> Result<(), ()> {
     let log = log::start();
-    log.create(path, 3, major, minor)?; // TODO: 3 == T_DEVICE
+    let (r, i) = log.create(path, 3, major, minor)?; // TODO: 3 == T_DEVICE
+    drop(i);
+    drop(r);
     Ok(())
 }
 

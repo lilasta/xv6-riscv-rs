@@ -20,22 +20,23 @@ struct BufferKey {
     block: usize,
 }
 
-#[repr(C)]
-pub struct Buffer<const SIZE: usize> {
+struct Buffer<const SIZE: usize> {
     data: [u8; SIZE],
+    is_initialized: bool,
 }
 
 impl<const SIZE: usize> Buffer<SIZE> {
-    pub const fn zeroed() -> Self {
-        Self { data: [0; _] }
+    const fn zeroed() -> Self {
+        Self {
+            data: [0; _],
+            is_initialized: false,
+        }
     }
 }
 
 pub struct BufferGuard<'a, const BSIZE: usize, const CSIZE: usize> {
     cache: &'a BufferCache<BSIZE, CSIZE>,
     buffer: SleepLockGuard<'a, Buffer<BSIZE>>,
-    is_valid: bool,
-    in_use: bool,
     block_number: usize,
     cache_index: usize,
 }
@@ -59,17 +60,17 @@ impl<'a, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, BSIZE, CSIZE> {
 
     pub fn clear(&mut self) {
         self.buffer.data.fill(0);
-        self.is_valid = true;
+        self.buffer.is_initialized = true;
     }
 
     pub unsafe fn read_array<T>(&mut self) -> &mut [T] {
-        if !self.is_valid {
+        if !self.buffer.is_initialized {
             virtio::disk::read(
                 self.buffer.data.as_mut_ptr().addr(),
                 self.block_number(),
                 self.size(),
             );
-            self.is_valid = true;
+            self.buffer.is_initialized = true;
         }
 
         core::slice::from_raw_parts_mut(
@@ -82,13 +83,13 @@ impl<'a, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, BSIZE, CSIZE> {
     where
         [(); check_buffer_conversion::<T, BSIZE>()]:,
     {
-        if !self.is_valid {
+        if !self.buffer.is_initialized {
             virtio::disk::read(
                 self.buffer.data.as_mut_ptr().addr(),
                 self.block_number(),
                 self.size(),
             );
-            self.is_valid = true;
+            self.buffer.is_initialized = true;
         }
 
         &mut *self.buffer.data.as_mut_ptr().cast::<T>()
@@ -104,7 +105,7 @@ impl<'a, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, BSIZE, CSIZE> {
             self.block_number(),
             self.size(),
         );
-        self.is_valid = true;
+        self.buffer.is_initialized = true;
     }
 
     pub unsafe fn read_array_with_unlock<T, LT>(
@@ -149,13 +150,32 @@ impl<const BSIZE: usize, const CSIZE: usize> BufferCache<BSIZE, CSIZE> {
     }
 
     pub fn get(&self, device: usize, block: usize) -> Option<BufferGuard<BSIZE, CSIZE>> {
-        let (index, is_new) = self.cache.lock().get(BufferKey { device, block })?;
+        // キャッシュのロックを保持しておきます
+        let mut cache = self.cache.lock();
+
+        // index: 目的のバッファのインデックス
+        // is_new: それが新規のバッファであるかどうか
+        let (index, is_new) = cache.get(BufferKey { device, block })?;
+
+        // この条件判定はキャッシュがロックされているうちに行います
+        if is_new {
+            // まだディスクからの読み込みがされていないため、初期化済を示すフラグを偽にします
+            // 新しいバッファであり、誰もロックしていないので待機は起こりません
+            // （そのため、デッドロックの心配はありません）
+            //
+            // この処理はバッファを解放する際に行ってもおそらく構いません（解放したバッファが最後の参照であればフラグを偽に）
+            self.buffers[index].lock().is_initialized = false;
+        }
+
+        // ロックを外せるようになったので外します
+        // ここで外し忘れると（値の破棄順序によっては）、キャッシュをロックしたまま
+        // バッファのロックをスリープで待機し、デッドロックが起こる危険があります
+        // （🔒の箇所）
+        SpinLock::unlock(cache);
 
         Some(BufferGuard {
             cache: self,
-            buffer: self.buffers[index].lock(),
-            is_valid: !is_new,
-            in_use: false,
+            buffer: self.buffers[index].lock(), // 🔒
             block_number: block,
             cache_index: index,
         })
@@ -165,11 +185,11 @@ impl<const BSIZE: usize, const CSIZE: usize> BufferCache<BSIZE, CSIZE> {
         self.cache.lock().release(buffer.cache_index).unwrap();
     }
 
-    pub fn pin(&self, guard: &BufferGuard<BSIZE, CSIZE>) {
+    fn pin(&self, guard: &BufferGuard<BSIZE, CSIZE>) {
         self.cache.lock().pin(guard.cache_index).unwrap();
     }
 
-    pub fn unpin(&self, guard: &BufferGuard<BSIZE, CSIZE>) {
+    fn unpin(&self, guard: &BufferGuard<BSIZE, CSIZE>) {
         self.cache.lock().unpin(guard.cache_index).unwrap();
     }
 }
