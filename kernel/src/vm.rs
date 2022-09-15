@@ -15,12 +15,12 @@ use crate::{
 
 // kernel.ld sets this to end of kernel code.
 fn etext() -> usize {
-    symbol_addr!(etext) as usize
+    symbol_addr!(etext)
 }
 
 // trampoline.S
 fn trampoline() -> usize {
-    symbol_addr!(trampoline) as usize
+    symbol_addr!(trampoline)
 }
 
 fn make_pagetable_for_kernel() -> PageTable {

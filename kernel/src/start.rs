@@ -82,7 +82,7 @@ unsafe fn initialize_timer() {
     write_csr!(mscratch, scratch as *mut _ as usize);
 
     // set the machine-mode trap handler.
-    write_csr!(mtvec, symbol_addr!(timervec).addr() as u64);
+    write_csr!(mtvec, symbol_addr!(timervec) as u64);
 
     // enable machine-mode interrupts.
     write_csr!(mstatus, read_csr!(mstatus) | mstatus::MIE);

@@ -9,13 +9,13 @@ use crate::{
 };
 
 unsafe fn set_kernel_trap() {
-    let vec = symbol_addr!(kernelvec).addr();
+    let vec = symbol_addr!(kernelvec);
     unsafe { write_csr!(stvec, vec) };
 }
 
 unsafe fn set_user_trap() {
-    let user_trap_handler = symbol_addr!(user_trap_handler).addr();
-    let trampoline = symbol_addr!(trampoline).addr();
+    let user_trap_handler = symbol_addr!(user_trap_handler);
+    let trampoline = symbol_addr!(trampoline);
     let vec = TRAMPOLINE + (user_trap_handler - trampoline);
     unsafe { write_csr!(stvec, vec) };
 }
@@ -114,8 +114,8 @@ pub fn usertrapret() {
 
     let satp = make_satp(context.pagetable.as_u64());
 
-    let kernel_to_user = symbol_addr!(kernel_to_user).addr();
-    let trampoline = symbol_addr!(trampoline).addr();
+    let kernel_to_user = symbol_addr!(kernel_to_user);
+    let trampoline = symbol_addr!(trampoline);
     let trampoline_userret = TRAMPOLINE + (kernel_to_user - trampoline);
 
     let f: extern "C" fn(u64) = unsafe { core::mem::transmute(trampoline_userret) };

@@ -37,7 +37,7 @@ impl KernelAllocator {
     pub fn initialize(&mut self) {
         assert!(!self.is_initialized());
 
-        let phy_start = symbol_addr!(end) as usize;
+        let phy_start = symbol_addr!(end);
         let phy_end = PHYSTOP;
 
         self.register_blocks(phy_start, phy_end);
@@ -60,7 +60,7 @@ impl KernelAllocator {
     // initializing the allocator; see kinit above.)
     pub fn deallocate_page(&mut self, pa: NonNull<u8>) {
         assert!(pa.addr().get() % PGSIZE == 0);
-        assert!(pa.addr().get() >= symbol_addr!(end) as usize);
+        assert!(pa.addr().get() >= symbol_addr!(end));
         assert!(pa.addr().get() < PHYSTOP);
 
         // Fill with junk to catch dangling refs.
