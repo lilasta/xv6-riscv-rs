@@ -3283,7 +3283,6 @@ int main(int argc, char *argv[])
     void (*f)(char *);
     char *s;
   } tests[] = {
-      //{diskfull, "diskfull"},
       //{manywrites, "manywrites"},
       //{truncate3, "truncate3"},
       //{forkforkfork, "forkforkfork"},
@@ -3294,6 +3293,7 @@ int main(int argc, char *argv[])
       //{writebig, "writebig"},
       //{bigdir, "bigdir"}, // slow
       // 以下OK
+      {diskfull, "diskfull"},
       {fourteen, "fourteen"},
       {forktest, "forktest"},
       {subdir, "subdir"},
