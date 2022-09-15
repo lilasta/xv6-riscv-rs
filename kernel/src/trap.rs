@@ -24,7 +24,6 @@ pub fn initialize() {
     unsafe { set_kernel_trap() };
 }
 
-#[no_mangle]
 extern "C" fn usertrap() {
     assert!(unsafe { read_csr!(sstatus) & sstatus::SPP == 0 });
 
@@ -83,8 +82,7 @@ extern "C" fn usertrap() {
     usertrapret();
 }
 
-#[no_mangle]
-extern "C" fn usertrapret() {
+pub fn usertrapret() {
     let context = process::context().unwrap();
 
     // we're about to switch the destination of traps from

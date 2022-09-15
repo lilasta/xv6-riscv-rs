@@ -9,7 +9,7 @@ use crate::{
     buffer::{self, BSIZE},
     cache::CacheRc,
     config::{NINODE, ROOTDEV},
-    log::{self, initlog, LogGuard},
+    log::{self, LogGuard},
     process::{self, copyin_either, copyout_either},
     sleeplock::{SleepLock, SleepLockGuard},
     spinlock::{SpinLock, SpinLockGuard},
@@ -691,17 +691,16 @@ fn write_zeros_to_block(device: usize, block: usize, log: &LogGuard) {
     log.write(&mut buf);
 }
 
-#[no_mangle]
-extern "C" fn fsinit(device: u32) {
+pub fn initialize(device: usize) {
     fn read_superblock(device: usize) -> Option<SuperBlock> {
         let mut buf = buffer::get(device, 1)?;
         let val = unsafe { buf.read::<SuperBlock>().clone() };
         Some(val)
     }
 
-    let superblock = read_superblock(device as usize).unwrap();
+    let superblock = read_superblock(device).unwrap();
     assert!(superblock.magic == FSMAGIC);
-    unsafe { initlog(device as u32, &superblock) };
+    log::initialize(device, &superblock);
     unsafe { SUPERBLOCK = superblock };
 }
 

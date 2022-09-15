@@ -2,7 +2,7 @@ use core::arch::asm;
 
 use crate::{
     config::{ENTRY_STACKSIZE, NCPU},
-    memory_layout::{clint_mtimecmp, CLINT_MTIME},
+    memory_layout::{clint_mtimecmp, symbol_addr, CLINT_MTIME},
     riscv::{mie, mstatus, read_csr, sie, write_csr, write_reg},
 };
 
@@ -35,10 +35,7 @@ unsafe extern "C" fn start() {
 
     // set M Exception Program Counter to main, for mret.
     // requires gcc -mcmodel=medany
-    extern "C" {
-        fn main();
-    }
-    write_csr!(mepc, main as usize as u64);
+    write_csr!(mepc, crate::main as usize as u64);
 
     // disable paging for now.
     write_csr!(satp, 0);
@@ -84,12 +81,8 @@ unsafe fn initialize_timer() {
     scratch[4] = interval;
     write_csr!(mscratch, scratch as *mut _ as usize);
 
-    extern "C" {
-        fn timervec();
-    }
-
     // set the machine-mode trap handler.
-    write_csr!(mtvec, timervec as usize as u64);
+    write_csr!(mtvec, symbol_addr!(timervec).addr() as u64);
 
     // enable machine-mode interrupts.
     write_csr!(mstatus, read_csr!(mstatus) | mstatus::MIE);

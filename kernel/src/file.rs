@@ -167,8 +167,8 @@ impl File {
 
 #[repr(C)]
 pub struct DeviceFile {
-    pub read: extern "C" fn(i32, usize, usize) -> i32,
-    pub write: extern "C" fn(i32, usize, usize) -> i32,
+    pub read: fn(i32, usize, usize) -> i32,
+    pub write: fn(i32, usize, usize) -> i32,
 }
 
 pub static mut DEVICEFILES: [Option<DeviceFile>; NDEV] = [const { None }; _];

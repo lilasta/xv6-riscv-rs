@@ -21,6 +21,7 @@
 #![feature(const_try)]
 #![feature(cstr_from_bytes_until_nul)]
 #![feature(decl_macro)]
+#![feature(fn_traits)]
 #![feature(generic_arg_infer)]
 #![feature(generic_const_exprs)]
 #![feature(inline_const)]
@@ -39,6 +40,7 @@
 #![feature(slice_ptr_get)]
 #![feature(stdsimd)]
 #![feature(strict_provenance)]
+#![feature(unboxed_closures)]
 
 extern crate alloc;
 
@@ -98,8 +100,7 @@ fn alloc_error(layout: core::alloc::Layout) -> ! {
 
 static STARTED: AtomicBool = AtomicBool::new(false);
 
-#[no_mangle]
-unsafe extern "C" fn main() {
+pub unsafe extern "C" fn main() {
     if process::cpuid() == 0 {
         console::initialize();
         println!("");

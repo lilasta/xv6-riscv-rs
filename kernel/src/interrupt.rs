@@ -119,15 +119,3 @@ pub fn off<R>(f: impl FnOnce() -> R) -> R {
     pop_off();
     ret
 }
-
-mod binding {
-    #[no_mangle]
-    extern "C" fn push_off() {
-        super::push_off();
-    }
-
-    #[no_mangle]
-    extern "C" fn pop_off() {
-        super::pop_off();
-    }
-}

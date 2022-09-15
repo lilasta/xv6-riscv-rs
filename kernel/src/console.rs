@@ -207,10 +207,10 @@ pub unsafe fn initialize() {
     });
 }
 
-extern "C" fn consolewrite(src_user: i32, src: usize, n: usize) -> i32 {
+fn consolewrite(src_user: i32, src: usize, n: usize) -> i32 {
     Console::write(src_user as usize, src, n) as i32
 }
 
-extern "C" fn consoleread(dst_user: i32, dst: usize, n: usize) -> i32 {
+fn consoleread(dst_user: i32, dst: usize, n: usize) -> i32 {
     CONSOLE.lock().read(dst_user as usize, dst, n)
 }

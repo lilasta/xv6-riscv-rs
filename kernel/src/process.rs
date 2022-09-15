@@ -16,6 +16,7 @@ use crate::process::process::ProcessContext;
 use crate::riscv::paging::PageTable;
 use crate::riscv::{self, enable_interrupt};
 use crate::spinlock::{SpinLock, SpinLockGuard};
+use crate::trap::usertrapret;
 use crate::vm::{uvminit, PageTableExtension};
 use crate::{fs, interrupt};
 
@@ -148,16 +149,7 @@ extern "C" fn finish_dispatch() {
 
         if FIRST {
             FIRST = false;
-
-            extern "C" {
-                fn fsinit(dev: i32);
-            }
-
-            fsinit(ROOTDEV as _);
-        }
-
-        extern "C" {
-            fn usertrapret();
+            fs::initialize(ROOTDEV);
         }
 
         usertrapret();
@@ -314,8 +306,7 @@ pub unsafe fn exit(status: i32) {
     unreachable!("zombie exit");
 }
 
-#[no_mangle]
-pub extern "C" fn scheduler() {
+pub fn scheduler() {
     loop {
         unsafe { enable_interrupt() };
 

@@ -41,7 +41,7 @@ struct LogHeader {
 }
 
 impl LogHeader {
-    pub const fn empty() -> Self {
+    const fn empty() -> Self {
         Self {
             n: 0,
             block: [0; _],
@@ -60,7 +60,7 @@ pub struct Log {
 }
 
 impl Log {
-    pub const fn uninit() -> Self {
+    const fn new() -> Self {
         Self {
             start: 0,
             size: 0,
@@ -143,16 +143,16 @@ impl<'a> Drop for LogGuard<'a> {
     }
 }
 
-static LOG: SpinLock<Log> = SpinLock::new(Log::uninit());
+static LOG: SpinLock<Log> = SpinLock::new(Log::new());
 
 pub fn start() -> LogGuard<'static> {
     LOG.lock().start()
 }
 
 fn read_header(log: &mut SpinLockGuard<Log>) -> Option<()> {
-    let mut buf = buffer::get(log.device, log.start)?;
+    let mut buffer = buffer::get(log.device, log.start)?;
     unsafe {
-        log.header = buf.read_with_unlock::<LogHeader, _>(log).clone();
+        log.header = buffer.read_with_unlock::<LogHeader, _>(log).clone();
     }
     Some(())
 }
@@ -196,12 +196,11 @@ fn write_log(log: &mut SpinLockGuard<Log>) {
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn initlog(dev: u32, sb: *const SuperBlock) {
+pub fn initialize(device: usize, sb: &SuperBlock) {
     let mut log = LOG.lock();
     log.start = (*sb).logstart as usize;
     log.size = (*sb).nlog as usize;
-    log.device = dev as usize;
+    log.device = device;
 
     read_header(&mut log).unwrap();
     install_blocks(&mut log, true);
