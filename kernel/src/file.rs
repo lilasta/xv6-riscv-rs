@@ -90,7 +90,7 @@ impl File {
                 }
 
                 let device = unsafe { DEVICEFILES.get(*major).ok_or(())? };
-                let result = (device.as_ref().unwrap().read)(1, addr, n);
+                let result = (device.as_ref().unwrap().read)(addr, n);
                 if result < 0 {
                     Err(())
                 } else {
@@ -154,7 +154,7 @@ impl File {
                     return Err(());
                 }
                 let device = unsafe { DEVICEFILES.get(*major).ok_or(())? };
-                let result = (device.as_ref().unwrap().write)(1, addr, n);
+                let result = (device.as_ref().unwrap().write)(addr, n);
                 if result < 0 {
                     Err(())
                 } else {
@@ -167,8 +167,8 @@ impl File {
 
 #[repr(C)]
 pub struct DeviceFile {
-    pub read: fn(i32, usize, usize) -> i32,
-    pub write: fn(i32, usize, usize) -> i32,
+    pub read: fn(usize, usize) -> i32,
+    pub write: fn(usize, usize) -> i32,
 }
 
 pub static mut DEVICEFILES: [Option<DeviceFile>; NDEV] = [const { None }; _];

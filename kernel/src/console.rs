@@ -11,7 +11,7 @@
 
 use crate::{
     file::{DeviceFile, DEVICEFILES},
-    process::{self, copyin_either, copyout_either},
+    process,
     spinlock::{SpinLock, SpinLockGuard},
     uart::UART,
 };
@@ -58,15 +58,12 @@ impl Console {
     //
     // user write()s to the console go here.
     //
-    pub fn write(src_user: usize, src: usize, n: usize) -> usize {
+    pub fn write(src: usize, n: usize) -> usize {
         for i in 0..n {
-            let mut c = 0;
-
-            if unsafe { !copyin_either(&mut c, src_user != 0, src + i) } {
-                return i;
+            match process::read_memory(src + i) {
+                Some(ch) => Self::putc(ch),
+                None => return i,
             }
-
-            Self::putc(c);
         }
         n
     }
@@ -135,7 +132,7 @@ impl<'a> SpinLockGuard<'a, Console> {
     // user_dist indicates whether dst is a user
     // or kernel address.
     //
-    pub fn read(&mut self, dst_user: usize, mut dst: usize, mut n: usize) -> i32 {
+    pub fn read(&mut self, mut dst: usize, mut n: usize) -> i32 {
         let target = n;
         while n > 0 {
             // wait until interrupt handler has put some
@@ -160,10 +157,8 @@ impl<'a> SpinLockGuard<'a, Console> {
                 break;
             }
 
-            unsafe {
-                if !copyout_either(dst_user != 0, dst, &c) {
-                    break;
-                }
+            if !process::write_memory(dst, c) {
+                break;
             }
 
             dst += 1;
@@ -207,10 +202,10 @@ pub unsafe fn initialize() {
     });
 }
 
-fn consolewrite(src_user: i32, src: usize, n: usize) -> i32 {
-    Console::write(src_user as usize, src, n) as i32
+fn consolewrite(src: usize, n: usize) -> i32 {
+    Console::write(src, n) as i32
 }
 
-fn consoleread(dst_user: i32, dst: usize, n: usize) -> i32 {
-    CONSOLE.lock().read(dst_user as usize, dst, n)
+fn consoleread(dst: usize, n: usize) -> i32 {
+    CONSOLE.lock().read(dst, n)
 }

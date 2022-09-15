@@ -34,7 +34,7 @@ fn current() -> Option<&'static SpinLock<Process>> {
 }
 
 pub fn read_memory<T>(addr: usize) -> Option<T> {
-    let process = context().unwrap();
+    let process = context()?;
     if addr >= process.sz || addr + core::mem::size_of::<T>() > process.sz {
         return None;
     }
@@ -45,6 +45,12 @@ pub fn read_memory<T>(addr: usize) -> Option<T> {
     }
 
     Some(unsafe { dst.assume_init() })
+}
+
+#[must_use]
+pub fn write_memory<T: 'static>(addr: usize, value: T) -> bool {
+    let process = context().unwrap();
+    unsafe { process.pagetable.write(addr, &value).is_ok() }
 }
 
 // Copy from either a user address, or kernel address,
@@ -349,7 +355,7 @@ pub fn pause() {
 
 pub unsafe fn wait(addr: Option<usize>) -> Option<usize> {
     let current = current()?;
-    let mut _guard = (*table::wait_lock()).lock();
+    let mut guard = (*table::wait_lock()).lock();
     loop {
         let mut havekids = false;
         for process in table::get().iter() {
@@ -360,9 +366,7 @@ pub unsafe fn wait(addr: Option<usize>) -> Option<usize> {
                 if let ProcessState::Zombie(_, exit_status) = process.state {
                     let pid = process.pid;
                     if let Some(addr) = addr {
-                        if current
-                            .get_mut()
-                            .context()
+                        if context()
                             .unwrap()
                             .pagetable
                             .write(addr, &exit_status)
@@ -381,7 +385,7 @@ pub unsafe fn wait(addr: Option<usize>) -> Option<usize> {
             return None;
         }
 
-        sleep(current as *const _ as usize, &mut _guard);
+        sleep(current as *const _ as usize, &mut guard);
     }
 }
 

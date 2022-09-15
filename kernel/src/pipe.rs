@@ -120,14 +120,7 @@ impl<const SIZE: usize> PipeInner<SIZE> {
             let ch = self.data[self.read % SIZE];
             self.read += 1;
 
-            // TODO: process::write_memorY
-            if unsafe {
-                process::context()
-                    .unwrap()
-                    .pagetable
-                    .write(addr + i, &ch)
-                    .is_err()
-            } {
+            if !process::write_memory(addr + i, ch) {
                 break;
             }
 
