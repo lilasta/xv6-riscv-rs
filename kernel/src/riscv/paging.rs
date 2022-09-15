@@ -271,11 +271,7 @@ impl PageTable {
         let grow_start = pg_roundup(old_size);
         let grow_end = new_size;
         for a in (grow_start..grow_end).step_by(PGSIZE) {
-            // TODO: Rustの仕様
-            // https://github.com/rust-lang/rust/issues/87335#issuecomment-1169479987
-            // https://github.com/rust-lang/rust/issues/93883
-            let mem = KernelAllocator::get().allocate_page();
-            let Some(mem) = mem else {
+            let Some(mem) = KernelAllocator::get().allocate_page() else {
                 self.shrink(a, old_size).unwrap();
                 return Err(());
             };

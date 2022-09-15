@@ -3,7 +3,6 @@ use alloc::sync::Arc;
 use crate::{
     process,
     spinlock::{SpinLock, SpinLockGuard},
-    vm::PageTableExtension,
 };
 
 #[derive(Debug)]

@@ -43,10 +43,11 @@ impl DirectoryEntry {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone)]
 pub struct Stat {
     device: u32,
     inode: u32,
-    kind: u16,
+    kind: InodeKind,
     nlink: u16,
     size: usize,
 }
@@ -57,10 +58,19 @@ pub struct InodeKey {
     index: usize,
 }
 
+#[repr(u16)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InodeKind {
+    Unused = 0,
+    Directory = 1,
+    File = 2,
+    Device = 3,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct Inode {
-    kind: u16,
+    kind: InodeKind,
     major: u16,
     minor: u16,
     nlink: u16,
@@ -72,7 +82,7 @@ pub struct Inode {
 impl Inode {
     pub const fn zeroed() -> Self {
         Self {
-            kind: 0,
+            kind: InodeKind::Unused,
             major: 0,
             minor: 0,
             nlink: 0,
@@ -309,15 +319,15 @@ impl<'l, 'i> DerefMut for InodeReadWriteGuard<'l, 'i> {
 
 impl<'i> InodeReadOnlyGuard<'i> {
     pub fn is_directory(&self) -> bool {
-        self.inode.kind == 1
+        matches!(self.inode.kind, InodeKind::Directory)
     }
 
     pub fn is_file(&self) -> bool {
-        self.inode.kind == 2
+        matches!(self.inode.kind, InodeKind::File)
     }
 
     pub fn is_device(&self) -> bool {
-        self.inode.kind == 3
+        matches!(self.inode.kind, InodeKind::Device)
     }
 
     pub fn counf_of_link(&self) -> usize {
@@ -379,7 +389,7 @@ impl<'i> InodeReadOnlyGuard<'i> {
         let mut block = buffer::get(self.device_number(), block_index).unwrap();
         *self.inode = unsafe { block.read_array::<Inode>()[in_block_index].clone() };
 
-        assert!(self.inode.kind != 0);
+        assert!(matches!(self.inode.kind, InodeKind::Unused) == false);
     }
 
     fn offset_to_block(&mut self, offset: usize, log: Option<&LogGuard>) -> Option<usize> {
@@ -562,7 +572,7 @@ impl<const N: usize> InodeAllocator<N> {
     fn allocate(
         self: &mut SpinLockGuard<Self>,
         device: usize,
-        kind: u16,
+        kind: InodeKind,
         log: &LogGuard,
     ) -> Result<usize, ()> {
         for inum in 1..(unsafe { SUPERBLOCK.ninodes as usize }) {
@@ -573,7 +583,7 @@ impl<const N: usize> InodeAllocator<N> {
             let inodes = unsafe { block.read_array_with_unlock::<Inode, _>(self) };
 
             let inode = &mut inodes[in_block_index];
-            if inode.kind == 0 {
+            if inode.kind == InodeKind::Unused {
                 inode.kind = kind;
                 log.write(&mut block);
 
@@ -631,7 +641,7 @@ impl<const N: usize> InodeAllocator<N> {
                 SpinLock::unlock_temporarily(self, move || {
                     assert!(inode.inode.nlink == 0);
                     inode.truncate();
-                    inode.inode.kind = 0;
+                    inode.inode.kind = InodeKind::Unused;
                     inode.update();
                     inode_ref.is_initialized.store(false, Ordering::SeqCst);
                     drop(inode);
@@ -708,7 +718,7 @@ pub trait InodeOps<'a> {
     fn create<'b>(
         &'b self,
         path: &str,
-        kind: u16,
+        kind: InodeKind,
         major: u16,
         minor: u16,
     ) -> Result<(InodeReference<'a>, InodeReadWriteGuard<'b, 'a>), ()>;
@@ -718,7 +728,7 @@ impl<'a> InodeOps<'a> for LogGuard<'a> {
     fn create<'b>(
         &'b self,
         path: &str,
-        kind: u16,
+        kind: InodeKind,
         major: u16,
         minor: u16,
     ) -> Result<(InodeReference<'a>, InodeReadWriteGuard<'b, 'a>), ()> {
@@ -726,11 +736,10 @@ impl<'a> InodeOps<'a> for LogGuard<'a> {
         let mut dir = dir.lock_rw(self);
 
         match dir.lookup(name) {
-            // TODO: T_FILE
             Some((inode_ref, _)) => {
                 drop(dir);
                 let inode = inode_ref.lock_rw(self);
-                return if kind == 2 && (inode.is_file() || inode.is_device()) {
+                return if kind == InodeKind::File && (inode.is_file() || inode.is_device()) {
                     Ok((inode_ref, inode))
                 } else {
                     Err(())
@@ -754,8 +763,7 @@ impl<'a> InodeOps<'a> for LogGuard<'a> {
                     Err(())
                 };
 
-                // TODO: T_DIR
-                if kind == 1 {
+                if kind == InodeKind::Directory {
                     if inode.link(".", inode.inode_number()).is_err()
                         || inode.link("..", dir.inode_number()).is_err()
                     {
@@ -767,8 +775,7 @@ impl<'a> InodeOps<'a> for LogGuard<'a> {
                     return bad(inode);
                 }
 
-                // TODO: T_DIR
-                if kind == 1 {
+                if kind == InodeKind::Directory {
                     dir.increment_link();
                     dir.update();
                 }
@@ -862,7 +869,7 @@ pub fn unlink(path: &str) -> Result<(), ()> {
 
 pub fn make_directory(path: &str) -> Result<(), ()> {
     let log = log::start();
-    let (r, i) = log.create(path, 1, 0, 0)?; // TODO: 1 == T_DIR
+    let (r, i) = log.create(path, InodeKind::Directory, 0, 0)?;
     drop(i);
     drop(r);
     Ok(())
@@ -870,7 +877,7 @@ pub fn make_directory(path: &str) -> Result<(), ()> {
 
 pub fn make_special_file(path: &str, major: u16, minor: u16) -> Result<(), ()> {
     let log = log::start();
-    let (r, i) = log.create(path, 3, major, minor)?; // TODO: 3 == T_DEVICE
+    let (r, i) = log.create(path, InodeKind::Device, major, minor)?;
     drop(i);
     drop(r);
     Ok(())

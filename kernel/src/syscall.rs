@@ -8,7 +8,7 @@ use crate::{
     config::{MAXARG, MAXPATH, NDEV},
     exec::execute,
     file::File,
-    fs::{self, InodeOps},
+    fs::{self, InodeKind, InodeOps},
     log,
     pipe::Pipe,
     process,
@@ -280,7 +280,7 @@ fn sys_open() -> Result<u64, ()> {
     let log = log::start();
     let mode = arg_usize::<1>();
     let (inode_ref, mut inode) = if mode & O_CREATE != 0 {
-        log.create(path, 2, 0, 0)? // TODO: 2 = T_FILE
+        log.create(path, InodeKind::File, 0, 0)?
     } else {
         let inode_ref = fs::search_inode(path).ok_or(())?;
         let inode = inode_ref.lock_rw(&log);
