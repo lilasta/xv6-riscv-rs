@@ -374,6 +374,8 @@ fn sys_exec() -> Result<u64, ()> {
 
     arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
 
+    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
+
     let mut argv = ArrayVec::<_, MAXARG>::new();
     let argv_user = arg_usize::<1>();
 
@@ -402,7 +404,7 @@ fn sys_exec() -> Result<u64, ()> {
         }
     }
 
-    unsafe { execute(path.as_ptr(), &argv).map(|argc| argc as u64) }
+    unsafe { execute(path, &argv).map(|argc| argc as u64) }
 }
 
 fn sys_pipe() -> Result<u64, ()> {

@@ -198,8 +198,8 @@ fn write_log(log: &mut SpinLockGuard<Log>) {
 
 pub fn initialize(device: usize, sb: &SuperBlock) {
     let mut log = LOG.lock();
-    log.start = (*sb).logstart as usize;
-    log.size = (*sb).nlog as usize;
+    log.start = sb.logstart as usize;
+    log.size = sb.nlog as usize;
     log.device = device;
 
     read_header(&mut log).unwrap();

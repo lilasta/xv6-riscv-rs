@@ -1,5 +1,3 @@
-use core::ffi::{c_char, CStr};
-
 use alloc::ffi::CString;
 
 use crate::{
@@ -39,9 +37,7 @@ fn load_segment(
     true
 }
 
-pub unsafe fn execute(path: *const c_char, argv: &[CString]) -> Result<usize, ()> {
-    let path = CStr::from_ptr(path).to_str().unwrap();
-
+pub unsafe fn execute(path: &str, argv: &[CString]) -> Result<usize, ()> {
     let log = log::start();
     let Some(inode_ref) = fs::search_inode(path) else {
         return Err(());
