@@ -71,7 +71,6 @@ mod syscall;
 mod trampoline;
 mod trap;
 mod uart;
-mod undrop;
 mod virtio;
 mod vm;
 
