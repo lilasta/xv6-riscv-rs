@@ -5,13 +5,14 @@ use alloc::sync::Arc;
 use crate::{
     allocator::KernelAllocator,
     config::NOFILE,
+    context::Context as CPUContext,
     file::File,
     fs::InodeReference,
     process,
     riscv::paging::{PageTable, PGSIZE},
 };
 
-use super::{context::CPUContext, free_pagetable, trapframe::TrapFrame};
+use super::{free_pagetable, trapframe::TrapFrame};
 
 #[derive(Debug)]
 pub enum ProcessState {

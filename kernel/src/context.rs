@@ -5,7 +5,7 @@ use core::arch::global_asm;
 /// カーネルのコンテキストスイッチの際に保存するレジスタの値
 #[repr(C)]
 #[derive(Debug)]
-pub struct CPUContext {
+pub struct Context {
     pub ra: u64,
     pub sp: u64,
 
@@ -24,7 +24,7 @@ pub struct CPUContext {
     pub s11: u64,
 }
 
-impl CPUContext {
+impl Context {
     pub const fn zeroed() -> Self {
         Self {
             ra: 0,
@@ -86,5 +86,5 @@ switch:
 extern "C" {
     /// コンテキストスイッチを行う。
     /// 現在のレジスタの値を`old`に保存し、`new`のもので置き換える。
-    pub fn switch(old: *mut CPUContext, new: *const CPUContext);
+    pub fn switch(old: *mut Context, new: *const Context);
 }

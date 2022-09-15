@@ -1,6 +1,5 @@
-mod context;
 mod cpu;
-pub mod process;
+mod process;
 mod scheduler;
 mod table;
 mod trapframe;
@@ -18,15 +17,15 @@ use crate::riscv::{self, enable_interrupt};
 use crate::spinlock::{SpinLock, SpinLockGuard};
 use crate::trap::usertrapret;
 use crate::vm::{uvminit, PageTableExtension};
-use crate::{fs, interrupt};
+use crate::{context, fs, interrupt};
 
 use crate::{
+    context::Context as CPUContext,
     memory_layout::{TRAMPOLINE, TRAPFRAME},
     riscv::paging::{PGSIZE, PTE},
     trampoline::trampoline,
 };
 
-use self::context::CPUContext;
 use self::cpu::CPU;
 use self::process::{Process, ProcessState};
 
