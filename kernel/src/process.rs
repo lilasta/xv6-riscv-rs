@@ -82,7 +82,7 @@ pub unsafe fn copyout_either<T: ?Sized>(user_dst: bool, dst: usize, src: &T) -> 
 }
 
 pub fn id() -> Option<usize> {
-    Some(unsafe { current()?.get().pid as usize })
+    Some(unsafe { current()?.get().pid })
 }
 
 pub fn context() -> Option<&'static mut ProcessContext> {
@@ -169,7 +169,7 @@ pub unsafe fn setup_init_process() {
 
     // process.name = "initcode";
 
-    let mut process = table::table().allocate_process().unwrap();
+    let mut process = table::get().allocate_process().unwrap();
     assert!(process.pid == 1);
 
     process.state = ProcessState::Runnable(context);
@@ -229,13 +229,13 @@ pub fn sleep<T>(token: usize, guard: &mut SpinLockGuard<T>) {
 }
 
 pub fn wakeup(token: usize) {
-    table::table().wakeup(token);
+    table::get().wakeup(token);
 }
 
 pub unsafe fn fork() -> Option<usize> {
     let p = current()?;
     let process = p.get_mut();
-    let mut process_new = table::table().allocate_process()?;
+    let mut process_new = table::get().allocate_process()?;
     let mut context_new = ProcessContext::allocate(finish_dispatch).ok()?;
 
     let size = process.context().unwrap().sz;
@@ -270,7 +270,7 @@ pub unsafe fn fork() -> Option<usize> {
 
     process_new.state.setup(context_new).unwrap();
 
-    Some(pid as _)
+    Some(pid)
 }
 
 pub unsafe fn exit(status: i32) {
@@ -287,8 +287,8 @@ pub unsafe fn exit(status: i32) {
     let _guard = (*table::wait_lock()).lock();
     //table::table().remove_parent(process.pid as usize);
 
-    let initptr = table::table().iter().find(|p| p.get().pid == 1).unwrap();
-    for p in table::table().iter() {
+    let initptr = table::get().iter().find(|p| p.get().pid == 1).unwrap();
+    for p in table::get().iter() {
         if p.get().parent == (pl as *const _ as *mut _) {
             p.get_mut().parent = initptr as *const _ as *mut _;
             wakeup(initptr as *const _ as usize);
@@ -309,7 +309,7 @@ pub fn scheduler() {
     loop {
         unsafe { enable_interrupt() };
 
-        for process in table::table().iter() {
+        for process in table::get().iter() {
             let mut process = process.lock();
             if process.state.is_runnable() {
                 process.state.run().unwrap();
@@ -352,7 +352,7 @@ pub unsafe fn wait(addr: Option<usize>) -> Option<usize> {
     let mut _guard = (*table::wait_lock()).lock();
     loop {
         let mut havekids = false;
-        for process in table::table().iter() {
+        for process in table::get().iter() {
             if process.get().parent == (current as *const _ as *mut _) {
                 let mut process = process.lock();
                 havekids = true;
@@ -372,7 +372,7 @@ pub unsafe fn wait(addr: Option<usize>) -> Option<usize> {
                         }
                     }
                     process.deallocate();
-                    return Some(pid as _);
+                    return Some(pid);
                 }
             }
         }
@@ -386,12 +386,12 @@ pub unsafe fn wait(addr: Option<usize>) -> Option<usize> {
 }
 
 pub fn kill(pid: usize) -> bool {
-    table::table().kill(pid)
+    table::get().kill(pid)
 }
 
 pub fn procdump() {
     crate::print!("\n");
-    for process in table::table().iter() {
+    for process in table::get().iter() {
         unsafe { process.get().dump() };
     }
 }

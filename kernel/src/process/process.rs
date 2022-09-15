@@ -132,7 +132,7 @@ pub struct Process {
     // p->lock must be held when using these:
     pub state: ProcessState, // Process state
     pub killed: i32,         // If non-zero, have been killed
-    pub pid: i32,            // Process ID
+    pub pid: usize,          // Process ID
 
     // wait_lock must be held when using this:
     pub parent: *mut Process, // Parent process

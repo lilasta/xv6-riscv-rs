@@ -43,7 +43,7 @@ impl ProcessTable {
             let mut process = process.lock();
             if process.state.is_unused() {
                 process.state.allocate().unwrap();
-                process.pid = self.allocate_pid() as _;
+                process.pid = self.allocate_pid();
                 return Some(process);
             }
         }
@@ -68,7 +68,7 @@ impl ProcessTable {
     pub fn kill(&mut self, pid: usize) -> bool {
         for process in self.procs.iter_mut() {
             let mut process = process.lock();
-            if process.pid == pid as i32 {
+            if process.pid == pid {
                 process.killed = 1;
                 if process.state.is_sleeping() {
                     process.state.wakeup().unwrap();
@@ -101,11 +101,11 @@ impl ProcessTable {
     }
 }
 
-pub fn table() -> &'static mut ProcessTable {
+pub fn get() -> &'static mut ProcessTable {
     static mut TABLE: ProcessTable = ProcessTable::new();
     unsafe { &mut TABLE }
 }
 
 pub fn wait_lock() -> *mut SpinLock<()> {
-    &mut table().parent_maps as *mut _ as *mut _
+    &mut get().parent_maps as *mut _ as *mut _
 }
