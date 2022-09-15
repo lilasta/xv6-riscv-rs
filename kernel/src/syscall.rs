@@ -163,8 +163,8 @@ fn sys_uptime() -> Result<u64, ()> {
 }
 
 fn sys_dup() -> Result<u64, ()> {
-    let (fd, f) = arg_fd::<0>()?;
-    fdalloc(f.clone())?;
+    let (_, f) = arg_fd::<0>()?;
+    let fd = fdalloc(f.clone())?;
     Ok(fd as u64)
 }
 
