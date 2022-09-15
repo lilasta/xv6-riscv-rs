@@ -48,6 +48,7 @@ mod allocator;
 mod bitmap;
 mod buffer;
 mod cache;
+mod clock;
 mod config;
 mod console;
 mod context;

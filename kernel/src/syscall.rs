@@ -5,6 +5,7 @@ use arrayvec::ArrayVec;
 
 use crate::{
     allocator::KernelAllocator,
+    clock,
     config::{MAXARG, MAXPATH, NDEV},
     exec::execute,
     file::File,
@@ -13,7 +14,6 @@ use crate::{
     pipe::Pipe,
     process,
     riscv::paging::{PGSIZE, PTE},
-    spinlock::SpinLock,
     vm::{copyinstr, PageTableExtension},
 };
 
@@ -105,14 +105,6 @@ pub unsafe fn syscall(index: usize) -> Result<u64, ()> {
     }
 }
 
-static TICKS: SpinLock<u64> = SpinLock::new(0);
-
-pub fn clockintr() {
-    let mut ticks = TICKS.lock();
-    *ticks += 1; // TODO: Overflow?
-    process::wakeup(&TICKS as *const _ as usize);
-}
-
 fn sys_exit() -> Result<u64, ()> {
     let n = arg_i32::<0>();
     unsafe { process::exit(n) };
@@ -159,19 +151,15 @@ fn sys_kill() -> Result<u64, ()> {
 
 fn sys_sleep() -> Result<u64, ()> {
     let time = arg_usize::<0>() as u64;
-    let mut ticks = TICKS.lock();
-    let ticks0 = *ticks;
-    while (*ticks - ticks0) < time {
-        if process::is_killed() == Some(true) {
-            return Err(());
-        }
-        process::sleep(&TICKS as *const _ as usize, &mut ticks);
+    if clock::sleep(time) {
+        Ok(0)
+    } else {
+        Err(())
     }
-    Ok(0)
 }
 
 fn sys_uptime() -> Result<u64, ()> {
-    Ok(*TICKS.lock())
+    Ok(clock::get())
 }
 
 fn sys_dup() -> Result<u64, ()> {

@@ -1,9 +1,10 @@
 use crate::{
+    clock,
     memory_layout::{symbol_addr, TRAMPOLINE, UART0_IRQ, VIRTIO0_IRQ},
     plic::{plic_claim, plic_complete},
     println, process,
     riscv::{self, paging::PGSIZE, read_csr, read_reg, satp::make_satp, sstatus, write_csr},
-    syscall::{clockintr, syscall},
+    syscall::syscall,
     uart::uartintr,
     virtio,
 };
@@ -181,7 +182,7 @@ fn device_interrupt_handler() -> usize {
 
     if cause == 0x8000000000000001 {
         if process::cpuid() == 0 {
-            clockintr();
+            clock::tick();
         }
 
         unsafe { write_csr!(sip, read_csr!(sip) & !2) };
