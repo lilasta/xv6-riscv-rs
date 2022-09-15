@@ -17,30 +17,6 @@ use crate::{
     vm::{copyinstr, PageTableExtension},
 };
 
-pub enum SystemCall {
-    Fork = 1,
-    Exit = 2,
-    Wait = 3,
-    Pipe = 4,
-    Read = 5,
-    Kill = 6,
-    Exec = 7,
-    Fstat = 8,
-    Chdir = 9,
-    Dup = 10,
-    GetPID = 11,
-    Sbrk = 12,
-    Sleep = 13,
-    Uptime = 14,
-    Open = 15,
-    Write = 16,
-    Mknod = 17,
-    Unlink = 18,
-    Link = 19,
-    Mkdir = 20,
-    Close = 21,
-}
-
 pub unsafe fn read_string_from_process_memory(addr: usize, buffer: &mut [u8]) -> Result<(), ()> {
     let process = process::context().unwrap();
     copyinstr(
@@ -101,20 +77,32 @@ fn fdalloc(f: Arc<File>) -> Result<usize, ()> {
     Err(())
 }
 
-static SYSCALLS: &[fn() -> Result<u64, ()>] = &[
-    sys_fork, sys_exit, sys_wait, sys_pipe, sys_read, sys_kill, sys_exec, sys_fstat, sys_chdir,
-    sys_dup, sys_getpid, sys_sbrk, sys_sleep, sys_uptime, sys_open, sys_write, sys_mknod,
-    sys_unlink, sys_link, sys_mkdir, sys_close,
-];
-
-pub unsafe fn syscall() {
-    let process = process::context().unwrap();
-    let index = process.trapframe.as_ref().a7 - 1;
-    let result = match SYSCALLS.get(index as usize) {
-        Some(f) => f().unwrap_or(u64::MAX),
-        None => u64::MAX,
-    };
-    process.trapframe.as_mut().a0 = result;
+#[inline(always)]
+pub unsafe fn syscall(index: usize) -> Result<u64, ()> {
+    match index {
+        1 => sys_fork(),
+        2 => sys_exit(),
+        3 => sys_wait(),
+        4 => sys_pipe(),
+        5 => sys_read(),
+        6 => sys_kill(),
+        7 => sys_exec(),
+        8 => sys_fstat(),
+        9 => sys_chdir(),
+        10 => sys_dup(),
+        11 => sys_getpid(),
+        12 => sys_sbrk(),
+        13 => sys_sleep(),
+        14 => sys_uptime(),
+        15 => sys_open(),
+        16 => sys_write(),
+        17 => sys_mknod(),
+        18 => sys_unlink(),
+        19 => sys_link(),
+        20 => sys_mkdir(),
+        21 => sys_close(),
+        _ => Err(()),
+    }
 }
 
 static TICKS: SpinLock<u64> = SpinLock::new(0);

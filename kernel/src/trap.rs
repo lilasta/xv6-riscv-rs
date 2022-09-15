@@ -50,7 +50,8 @@ extern "C" fn usertrap() {
         // so don't enable until done with those registers.
         unsafe { riscv::enable_interrupt() };
 
-        unsafe { syscall() };
+        let index = unsafe { context.trapframe.as_ref().a7 as usize };
+        unsafe { context.trapframe.as_mut().a0 = syscall(index).unwrap_or(u64::MAX) };
     } else {
         which_device = device_interrupt_handler();
 
