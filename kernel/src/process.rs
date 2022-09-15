@@ -166,7 +166,7 @@ pub unsafe fn setup_init_process() {
     static INITCODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/initcode"));
 
     let mut context = ProcessContext::allocate(finish_dispatch).unwrap();
-    uvminit(context.pagetable, INITCODE.as_ptr(), INITCODE.len());
+    uvminit(&mut context.pagetable, INITCODE.as_ptr(), INITCODE.len());
     context.sz = PGSIZE;
 
     context.trapframe.as_mut().epc = 0;
@@ -209,7 +209,7 @@ pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
     Ok(pagetable)
 }
 
-pub fn free_pagetable(mut pagetable: PageTable, size: usize) {
+pub fn free_pagetable(pagetable: &mut PageTable, size: usize) {
     pagetable.unmap(TRAMPOLINE, 1, false);
     pagetable.unmap(TRAPFRAME, 1, false);
     if size > 0 {

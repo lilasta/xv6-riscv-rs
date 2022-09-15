@@ -223,7 +223,7 @@ impl ProcessContext {
 impl Drop for ProcessContext {
     fn drop(&mut self) {
         KernelAllocator::get().deallocate(self.trapframe);
-        free_pagetable(self.pagetable, self.sz);
+        free_pagetable(&mut self.pagetable, self.sz);
         process::deallocate_kstack(self.kstack).unwrap();
     }
 }

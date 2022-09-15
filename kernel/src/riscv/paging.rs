@@ -116,7 +116,7 @@ impl PTE {
 }
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy)] // TODO: Remove clone copy
+#[derive(Debug)]
 pub struct PageTable(NonNull<PTE>);
 
 impl PageTable {

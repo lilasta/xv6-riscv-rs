@@ -72,7 +72,7 @@ fn make_pagetable_for_kernel() -> PageTable {
 // Load the user initcode into address 0 of pagetable,
 // for the very first process.
 // sz must be less than a page.
-pub unsafe fn uvminit(mut pagetable: PageTable, src: *const u8, size: usize) {
+pub unsafe fn uvminit(pagetable: &mut PageTable, src: *const u8, size: usize) {
     assert!(size < PGSIZE);
 
     let mem: NonNull<u8> = KernelAllocator::get().allocate().unwrap();
@@ -171,7 +171,7 @@ pub unsafe fn initialize_for_core() {
 // until a '\0', or max.
 // Return 0 on success, -1 on error.
 pub unsafe fn copyinstr(
-    pagetable: PageTable,
+    pagetable: &PageTable,
     mut dst: usize,
     mut src_va: usize,
     mut len: usize,

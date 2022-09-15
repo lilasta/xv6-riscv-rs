@@ -44,7 +44,7 @@ pub enum SystemCall {
 pub unsafe fn read_string_from_process_memory(addr: usize, buffer: &mut [u8]) -> Result<(), ()> {
     let process = process::context().unwrap();
     copyinstr(
-        process.pagetable,
+        &process.pagetable,
         buffer.as_mut_ptr().addr(),
         addr,
         buffer.len(),
