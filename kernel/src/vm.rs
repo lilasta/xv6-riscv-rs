@@ -175,7 +175,7 @@ pub unsafe fn copyinstr(
     mut dst: usize,
     mut src_va: usize,
     mut len: usize,
-) -> i32 {
+) -> Result<(), ()> {
     unsafe fn strcpy(src: *const u8, dst: *mut u8, len: usize) -> bool {
         for i in 0..len {
             *dst.add(i) = *src.add(i);
@@ -190,7 +190,7 @@ pub unsafe fn copyinstr(
     while len > 0 {
         let va0 = pg_rounddown(src_va);
         let Some(pa0) = pagetable.virtual_to_physical(va0) else {
-                return -1;
+                return Err(());
             };
 
         let offset = src_va - va0;
@@ -203,12 +203,12 @@ pub unsafe fn copyinstr(
         );
 
         if got_null {
-            return 0;
+            return Ok(());
         }
 
         len -= n;
         dst += n;
         src_va = va0 + PGSIZE;
     }
-    -1
+    Err(())
 }

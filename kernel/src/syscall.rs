@@ -41,27 +41,14 @@ pub enum SystemCall {
     Close = 21,
 }
 
-pub unsafe fn read_string_from_process_memory(
-    addr: usize,
-    buf: usize,
-    max: usize,
-) -> Result<usize, i32> {
-    unsafe fn strlen(mut s: *const u8) -> usize {
-        let mut i = 0;
-        while *s != 0 {
-            s = s.add(1);
-            i += 1;
-        }
-        i
-    }
-
+pub unsafe fn read_string_from_process_memory(addr: usize, buffer: &mut [u8]) -> Result<(), ()> {
     let process = process::context().unwrap();
-    let err = copyinstr(process.pagetable, buf, addr, max);
-    if err < 0 {
-        Err(err)
-    } else {
-        Ok(strlen(buf as *const _))
-    }
+    copyinstr(
+        process.pagetable,
+        buffer.as_mut_ptr().addr(),
+        addr,
+        buffer.len(),
+    )
 }
 
 fn arg_raw<const N: usize>() -> u64 {
@@ -87,9 +74,12 @@ fn arg_usize<const N: usize>() -> usize {
     arg_raw::<N>() as _
 }
 
-fn arg_string<const N: usize>(buf: usize, max: usize) -> Result<usize, i32> {
+fn arg_string<const N: usize>(buffer: &mut [u8]) -> Result<&str, ()> {
     let addr = arg_usize::<N>();
-    unsafe { read_string_from_process_memory(addr, buf, max) }
+    unsafe { read_string_from_process_memory(addr, buffer)? };
+
+    let len = buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len());
+    core::str::from_utf8(&buffer[..len]).or(Err(()))
 }
 
 fn arg_fd<const N: usize>() -> Result<(usize, &'static Arc<File>), ()> {
@@ -242,34 +232,24 @@ fn sys_fstat() -> Result<u64, ()> {
 }
 
 fn sys_link() -> Result<u64, ()> {
-    let mut new = [0u8; MAXPATH];
     let mut old = [0u8; MAXPATH];
+    let mut new = [0u8; MAXPATH];
 
-    arg_string::<0>(old.as_mut_ptr().addr(), old.len()).or(Err(()))?;
-    arg_string::<1>(new.as_mut_ptr().addr(), new.len()).or(Err(()))?;
-
-    let old = unsafe { CStr::from_ptr(old.as_ptr().cast()).to_str().or(Err(()))? };
-    let new = unsafe { CStr::from_ptr(new.as_ptr().cast()).to_str().or(Err(()))? };
+    let old = arg_string::<0>(&mut old)?;
+    let new = arg_string::<1>(&mut new)?;
 
     fs::link(new, old).and(Ok(0))
 }
 
 fn sys_unlink() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
-
-    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
-
-    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
-
+    let path = arg_string::<0>(&mut path)?;
     fs::unlink(path).and(Ok(0))
 }
 
 fn sys_open() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
-
-    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
-
-    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
+    let path = arg_string::<0>(&mut path)?;
 
     const O_RDONLY: usize = 0x000;
     const O_WRONLY: usize = 0x001;
@@ -326,33 +306,21 @@ fn sys_open() -> Result<u64, ()> {
 
 fn sys_mkdir() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
-
-    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
-
-    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
-
+    let path = arg_string::<0>(&mut path)?;
     fs::make_directory(path).and(Ok(0))
 }
 
 fn sys_mknod() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
-
-    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
-
-    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
-
+    let path = arg_string::<0>(&mut path)?;
     let major = arg_usize::<1>();
     let minor = arg_usize::<2>();
-
     fs::make_special_file(path, major as u16, minor as u16).and(Ok(0))
 }
 
 fn sys_chdir() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
-
-    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
-
-    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
+    let path = arg_string::<0>(&mut path)?;
 
     let log = log::start();
     let inode_ref = fs::search_inode(path).ok_or(())?;
@@ -370,9 +338,8 @@ fn sys_chdir() -> Result<u64, ()> {
 }
 
 fn sys_exec() -> Result<u64, ()> {
-    let mut path = [0i8; MAXPATH];
-
-    arg_string::<0>(path.as_mut_ptr().addr(), path.len()).or(Err(()))?;
+    let mut path = [0u8; MAXPATH];
+    let path = arg_string::<0>(&mut path)?;
 
     let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
 
@@ -393,12 +360,13 @@ fn sys_exec() -> Result<u64, ()> {
             return Err(());
         };
 
-        if unsafe { read_string_from_process_memory(addr, mem.addr().get(), PGSIZE).is_err() } {
+        let buffer = unsafe { core::slice::from_raw_parts_mut(mem.as_ptr(), PGSIZE) };
+        if unsafe { read_string_from_process_memory(addr, buffer).is_err() } {
             KernelAllocator::get().deallocate_page(mem);
             return Err(());
         }
 
-        let arg = unsafe { CString::from_raw(mem.as_ptr().cast()) };
+        let arg = unsafe { CString::from_raw(buffer.as_mut_ptr().cast()) };
         if argv.try_push(arg).is_err() {
             return Err(());
         }
