@@ -79,28 +79,15 @@ fn fdalloc(f: Arc<File>) -> Result<usize, ()> {
 
 #[inline(always)]
 pub unsafe fn syscall(index: usize) -> Result<u64, ()> {
+    static LOOKUP: [fn() -> Result<u64, ()>; 21] = [
+        sys_fork, sys_exit, sys_wait, sys_pipe, sys_read, sys_kill, sys_exec, sys_fstat, sys_chdir,
+        sys_dup, sys_getpid, sys_sbrk, sys_sleep, sys_uptime, sys_open, sys_write, sys_mknod,
+        sys_unlink, sys_link, sys_mkdir, sys_close,
+    ];
+
     match index {
-        1 => sys_fork(),
-        2 => sys_exit(),
-        3 => sys_wait(),
-        4 => sys_pipe(),
-        5 => sys_read(),
-        6 => sys_kill(),
-        7 => sys_exec(),
-        8 => sys_fstat(),
-        9 => sys_chdir(),
-        10 => sys_dup(),
-        11 => sys_getpid(),
-        12 => sys_sbrk(),
-        13 => sys_sleep(),
-        14 => sys_uptime(),
-        15 => sys_open(),
-        16 => sys_write(),
-        17 => sys_mknod(),
-        18 => sys_unlink(),
-        19 => sys_link(),
-        20 => sys_mkdir(),
-        21 => sys_close(),
+        0 => Err(()),
+        i @ 1..=21 => LOOKUP[i - 1](),
         _ => Err(()),
     }
 }
