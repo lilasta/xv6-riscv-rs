@@ -1,5 +1,3 @@
-use core::ffi::CStr;
-
 use alloc::{ffi::CString, sync::Arc};
 use arrayvec::ArrayVec;
 
@@ -303,8 +301,6 @@ fn sys_chdir() -> Result<u64, ()> {
 fn sys_exec() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
     let path = arg_string::<0>(&mut path)?;
-
-    let path = unsafe { CStr::from_ptr(path.as_ptr().cast()).to_str().or(Err(()))? };
 
     let mut argv = ArrayVec::<_, MAXARG>::new();
     let argv_user = arg_usize::<1>();
