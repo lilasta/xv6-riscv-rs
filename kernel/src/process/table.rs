@@ -69,7 +69,7 @@ impl ProcessTable {
         for process in self.procs.iter_mut() {
             let mut process = process.lock();
             if process.pid == pid {
-                process.killed = 1;
+                process.killed = true;
                 if process.state.is_sleeping() {
                     process.state.wakeup().unwrap();
                 }

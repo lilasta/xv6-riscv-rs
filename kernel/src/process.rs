@@ -90,11 +90,11 @@ pub fn context() -> Option<&'static mut ProcessContext> {
 }
 
 pub fn is_killed() -> Option<bool> {
-    Some(unsafe { current()?.get().killed != 0 })
+    Some(unsafe { current()?.get().killed })
 }
 
 pub fn set_killed() -> Option<()> {
-    unsafe { current()?.get_mut().killed = 1 };
+    unsafe { current()?.get_mut().killed = true };
     Some(())
 }
 
@@ -377,7 +377,7 @@ pub unsafe fn wait(addr: Option<usize>) -> Option<usize> {
             }
         }
 
-        if !havekids || current.get().killed != 0 {
+        if !havekids || current.get().killed {
             return None;
         }
 

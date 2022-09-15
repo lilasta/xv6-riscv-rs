@@ -131,7 +131,7 @@ impl ProcessState {
 pub struct Process {
     // p->lock must be held when using these:
     pub state: ProcessState, // Process state
-    pub killed: i32,         // If non-zero, have been killed
+    pub killed: bool,        // If non-zero, have been killed
     pub pid: usize,          // Process ID
 
     // wait_lock must be held when using this:
@@ -145,7 +145,7 @@ impl Process {
     pub const fn unused() -> Self {
         Self {
             state: ProcessState::Unused,
-            killed: 0,
+            killed: false,
             pid: 0,
             parent: core::ptr::null_mut(),
             name: [0; _],
@@ -173,7 +173,7 @@ impl Process {
         self.pid = 0;
         self.parent = core::ptr::null_mut();
         self.name[0] = 0;
-        self.killed = 0;
+        self.killed = false;
         self.state = ProcessState::Unused;
     }
 
