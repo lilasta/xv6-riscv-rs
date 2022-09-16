@@ -56,7 +56,7 @@ pub unsafe fn execute(path: &str, argv: &[CString]) -> Result<usize, ()> {
         return Err(());
     };
 
-    let Ok(mut pagetable) = process::allocate_pagetable(context.trapframe.addr().get()) else {
+    let Ok(mut pagetable) = process::allocate_pagetable(core::ptr::addr_of!(*context.trapframe).addr()) else {
         return Err(());
     };
 
@@ -166,12 +166,12 @@ pub unsafe fn execute(path: &str, argv: &[CString]) -> Result<usize, ()> {
     // arguments to user main(argc, argv)
     // argc is returned via the system call return
     // value, which goes in a0.
-    context.trapframe.as_mut().a1 = sp as u64;
+    context.trapframe.a1 = sp as u64;
 
     let mut old_pagetable = core::mem::replace(&mut context.pagetable, pagetable);
     context.sz = size;
-    context.trapframe.as_mut().epc = elf.entry as u64;
-    context.trapframe.as_mut().sp = sp as u64;
+    context.trapframe.epc = elf.entry as u64;
+    context.trapframe.sp = sp as u64;
     process::free_pagetable(&mut old_pagetable, old_size);
 
     // this ends up in a0, the first argument to main(argc, argv)

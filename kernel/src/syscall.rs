@@ -27,16 +27,14 @@ pub unsafe fn read_string_from_process_memory(addr: usize, buffer: &mut [u8]) ->
 
 fn arg_raw<const N: usize>() -> u64 {
     let process = process::context().unwrap();
-    unsafe {
-        match N {
-            0 => process.trapframe.as_ref().a0,
-            1 => process.trapframe.as_ref().a1,
-            2 => process.trapframe.as_ref().a2,
-            3 => process.trapframe.as_ref().a3,
-            4 => process.trapframe.as_ref().a4,
-            5 => process.trapframe.as_ref().a5,
-            _ => panic!(),
-        }
+    match N {
+        0 => process.trapframe.a0,
+        1 => process.trapframe.a1,
+        2 => process.trapframe.a2,
+        3 => process.trapframe.a3,
+        4 => process.trapframe.a4,
+        5 => process.trapframe.a5,
+        _ => panic!(),
     }
 }
 

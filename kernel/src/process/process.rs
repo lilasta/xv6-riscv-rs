@@ -1,9 +1,8 @@
-use core::{ffi::c_char, ptr::NonNull};
+use core::ffi::c_char;
 
-use alloc::sync::Arc;
+use alloc::{boxed::Box, sync::Arc};
 
 use crate::{
-    allocator::KernelAllocator,
     config::NOFILE,
     context::Context as CPUContext,
     file::File,
@@ -191,7 +190,7 @@ pub struct ProcessContext {
     pub kstack: usize,                        // Virtual address of kernel stack
     pub sz: usize,                            // Size of process memory (bytes)
     pub pagetable: PageTable,                 // User page table
-    pub trapframe: NonNull<TrapFrame>,        // data page for trampoline.S
+    pub trapframe: Box<TrapFrame>,            // data page for trampoline.S
     pub context: CPUContext,                  // swtch() here to run process
     pub ofile: [Option<Arc<File>>; NOFILE],   // Open files
     pub cwd: Option<InodeReference<'static>>, // Current directory
@@ -199,8 +198,8 @@ pub struct ProcessContext {
 
 impl ProcessContext {
     pub fn allocate(jump: extern "C" fn()) -> Result<Self, ()> {
-        let trapframe = KernelAllocator::get().allocate().ok_or(())?;
-        let pagetable = process::allocate_pagetable(trapframe.addr().get())?;
+        let trapframe = Box::try_new(TrapFrame::zeroed()).map_err(|_| ())?;
+        let pagetable = process::allocate_pagetable(core::ptr::addr_of!(*trapframe).addr())?;
 
         let kstack = process::allocate_kstack().ok_or(())?;
 
@@ -222,7 +221,6 @@ impl ProcessContext {
 
 impl Drop for ProcessContext {
     fn drop(&mut self) {
-        KernelAllocator::get().deallocate(self.trapframe);
         free_pagetable(&mut self.pagetable, self.sz);
         process::deallocate_kstack(self.kstack).unwrap();
     }

@@ -169,8 +169,8 @@ pub unsafe fn setup_init_process() {
     uvminit(&mut context.pagetable, INITCODE.as_ptr(), INITCODE.len());
     context.sz = PGSIZE;
 
-    context.trapframe.as_mut().epc = 0;
-    context.trapframe.as_mut().sp = PGSIZE as _;
+    context.trapframe.epc = 0;
+    context.trapframe.sp = PGSIZE as _;
     context.cwd = fs::search_inode(&"/");
 
     // process.name = "initcode";
@@ -255,8 +255,8 @@ pub unsafe fn fork() -> Option<usize> {
     }
 
     context_new.sz = process.context().unwrap().sz;
-    *context_new.trapframe.as_mut() = process.context().unwrap().trapframe.as_ref().clone();
-    context_new.trapframe.as_mut().a0 = 0;
+    *context_new.trapframe = (*process.context().unwrap().trapframe).clone();
+    context_new.trapframe.a0 = 0;
 
     for (i, opened) in process.context().unwrap().ofile.iter().enumerate() {
         context_new.ofile[i] = opened.clone();

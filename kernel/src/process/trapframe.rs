@@ -1,3 +1,5 @@
+use core::mem::MaybeUninit;
+
 // per-process data for the trap handling code in trampoline.S.
 // sits in a page by itself just under the trampoline page in the
 // user page table. not specially mapped in the kernel page table.
@@ -49,4 +51,11 @@ pub struct TrapFrame {
     pub t4: u64,
     pub t5: u64,
     pub t6: u64,
+}
+
+impl TrapFrame {
+    pub const fn zeroed() -> Self {
+        let this = MaybeUninit::zeroed();
+        unsafe { this.assume_init() }
+    }
 }

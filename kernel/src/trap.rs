@@ -31,7 +31,7 @@ extern "C" fn usertrap() {
     unsafe { set_kernel_trap() };
 
     let context = process::context().unwrap();
-    unsafe { context.trapframe.as_mut().epc = read_csr!(sepc) };
+    context.trapframe.epc = unsafe { read_csr!(sepc) };
 
     let mut which_device = 0;
 
@@ -45,14 +45,14 @@ extern "C" fn usertrap() {
 
         // sepc points to the ecall instruction,
         // but we want to return to the next instruction.
-        unsafe { context.trapframe.as_mut().epc += 4 };
+        context.trapframe.epc += 4;
 
         // an interrupt will change sstatus &c registers,
         // so don't enable until done with those registers.
         unsafe { riscv::enable_interrupt() };
 
-        let index = unsafe { context.trapframe.as_ref().a7 as usize };
-        unsafe { context.trapframe.as_mut().a0 = syscall(index).unwrap_or(u64::MAX) };
+        let index = context.trapframe.a7 as usize;
+        context.trapframe.a0 = unsafe { syscall(index).unwrap_or(u64::MAX) };
     } else {
         which_device = device_interrupt_handler();
 
@@ -97,10 +97,10 @@ pub fn usertrapret() {
     unsafe {
         // set up trapframe values that user_trap_handler will need when
         // the process next re-enters the kernel.
-        context.trapframe.as_mut().kernel_satp = read_csr!(satp);
-        context.trapframe.as_mut().kernel_sp = (context.kstack + PGSIZE) as u64;
-        context.trapframe.as_mut().kernel_trap = usertrap as u64;
-        context.trapframe.as_mut().kernel_hartid = read_reg!(tp);
+        context.trapframe.kernel_satp = read_csr!(satp);
+        context.trapframe.kernel_sp = (context.kstack + PGSIZE) as u64;
+        context.trapframe.kernel_trap = usertrap as u64;
+        context.trapframe.kernel_hartid = read_reg!(tp);
     }
 
     unsafe {
@@ -111,7 +111,7 @@ pub fn usertrapret() {
     }
 
     unsafe {
-        write_csr!(sepc, context.trapframe.as_ref().epc);
+        write_csr!(sepc, context.trapframe.epc);
     }
 
     let satp = make_satp(context.pagetable.as_u64());
