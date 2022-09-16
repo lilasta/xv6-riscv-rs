@@ -25,7 +25,6 @@ fn trampoline() -> usize {
 
 fn make_pagetable_for_kernel() -> PageTable {
     let mut pagetable = PageTable::allocate().unwrap();
-    pagetable.clear();
 
     // uart registers
     pagetable
@@ -91,12 +90,12 @@ pub unsafe fn uvminit(pagetable: &mut PageTable, src: *const u8, size: usize) {
 }
 
 pub trait PageTableExtension {
-    unsafe fn write<T: ?Sized>(&self, dst_va: usize, src: &T) -> Result<(), usize>;
-    unsafe fn read<T: ?Sized>(&self, dst: &mut T, src_va: usize) -> Result<(), usize>;
+    unsafe fn write<T: ?Sized>(&mut self, dst_va: usize, src: &T) -> Result<(), usize>;
+    unsafe fn read<T: ?Sized>(&mut self, dst: &mut T, src_va: usize) -> Result<(), usize>;
 }
 
 impl PageTableExtension for PageTable {
-    unsafe fn write<T: ?Sized>(&self, mut dst_va: usize, src: &T) -> Result<(), usize> {
+    unsafe fn write<T: ?Sized>(&mut self, mut dst_va: usize, src: &T) -> Result<(), usize> {
         let src_size = core::mem::size_of_val(src);
 
         let mut copied = 0;
@@ -125,7 +124,7 @@ impl PageTableExtension for PageTable {
         Ok(())
     }
 
-    unsafe fn read<T: ?Sized>(&self, dst: &mut T, mut src_va: usize) -> Result<(), usize> {
+    unsafe fn read<T: ?Sized>(&mut self, dst: &mut T, mut src_va: usize) -> Result<(), usize> {
         let dst_size = core::mem::size_of_val(dst);
 
         let mut copied = 0;
@@ -153,16 +152,16 @@ impl PageTableExtension for PageTable {
     }
 }
 
-static mut KERNEL_PAGETABLE: PageTable = PageTable::invalid();
+static mut KERNEL_PAGETABLE: Option<PageTable> = None;
 
 pub unsafe fn initialize() {
-    KERNEL_PAGETABLE = make_pagetable_for_kernel();
+    KERNEL_PAGETABLE = Some(make_pagetable_for_kernel());
 }
 
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
 pub unsafe fn initialize_for_core() {
-    write_csr!(satp, make_satp(KERNEL_PAGETABLE.as_u64()));
+    write_csr!(satp, make_satp(KERNEL_PAGETABLE.as_ref().unwrap().as_u64()));
     sfence_vma(0, 0);
 }
 
@@ -171,7 +170,7 @@ pub unsafe fn initialize_for_core() {
 // until a '\0', or max.
 // Return 0 on success, -1 on error.
 pub unsafe fn copyinstr(
-    pagetable: &PageTable,
+    pagetable: &mut PageTable,
     mut dst: usize,
     mut src_va: usize,
     mut len: usize,

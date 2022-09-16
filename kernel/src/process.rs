@@ -192,7 +192,6 @@ pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
         .map(TRAMPOLINE, trampoline as usize, PGSIZE, PTE::R | PTE::X)
         .is_err()
     {
-        pagetable.deallocate();
         return Err(());
     }
 
@@ -202,7 +201,6 @@ pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
         .is_err()
     {
         pagetable.unmap(TRAMPOLINE, 1, false);
-        pagetable.deallocate();
         return Err(());
     }
 
@@ -215,7 +213,6 @@ pub fn free_pagetable(pagetable: &mut PageTable, size: usize) {
     if size > 0 {
         pagetable.unmap(0, crate::riscv::paging::pg_roundup(size) / PGSIZE, true);
     }
-    pagetable.deallocate();
 }
 
 pub fn sleep<T>(token: usize, guard: &mut SpinLockGuard<T>) {

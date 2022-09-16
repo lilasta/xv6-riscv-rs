@@ -1,5 +1,7 @@
 use core::ptr::NonNull;
 
+use alloc::boxed::Box;
+
 use crate::allocator::KernelAllocator;
 
 // bytes per page
@@ -23,6 +25,7 @@ pub const fn pg_rounddown(a: usize) -> usize {
 pub const MAXVA: usize = 1usize << (9 + 9 + 9 + 12 - 1);
 
 #[repr(transparent)]
+#[derive(Debug)]
 pub struct PTE(u64);
 
 impl PTE {
@@ -115,41 +118,28 @@ impl PTE {
     }
 }
 
-#[repr(transparent)]
 #[derive(Debug)]
-pub struct PageTable(NonNull<PTE>);
+pub struct PageTable {
+    table: Box<[PTE; 512]>,
+}
 
 impl PageTable {
-    pub const LEN: usize = 512;
-
     pub fn allocate() -> Result<Self, ()> {
-        let ptr: NonNull<PTE> = KernelAllocator::get().allocate().ok_or(())?;
-        let this = Self::from_ptr(ptr);
-        this.clear();
-        Ok(this)
+        let table = Box::try_new([const { PTE::invalid() }; _]).map_err(|_| ())?;
+        Ok(Self { table })
     }
 
-    pub fn deallocate(&mut self) {
-        for i in 0..Self::LEN {
-            let pte = self.get_mut(i);
-            if pte.is_valid() {
-                assert!(!pte.is_readable());
-                assert!(!pte.is_writable());
-                assert!(!pte.is_executable());
-
-                let child = pte.get_physical_addr();
-                let child = child as *mut PTE;
-                let child = NonNull::new(child).unwrap();
-
-                Self::from_ptr(child).deallocate();
-
-                pte.clear();
-            }
-        }
-        KernelAllocator::get().deallocate_page(self.0.cast());
+    pub fn leak<'a>(mut self) -> &'a mut [PTE; 512] {
+        let table = self.table.as_mut_ptr();
+        core::mem::forget(self);
+        unsafe { &mut *table.cast() }
     }
 
-    pub fn copy(&self, to: &mut Self, size: usize) -> Result<(), ()> {
+    pub fn as_u64(&self) -> u64 {
+        self.table.as_ptr().addr() as u64
+    }
+
+    pub fn copy(&mut self, to: &mut Self, size: usize) -> Result<(), ()> {
         for i in (0..size).step_by(PGSIZE) {
             let pte = self.search_entry(i, false).unwrap();
             assert!(pte.is_valid());
@@ -175,36 +165,6 @@ impl PageTable {
         }
 
         Ok(())
-    }
-
-    pub const fn invalid() -> Self {
-        Self(NonNull::dangling())
-    }
-
-    pub const fn from_ptr(ptr: NonNull<PTE>) -> Self {
-        Self(ptr)
-    }
-
-    pub const fn as_ptr(&self) -> *mut PTE {
-        self.0.as_ptr()
-    }
-
-    pub fn as_u64(&self) -> u64 {
-        self.0.as_ptr() as u64
-    }
-
-    pub const fn get(&self, index: usize) -> &'static PTE {
-        assert!(index < Self::LEN);
-        unsafe { self.0.as_ptr().add(index).as_ref().unwrap() }
-    }
-
-    pub const fn get_mut(&mut self, index: usize) -> &'static mut PTE {
-        assert!(index < Self::LEN);
-        unsafe { self.0.as_ptr().add(index).as_mut().unwrap() }
-    }
-
-    pub const fn clear(&self) {
-        unsafe { core::ptr::write_bytes(self.0.as_ptr(), 0, Self::LEN) };
     }
 
     // Create PTEs for virtual addresses starting at va that refer to
@@ -323,38 +283,38 @@ impl PageTable {
     //   21..29 -- 9 bits of level-1 index.
     //   12..20 -- 9 bits of level-0 index.
     //    0..11 -- 12 bits of byte offset within the page.
-    pub fn search_entry(&self, va: usize, alloc: bool) -> Result<&'static mut PTE, ()> {
+    pub fn search_entry(&mut self, va: usize, alloc: bool) -> Result<&mut PTE, ()> {
         assert!(va < MAXVA);
 
-        let mut table = Self(self.0);
+        let mut table = &mut *self.table;
 
         for level in [2, 1] {
             let index = PTE::index(level, va);
-            let pte = table.get_mut(index);
+            let pte = &mut table[index];
 
             if pte.is_valid() {
                 let nested_table_ptr = pte.get_physical_addr();
                 let nested_table_ptr = <*mut _>::from_bits(nested_table_ptr);
-                let nested_table_ptr = NonNull::new(nested_table_ptr).unwrap();
-                table = Self::from_ptr(nested_table_ptr);
+                table = unsafe { &mut *nested_table_ptr };
             } else {
                 if !alloc {
                     return Err(());
                 }
 
-                table = Self::allocate()?;
-                table.clear();
+                let new_table = Self::allocate()?;
 
                 pte.clear();
-                pte.set_physical_addr(table.as_ptr() as usize);
+                pte.set_physical_addr(new_table.as_u64() as usize);
                 pte.set_valid(true);
+
+                table = Self::leak(new_table);
             }
         }
 
-        Ok(table.get_mut(PTE::index(0, va)))
+        Ok(&mut table[PTE::index(0, va)])
     }
 
-    pub fn virtual_to_physical(&self, va: usize) -> Option<usize> {
+    pub fn virtual_to_physical(&mut self, va: usize) -> Option<usize> {
         if va >= MAXVA {
             return None;
         }
@@ -371,5 +331,24 @@ impl PageTable {
         }
 
         Some(pte.get_physical_addr())
+    }
+}
+
+impl Drop for PageTable {
+    fn drop(&mut self) {
+        for pte in self.table.iter_mut() {
+            if pte.is_valid() {
+                assert!(!pte.is_readable());
+                assert!(!pte.is_writable());
+                assert!(!pte.is_executable());
+
+                let child = pte.get_physical_addr();
+                let child = child as *mut [PTE; 512];
+                let child = unsafe { Box::from_raw(child) };
+                drop(Self { table: child });
+
+                pte.clear();
+            }
+        }
     }
 }
