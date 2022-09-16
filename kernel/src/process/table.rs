@@ -38,7 +38,7 @@ impl ProcessTable {
         self.next_pid.fetch_add(1, AcqRel)
     }
 
-    pub fn allocate_process(&mut self) -> Option<SpinLockGuard<Process>> {
+    pub fn allocate_process(&self) -> Option<SpinLockGuard<Process>> {
         for process in self.procs.iter() {
             let mut process = process.lock();
             if process.state.is_unused() {
@@ -50,8 +50,8 @@ impl ProcessTable {
         None
     }
 
-    pub fn wakeup(&mut self, token: usize) {
-        for process in self.procs.iter_mut() {
+    pub fn wakeup(&self, token: usize) {
+        for process in self.procs.iter() {
             if let Some(current) = process::current() {
                 if core::ptr::eq(process, current) {
                     continue;
@@ -65,8 +65,8 @@ impl ProcessTable {
         }
     }
 
-    pub fn kill(&mut self, pid: usize) -> bool {
-        for process in self.procs.iter_mut() {
+    pub fn kill(&self, pid: usize) -> bool {
+        for process in self.procs.iter() {
             let mut process = process.lock();
             if process.pid == pid {
                 process.killed = true;
@@ -79,33 +79,16 @@ impl ProcessTable {
         false
     }
 
-    pub fn register_parent(&mut self, parent_pid: usize, child_pid: usize) {
-        self.parent_maps.lock().push(Parent {
-            parent_pid,
-            child_pid,
-        });
-    }
-
-    pub fn remove_parent(&mut self, parent_pid: usize) {
-        unsafe {
-            for map in self.parent_maps.get_mut().iter_mut() {
-                if map.parent_pid == parent_pid {
-                    map.parent_pid = 1;
-                }
-            }
-        }
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = &SpinLock<Process>> {
         self.procs.iter()
     }
 }
 
-pub fn get() -> &'static mut ProcessTable {
-    static mut TABLE: ProcessTable = ProcessTable::new();
-    unsafe { &mut TABLE }
+pub fn get() -> &'static ProcessTable {
+    static TABLE: ProcessTable = ProcessTable::new();
+    &TABLE
 }
 
-pub fn wait_lock() -> *mut SpinLock<()> {
-    &mut get().parent_maps as *mut _ as *mut _
+pub fn wait_lock() -> &'static mut SpinLock<()> {
+    unsafe { &mut *(&get().parent_maps as *const _ as *mut _) }
 }
