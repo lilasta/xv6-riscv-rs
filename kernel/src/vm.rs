@@ -12,18 +12,12 @@ use crate::{
     },
 };
 
-// kernel.ld sets this to end of kernel code.
-fn etext() -> usize {
-    symbol_addr!(etext)
-}
+static mut KERNEL_PAGETABLE: Option<PageTable> = None;
 
-// trampoline.S
-fn trampoline() -> usize {
-    symbol_addr!(trampoline)
-}
-
-fn make_pagetable_for_kernel() -> PageTable {
+pub unsafe fn initialize() {
     let mut pagetable = PageTable::allocate().unwrap();
+    let etext = symbol_addr!(etext);
+    let trampoline = symbol_addr!(trampoline);
 
     // uart registers
     pagetable
@@ -47,30 +41,24 @@ fn make_pagetable_for_kernel() -> PageTable {
 
     // map kernel text executable and read-only.
     pagetable
-        .map(KERNBASE, KERNBASE, etext() - KERNBASE, PTE::R | PTE::X)
+        .map(KERNBASE, KERNBASE, etext - KERNBASE, PTE::R | PTE::X)
         .unwrap();
 
     // map kernel data and the physical RAM we'll make use of.
     pagetable
-        .map(etext(), etext(), PHYSTOP - etext(), PTE::R | PTE::W)
+        .map(etext, etext, PHYSTOP - etext, PTE::R | PTE::W)
         .unwrap();
 
     // map the trampoline for trap entry/exit to
     // the highest virtual address in the kernel.
     pagetable
-        .map(TRAMPOLINE, trampoline(), PGSIZE, PTE::R | PTE::X)
+        .map(TRAMPOLINE, trampoline, PGSIZE, PTE::R | PTE::X)
         .unwrap();
 
     // map kernel stacks
     process::initialize_kstack(&mut pagetable);
 
-    pagetable
-}
-
-static mut KERNEL_PAGETABLE: Option<PageTable> = None;
-
-pub unsafe fn initialize() {
-    KERNEL_PAGETABLE = Some(make_pagetable_for_kernel());
+    KERNEL_PAGETABLE = Some(pagetable);
 }
 
 // Switch h/w page table register to the kernel's page table,
