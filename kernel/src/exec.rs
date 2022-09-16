@@ -6,7 +6,6 @@ use crate::{
     fs::{self, InodeReadOnlyGuard},
     log, process,
     riscv::paging::{pg_roundup, PageTable, PGSIZE, PTE},
-    vm::PageTableExtension,
 };
 
 fn flags2perm(flags: u32) -> u64 {

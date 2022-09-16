@@ -12,7 +12,7 @@ use crate::{
     pipe::Pipe,
     process,
     riscv::paging::{PGSIZE, PTE},
-    vm::{copyinstr, PageTableExtension},
+    vm::copyinstr,
 };
 
 pub unsafe fn read_string_from_process_memory(addr: usize, buffer: &mut [u8]) -> Result<(), ()> {

@@ -332,6 +332,62 @@ impl PageTable {
 
         Some(pte.get_physical_addr())
     }
+
+    pub unsafe fn write<T: ?Sized>(&mut self, mut dst_va: usize, src: &T) -> Result<(), usize> {
+        let src_size = core::mem::size_of_val(src);
+
+        let mut copied = 0;
+        while copied < src_size {
+            let va0 = pg_rounddown(dst_va);
+
+            let Some(pa0) = self.virtual_to_physical(va0) else {
+                return Err(copied);
+            };
+
+            let offset = dst_va - va0;
+            let remain = src_size - copied;
+            let bytes = (PGSIZE - offset).min(remain);
+
+            unsafe {
+                core::ptr::copy(
+                    <*const T>::cast::<u8>(src).add(copied),
+                    <*mut u8>::from_bits(pa0 + offset),
+                    bytes,
+                );
+            }
+
+            copied += bytes;
+            dst_va = va0 + PGSIZE;
+        }
+        Ok(())
+    }
+
+    pub unsafe fn read<T: ?Sized>(&mut self, dst: &mut T, mut src_va: usize) -> Result<(), usize> {
+        let dst_size = core::mem::size_of_val(dst);
+
+        let mut copied = 0;
+        while copied < dst_size {
+            let va0 = pg_rounddown(src_va);
+
+            let Some(pa0) = self.virtual_to_physical(va0) else {
+                return Err(copied);
+            };
+
+            let offset = src_va - va0;
+            let remain = dst_size - copied;
+            let bytes = (PGSIZE - offset).min(remain);
+
+            core::ptr::copy(
+                <*const u8>::from_bits(pa0 + offset),
+                <*mut T>::cast::<u8>(dst).add(copied),
+                bytes,
+            );
+
+            copied += bytes;
+            src_va = va0 + PGSIZE;
+        }
+        Ok(())
+    }
 }
 
 impl Drop for PageTable {

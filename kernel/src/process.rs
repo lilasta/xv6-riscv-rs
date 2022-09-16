@@ -16,7 +16,7 @@ use crate::riscv::paging::PageTable;
 use crate::riscv::{self, enable_interrupt};
 use crate::spinlock::{SpinLock, SpinLockGuard};
 use crate::trap::usertrapret;
-use crate::vm::{uvminit, PageTableExtension};
+use crate::vm::uvminit;
 use crate::{context, fs, interrupt};
 
 use crate::{
