@@ -70,6 +70,17 @@ mod descriptor {
         pub next: u16,
     }
 
+    impl Descriptor {
+        pub const fn zeroed() -> Self {
+            Self {
+                addr: 0,
+                len: 0,
+                flags: 0,
+                next: 0,
+            }
+        }
+    }
+
     pub const VRING_DESC_F_NEXT: u16 = 1; // chained with another descriptor
     pub const VRING_DESC_F_WRITE: u16 = 2; // device writes (vs read)
 
@@ -82,6 +93,17 @@ mod descriptor {
         pub unused: u16,
     }
 
+    impl Avail {
+        pub const fn zeroed() -> Self {
+            Self {
+                flags: 0,
+                idx: 0,
+                ring: [0; _],
+                unused: 0,
+            }
+        }
+    }
+
     // one entry in the "used" ring, with which the
     // device tells the driver about completed requests.
     #[repr(C)]
@@ -90,11 +112,27 @@ mod descriptor {
         pub len: u32,
     }
 
+    impl UsedElem {
+        pub const fn zeroed() -> Self {
+            Self { id: 0, len: 0 }
+        }
+    }
+
     #[repr(C)]
     pub struct Used {
         pub flags: u16, // always zero
         pub idx: u16,   // device increments when it adds a ring[] entry
         pub ring: [UsedElem; DESCRIPTOR_NUM],
+    }
+
+    impl Used {
+        pub const fn zeroed() -> Self {
+            Self {
+                flags: 0,
+                idx: 0,
+                ring: [const { UsedElem::zeroed() }; _],
+            }
+        }
     }
 
     // these are specific to virtio block devices, e.g. disks,

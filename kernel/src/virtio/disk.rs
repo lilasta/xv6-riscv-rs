@@ -1,7 +1,8 @@
-use core::{mem::MaybeUninit, ptr::NonNull};
+use core::mem::MaybeUninit;
+
+use alloc::boxed::Box;
 
 use crate::{
-    allocator::KernelAllocator,
     bitmap::Bitmap,
     memory_layout::VIRTIO0,
     process,
@@ -29,18 +30,18 @@ pub struct Disk {
     // disk operations. there are NUM descriptors.
     // most commands consist of a "chain" (a linked list) of a couple of
     // these descriptors.
-    descriptor: NonNull<[Descriptor; DESCRIPTOR_NUM]>,
+    descriptor: Box<[Descriptor; DESCRIPTOR_NUM]>,
 
     // a ring in which the driver writes descriptor numbers
     // that the driver would like the device to process.  it only
     // includes the head descriptor of each chain. the ring has
     // NUM elements.
-    avail: NonNull<Avail>,
+    avail: Box<Avail>,
 
     // a ring in which the device writes descriptor numbers that
     // the device has finished processing (just the head of each chain).
     // there are NUM used ring entries.
-    used: NonNull<Used>,
+    used: Box<Used>,
 
     // our own book-keeping.
     free: Bitmap<DESCRIPTOR_NUM>, // is a descriptor free?
@@ -106,29 +107,37 @@ impl Disk {
         assert!(max != 0);
         assert!(max >= DESCRIPTOR_NUM as u32);
 
-        let descriptor: NonNull<[Descriptor; DESCRIPTOR_NUM]> =
-            KernelAllocator::get().allocate().unwrap();
-        let avail: NonNull<Avail> = KernelAllocator::get().allocate().unwrap();
-        let used: NonNull<Used> = KernelAllocator::get().allocate().unwrap();
-        descriptor.as_ptr().write_bytes(0, 1);
-        avail.as_ptr().write_bytes(0, 1);
-        used.as_ptr().write_bytes(0, 1);
+        let descriptor = Box::new([const { Descriptor::zeroed() }; _]);
+        let avail = Box::new(Avail::zeroed());
+        let used = Box::new(Used::zeroed());
 
         write_reg(mmio_reg::QUEUE_NUM, DESCRIPTOR_NUM as u32);
 
         // write physical addresses.
-        write_reg(mmio_reg::QUEUE_DESC_LOW, descriptor.addr().get() as u32);
+        write_reg(
+            mmio_reg::QUEUE_DESC_LOW,
+            core::ptr::addr_of!(*descriptor).addr() as u32,
+        );
         write_reg(
             mmio_reg::QUEUE_DESC_HIGH,
-            (descriptor.addr().get() >> 32) as u32,
+            (core::ptr::addr_of!(*descriptor).addr() >> 32) as u32,
         );
-        write_reg(mmio_reg::DRIVER_DESC_LOW, avail.addr().get() as u32);
+        write_reg(
+            mmio_reg::DRIVER_DESC_LOW,
+            core::ptr::addr_of!(*avail).addr() as u32,
+        );
         write_reg(
             mmio_reg::DRIVER_DESC_HIGH,
-            (avail.addr().get() >> 32) as u32,
+            (core::ptr::addr_of!(*avail).addr() >> 32) as u32,
         );
-        write_reg(mmio_reg::DEVICE_DESC_LOW, used.addr().get() as u32);
-        write_reg(mmio_reg::DEVICE_DESC_HIGH, (used.addr().get() >> 32) as u32);
+        write_reg(
+            mmio_reg::DEVICE_DESC_LOW,
+            core::ptr::addr_of!(*used).addr() as u32,
+        );
+        write_reg(
+            mmio_reg::DEVICE_DESC_HIGH,
+            (core::ptr::addr_of!(*used).addr() >> 32) as u32,
+        );
 
         // queue is ready.
         write_reg(mmio_reg::QUEUE_READY, 0x1);
@@ -198,14 +207,14 @@ unsafe fn rw(addr: usize, block: usize, size: usize, write: bool) {
         sector: sector as u64,
     });
 
-    disk.descriptor.as_mut()[idx[0]] = Descriptor {
+    disk.descriptor[idx[0]] = Descriptor {
         addr: buf0 as *const _ as _,
         len: core::mem::size_of_val(buf0) as u32,
         flags: VRING_DESC_F_NEXT,
         next: idx[1] as u16,
     };
 
-    disk.descriptor.as_mut()[idx[1]] = Descriptor {
+    disk.descriptor[idx[1]] = Descriptor {
         addr: addr as u64,
         len: size as u32,
         flags: VRING_DESC_F_NEXT
@@ -224,18 +233,19 @@ unsafe fn rw(addr: usize, block: usize, size: usize, write: bool) {
 
     let in_use = core::ptr::addr_of!(info.in_use);
 
-    disk.descriptor.as_mut()[idx[2]] = Descriptor {
+    disk.descriptor[idx[2]] = Descriptor {
         addr: &mut info.status as *mut _ as u64,
         len: 1,
         flags: VRING_DESC_F_WRITE,
         next: 0,
     };
 
-    disk.avail.as_mut().ring[disk.avail.as_ref().idx as usize % DESCRIPTOR_NUM] = idx[0] as u16;
+    let ring_index = disk.avail.idx as usize % DESCRIPTOR_NUM;
+    disk.avail.ring[ring_index] = idx[0] as u16;
 
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
     {
-        let index = &mut disk.avail.as_mut().idx;
+        let index = &mut disk.avail.idx;
         *index = index.wrapping_add(1);
     }
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
@@ -274,10 +284,10 @@ pub unsafe fn interrupt_handler() {
 
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
-    while disk.used_index != disk.used.as_ref().idx {
+    while disk.used_index != disk.used.idx {
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
-        let id = disk.used.as_ref().ring[disk.used_index as usize % DESCRIPTOR_NUM].id;
+        let id = disk.used.ring[disk.used_index as usize % DESCRIPTOR_NUM].id;
         let Info {
             addr,
             in_use,
