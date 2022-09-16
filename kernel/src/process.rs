@@ -5,6 +5,7 @@ mod table;
 mod trapframe;
 
 use core::mem::MaybeUninit;
+use core::ptr::NonNull;
 
 use crate::allocator::KernelAllocator;
 use crate::bitmap::Bitmap;
@@ -16,7 +17,6 @@ use crate::riscv::paging::PageTable;
 use crate::riscv::{self, enable_interrupt};
 use crate::spinlock::{SpinLock, SpinLockGuard};
 use crate::trap::usertrapret;
-use crate::vm::uvminit;
 use crate::{context, fs, interrupt};
 
 use crate::{
@@ -159,6 +159,27 @@ extern "C" fn finish_dispatch() {
 
         usertrapret();
     }
+}
+
+// Load the user initcode into address 0 of pagetable,
+// for the very first process.
+// sz must be less than a page.
+unsafe fn uvminit(pagetable: &mut PageTable, src: *const u8, size: usize) {
+    assert!(size < PGSIZE);
+
+    let mem: NonNull<u8> = KernelAllocator::get().allocate().unwrap();
+    core::ptr::write_bytes(mem.as_ptr(), 0, PGSIZE);
+
+    pagetable
+        .map(
+            0,
+            mem.addr().get(),
+            PGSIZE,
+            PTE::W | PTE::R | PTE::X | PTE::U,
+        )
+        .unwrap();
+
+    core::ptr::copy_nonoverlapping(src, mem.as_ptr(), size);
 }
 
 pub unsafe fn setup_init_process() {

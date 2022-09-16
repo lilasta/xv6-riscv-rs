@@ -12,17 +12,11 @@ use crate::{
     pipe::Pipe,
     process,
     riscv::paging::{PGSIZE, PTE},
-    vm::copyinstr,
 };
 
-pub unsafe fn read_string_from_process_memory(addr: usize, buffer: &mut [u8]) -> Result<(), ()> {
+pub unsafe fn read_string_from_process_memory(addr: usize, buffer: &mut [u8]) -> Result<usize, ()> {
     let process = process::context().unwrap();
-    copyinstr(
-        &mut process.pagetable,
-        buffer.as_mut_ptr().addr(),
-        addr,
-        buffer.len(),
-    )
+    process.pagetable.read_cstr(buffer, addr)
 }
 
 fn arg_raw<const N: usize>() -> u64 {

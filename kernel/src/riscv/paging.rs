@@ -388,6 +388,35 @@ impl PageTable {
         }
         Ok(())
     }
+
+    // Copy a null-terminated string
+    pub unsafe fn read_cstr(&mut self, dst: &mut [u8], src_va: usize) -> Result<usize, ()> {
+        let mut read = 0;
+        let mut src_va = src_va;
+        while read < dst.len() {
+            let va0 = pg_rounddown(src_va);
+            let Some(pa0) = self.virtual_to_physical(va0) else {
+                return Err(());
+            };
+
+            let offset = src_va - va0;
+            let n = (PGSIZE - offset).min(dst.len() - read);
+
+            let src = <*const u8>::from_bits(pa0 + offset);
+            for i in 0..n {
+                let c = *src.add(i);
+                dst[read + i] = c;
+
+                if c == 0 {
+                    return Ok(read + i);
+                }
+            }
+
+            read += n;
+            src_va = va0 + PGSIZE;
+        }
+        Err(())
+    }
 }
 
 impl Drop for PageTable {

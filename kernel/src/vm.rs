@@ -1,13 +1,12 @@
 //! the kernel's page table.
 
-use core::{arch::riscv64::sfence_vma, ptr::NonNull};
+use core::arch::riscv64::sfence_vma;
 
 use crate::{
-    allocator::KernelAllocator,
     memory_layout::{symbol_addr, KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, UART0, VIRTIO0},
     process,
     riscv::{
-        paging::{pg_rounddown, PageTable, PGSIZE, PTE},
+        paging::{PageTable, PGSIZE, PTE},
         satp::make_satp,
         write_csr,
     },
@@ -68,27 +67,6 @@ fn make_pagetable_for_kernel() -> PageTable {
     pagetable
 }
 
-// Load the user initcode into address 0 of pagetable,
-// for the very first process.
-// sz must be less than a page.
-pub unsafe fn uvminit(pagetable: &mut PageTable, src: *const u8, size: usize) {
-    assert!(size < PGSIZE);
-
-    let mem: NonNull<u8> = KernelAllocator::get().allocate().unwrap();
-    core::ptr::write_bytes(mem.as_ptr(), 0, PGSIZE);
-
-    pagetable
-        .map(
-            0,
-            mem.addr().get(),
-            PGSIZE,
-            PTE::W | PTE::R | PTE::X | PTE::U,
-        )
-        .unwrap();
-
-    core::ptr::copy_nonoverlapping(src, mem.as_ptr(), size);
-}
-
 static mut KERNEL_PAGETABLE: Option<PageTable> = None;
 
 pub unsafe fn initialize() {
@@ -98,53 +76,7 @@ pub unsafe fn initialize() {
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
 pub unsafe fn initialize_for_core() {
+    sfence_vma(0, 0);
     write_csr!(satp, make_satp(KERNEL_PAGETABLE.as_ref().unwrap().as_u64()));
     sfence_vma(0, 0);
-}
-
-// Copy a null-terminated string from user to kernel.
-// Copy bytes to dst from virtual address srcva in a given page table,
-// until a '\0', or max.
-// Return 0 on success, -1 on error.
-pub unsafe fn copyinstr(
-    pagetable: &mut PageTable,
-    mut dst: usize,
-    mut src_va: usize,
-    mut len: usize,
-) -> Result<(), ()> {
-    unsafe fn strcpy(src: *const u8, dst: *mut u8, len: usize) -> bool {
-        for i in 0..len {
-            *dst.add(i) = *src.add(i);
-
-            if *src.add(i) == ('\0' as u8) {
-                return true;
-            }
-        }
-        false
-    }
-
-    while len > 0 {
-        let va0 = pg_rounddown(src_va);
-        let Some(pa0) = pagetable.virtual_to_physical(va0) else {
-                return Err(());
-            };
-
-        let offset = src_va - va0;
-        let n = (PGSIZE - offset).min(len);
-
-        let got_null = strcpy(
-            <*const u8>::from_bits(pa0 + offset),
-            <*mut u8>::from_bits(dst),
-            n,
-        );
-
-        if got_null {
-            return Ok(());
-        }
-
-        len -= n;
-        dst += n;
-        src_va = va0 + PGSIZE;
-    }
-    Err(())
 }
