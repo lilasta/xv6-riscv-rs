@@ -239,31 +239,10 @@ pub unsafe fn fork() -> Option<usize> {
     let p = current()?;
     let process = p.get_mut();
     let mut process_new = table::get().allocate_process()?;
-    let mut context_new = ProcessContext::allocate(finish_dispatch).ok()?;
-
-    let size = process.context().unwrap().sz;
-    if let Err(_) = process
-        .context()
-        .unwrap()
-        .pagetable
-        .copy(&mut context_new.pagetable, size)
-    {
-        return None;
-    }
-
-    context_new.sz = process.context().unwrap().sz;
-    *context_new.trapframe = (*process.context().unwrap().trapframe).clone();
-    context_new.trapframe.a0 = 0;
-
-    for (i, opened) in process.context().unwrap().ofile.iter().enumerate() {
-        context_new.ofile[i] = opened.clone();
-    }
-    context_new.cwd = Some(process.context().unwrap().cwd.as_ref().cloned().unwrap());
+    let context_new = context().unwrap().try_clone(finish_dispatch).ok()?;
 
     process_new.name = process.name;
-
     let pid = process_new.pid;
-
     let parent_ptr = &mut process_new.parent as *mut *mut _ as *mut *mut SpinLock<Process>;
     SpinLock::unlock_temporarily(&mut process_new, || {
         let _guard = (*table::wait_lock()).lock();

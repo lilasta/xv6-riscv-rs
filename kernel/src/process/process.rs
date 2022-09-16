@@ -198,10 +198,9 @@ pub struct ProcessContext {
 
 impl ProcessContext {
     pub fn allocate(jump: extern "C" fn()) -> Result<Self, ()> {
+        let kstack = process::allocate_kstack().ok_or(())?;
         let trapframe = Box::try_new(TrapFrame::zeroed()).map_err(|_| ())?;
         let pagetable = process::allocate_pagetable(core::ptr::addr_of!(*trapframe).addr())?;
-
-        let kstack = process::allocate_kstack().ok_or(())?;
 
         let mut context = CPUContext::zeroed();
         context.ra = jump as u64;
@@ -215,6 +214,31 @@ impl ProcessContext {
             context,
             ofile: [const { None }; _],
             cwd: None,
+        })
+    }
+
+    pub fn try_clone(&mut self, jump: extern "C" fn()) -> Result<Self, ()> {
+        let kstack = process::allocate_kstack().ok_or(())?;
+        let mut trapframe = Box::try_new((*self.trapframe).clone()).map_err(|_| ())?;
+        let mut pagetable = process::allocate_pagetable(core::ptr::addr_of!(*trapframe).addr())?;
+        let ofile = self.ofile.clone();
+        let cwd = self.cwd.clone();
+        trapframe.a0 = 0;
+
+        self.pagetable.copy(&mut pagetable, self.sz)?;
+
+        let mut context = CPUContext::zeroed();
+        context.ra = jump as u64;
+        context.sp = (kstack + PGSIZE) as u64;
+
+        Ok(Self {
+            kstack,
+            sz: self.sz,
+            pagetable,
+            trapframe,
+            context,
+            ofile,
+            cwd,
         })
     }
 }
