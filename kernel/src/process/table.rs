@@ -4,7 +4,6 @@ use arrayvec::ArrayVec;
 
 use crate::{
     config::NPROC,
-    process,
     spinlock::{SpinLock, SpinLockGuard},
 };
 
@@ -50,9 +49,9 @@ impl ProcessTable {
         None
     }
 
-    pub fn wakeup(&self, token: usize) {
+    pub fn wakeup(&self, token: usize, current: Option<&SpinLock<Process>>) {
         for process in self.procs.iter() {
-            if let Some(current) = process::current() {
+            if let Some(current) = current {
                 if core::ptr::eq(process, current) {
                     continue;
                 }

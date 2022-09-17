@@ -1,4 +1,3 @@
-mod mycpu;
 mod process;
 mod scheduler;
 mod table;
@@ -24,11 +23,49 @@ use crate::{
     trampoline::trampoline,
 };
 
-use self::mycpu::CPU;
 use self::process::{Process, ProcessState};
 
-fn current() -> Option<&'static SpinLock<Process>> {
-    modify_cpu(|cpu| cpu.assigned_process())
+pub enum Assigned<'a> {
+    None,
+    Switching(SpinLockGuard<'a, Process>),
+    Assigned(&'a SpinLock<Process>),
+}
+
+impl<'a> Assigned<'a> {
+    pub const fn get(&self) -> Option<&'a SpinLock<Process>> {
+        match self {
+            Self::Assigned(process) => Some(process),
+            _ => None,
+        }
+    }
+
+    pub fn switch(&mut self, process: SpinLockGuard<'a, Process>) {
+        *self = Self::Switching(process);
+    }
+
+    pub fn assign(&mut self) {
+        let this = core::mem::replace(self, Self::None);
+        match this {
+            Self::Switching(process) => {
+                *self = Self::Assigned(SpinLock::unlock(process));
+            }
+            _ => panic!(),
+        }
+    }
+
+    pub fn release(&mut self) {
+        *self = Self::None;
+    }
+}
+
+static mut ASSIGNED: [Assigned<'static>; NCPU] = [const { Assigned::None }; _];
+
+fn map_assigned<R>(f: impl FnOnce(&Assigned<'static>) -> R) -> R {
+    interrupt::off(|| unsafe { f(&ASSIGNED[cpu::id()]) })
+}
+
+fn map_assigned_mut<R>(f: impl FnOnce(&mut Assigned<'static>) -> R) -> R {
+    interrupt::off(|| unsafe { f(&mut ASSIGNED[cpu::id()]) })
 }
 
 pub fn read_memory<T>(addr: usize) -> Option<T> {
@@ -55,7 +92,11 @@ pub fn write_memory<T: 'static>(addr: usize, value: T) -> bool {
 // depending on usr_src.
 // Returns 0 on success, -1 on error.
 pub unsafe fn copyin_either<T: ?Sized>(dst: &mut T, user_src: bool, src: usize) -> bool {
-    let proc_context = current().unwrap().get_mut().context().unwrap();
+    let proc_context = map_assigned(Assigned::get)
+        .unwrap()
+        .get_mut()
+        .context()
+        .unwrap();
     if user_src {
         proc_context.pagetable.read(dst, src).is_ok()
     } else {
@@ -72,7 +113,12 @@ pub unsafe fn copyin_either<T: ?Sized>(dst: &mut T, user_src: bool, src: usize) 
 // depending on usr_dst.
 // Returns 0 on success, -1 on error.
 pub unsafe fn copyout_either<T: ?Sized>(user_dst: bool, dst: usize, src: &T) -> bool {
-    let proc_context = current().unwrap().get_mut().context().unwrap();
+    let proc_context = map_assigned(Assigned::get)
+        .unwrap()
+        .get_mut()
+        .context()
+        .unwrap();
+
     if user_dst {
         proc_context.pagetable.write(dst, src).is_ok()
     } else {
@@ -86,38 +132,28 @@ pub unsafe fn copyout_either<T: ?Sized>(user_dst: bool, dst: usize, src: &T) -> 
 }
 
 pub fn id() -> Option<usize> {
-    Some(unsafe { current()?.get().pid })
+    Some(unsafe { map_assigned(Assigned::get)?.get().pid })
 }
 
 pub fn context() -> Option<&'static mut ProcessContext> {
-    unsafe { current()?.get_mut().context() }
+    unsafe { map_assigned(Assigned::get)?.get_mut().context() }
 }
 
 pub fn is_killed() -> Option<bool> {
-    Some(unsafe { current()?.get().killed })
+    Some(unsafe { map_assigned(Assigned::get)?.get().killed })
 }
 
 pub fn set_killed() -> Option<()> {
-    unsafe { current()?.get_mut().killed = true };
+    unsafe { map_assigned(Assigned::get)?.get_mut().killed = true };
     Some(())
 }
 
 pub fn is_running() -> bool {
-    let Some(process) = current() else {
+    let Some(process) = map_assigned(Assigned::get) else {
         return false;
     };
 
     unsafe { process.get().is_running() }
-}
-
-fn modify_cpu<R>(f: impl FnOnce(&mut CPU<'static, Process>) -> R) -> R {
-    interrupt::off(|| unsafe {
-        assert!(!interrupt::is_enabled());
-        assert!(cpu::id() < NCPU);
-
-        static mut CPUS: [CPU<Process>; NCPU] = [const { CPU::Ready }; _];
-        f(&mut CPUS[cpu::id()])
-    })
 }
 
 static KSTACK_USED: SpinLock<Bitmap<NPROC>> = SpinLock::new(Bitmap::new());
@@ -143,7 +179,7 @@ extern "C" fn finish_dispatch() {
     unsafe {
         static mut FIRST: bool = true;
 
-        modify_cpu(|cpu| cpu.finish_dispatch().unwrap());
+        map_assigned_mut(Assigned::assign);
 
         if FIRST {
             FIRST = false;
@@ -237,7 +273,7 @@ pub fn sleep<T>(token: usize, guard: &mut SpinLockGuard<T>) {
     // (wakeup locks p->lock),
     // so it's okay to release lk.
 
-    let mut process = modify_cpu(|cpu| cpu.pause().unwrap());
+    let mut process = map_assigned(Assigned::get).unwrap().lock();
     SpinLock::unlock_temporarily(guard, || {
         // Go to sleep.
         process.state.sleep(token).unwrap();
@@ -246,11 +282,11 @@ pub fn sleep<T>(token: usize, guard: &mut SpinLockGuard<T>) {
 }
 
 pub fn wakeup(token: usize) {
-    table::get().wakeup(token);
+    table::get().wakeup(token, map_assigned(Assigned::get));
 }
 
 pub unsafe fn fork() -> Option<usize> {
-    let p = current()?;
+    let p = map_assigned(Assigned::get)?;
     let process = p.get_mut();
     let mut process_new = table::get().allocate_process()?;
     let context_new = context().unwrap().try_clone(finish_dispatch).ok()?;
@@ -270,7 +306,7 @@ pub unsafe fn fork() -> Option<usize> {
 }
 
 pub unsafe fn exit(status: i32) {
-    let pl = current().unwrap();
+    let pl = map_assigned(Assigned::get).unwrap();
     let process = pl.get_mut();
     assert!(process.pid != 1);
 
@@ -293,7 +329,7 @@ pub unsafe fn exit(status: i32) {
 
     wakeup(process.parent as usize);
 
-    let mut process = modify_cpu(|cpu| cpu.pause().unwrap());
+    let mut process = map_assigned(Assigned::get).unwrap().lock();
     process.state.die(status).unwrap();
     drop(_guard);
 
@@ -311,11 +347,11 @@ pub fn scheduler() {
                 process.state.run().unwrap();
 
                 let process_context = &process.context().unwrap().context as *const _;
-                modify_cpu(|cpu| cpu.start_dispatch(process).unwrap());
+                map_assigned_mut(|slot| slot.switch(process));
 
                 unsafe { cpu::dispatch(&*process_context) };
 
-                modify_cpu(|cpu| cpu.finish_preemption().unwrap());
+                map_assigned_mut(Assigned::release);
             }
         }
     }
@@ -327,23 +363,23 @@ fn return_to_scheduler(mut process: SpinLockGuard<'static, Process>) {
     assert!(!process.state.is_running());
 
     let context = &mut process.context().unwrap().context as *mut _;
-    modify_cpu(|cpu| cpu.start_preemption(process).unwrap());
+    map_assigned_mut(|slot| slot.switch(process));
 
     let intena = interrupt::is_enabled_before();
     unsafe { cpu::preemption(&mut *context) };
     interrupt::set_enabled_before(intena);
 
-    modify_cpu(|cpu| cpu.finish_dispatch().unwrap());
+    map_assigned_mut(Assigned::assign);
 }
 
 pub fn pause() {
-    let mut process = modify_cpu(|cpu| cpu.pause().unwrap());
+    let mut process = map_assigned(|slot| slot.get()).unwrap().lock();
     process.state.pause().unwrap();
     return_to_scheduler(process);
 }
 
 pub unsafe fn wait(addr: Option<usize>) -> Option<usize> {
-    let current = current()?;
+    let current = map_assigned(|slot| slot.get())?;
     let mut guard = (*table::wait_lock()).lock();
     loop {
         let mut havekids = false;
