@@ -54,6 +54,7 @@ mod clock;
 mod config;
 mod console;
 mod context;
+mod cpu;
 mod elf;
 mod entry;
 mod exec;
@@ -104,7 +105,7 @@ fn alloc_error(layout: core::alloc::Layout) -> ! {
 static STARTED: AtomicBool = AtomicBool::new(false);
 
 pub unsafe extern "C" fn main() {
-    if process::cpuid() == 0 {
+    if cpu::id() == 0 {
         console::initialize();
         println!("");
         println!("xv6 kernel is booting");
@@ -120,7 +121,7 @@ pub unsafe extern "C" fn main() {
     } else {
         while !STARTED.load(Ordering::SeqCst) {}
 
-        println!("hart {} starting", process::cpuid());
+        println!("hart {} starting", cpu::id());
         vm::initialize_for_core(); // turn on paging
         trap::initialize(); // install kernel trap vector
         plic::initialize_for_core(); // ask PLIC for device interrupts

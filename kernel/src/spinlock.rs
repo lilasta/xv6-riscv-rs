@@ -4,7 +4,7 @@ use core::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering::*},
 };
 
-use crate::{interrupt, process};
+use crate::{cpu, interrupt};
 
 #[derive(Debug)]
 pub struct SpinLock<T> {
@@ -30,7 +30,7 @@ impl<T> SpinLock<T> {
         assert!(!interrupt::is_enabled());
 
         // TODO: Orderingは正しいのか?
-        self.is_locked() && self.cpuid.load(Acquire) == process::cpuid()
+        self.is_locked() && self.cpuid.load(Acquire) == cpu::id()
     }
 
     pub fn lock(&self) -> SpinLockGuard<T> {
@@ -58,7 +58,7 @@ impl<T> SpinLock<T> {
         core::sync::atomic::fence(Acquire);
 
         // Record info about lock acquisition for holding() and debugging.
-        self.cpuid.store(process::cpuid(), Release);
+        self.cpuid.store(cpu::id(), Release);
 
         SpinLockGuard::new(self)
     }

@@ -1,5 +1,5 @@
 use crate::{
-    clock,
+    clock, cpu,
     memory_layout::{symbol_addr, TRAMPOLINE, UART0_IRQ, VIRTIO0_IRQ},
     plic::{plic_claim, plic_complete},
     println, process,
@@ -181,7 +181,7 @@ fn device_interrupt_handler() -> usize {
     }
 
     if cause == 0x8000000000000001 {
-        if process::cpuid() == 0 {
+        if cpu::id() == 0 {
             clock::tick();
         }
 

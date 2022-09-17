@@ -1,19 +1,19 @@
 use crate::spinlock::{SpinLock, SpinLockGuard};
 
 #[derive(Debug)]
-pub enum CPU<'a, C, P> {
+pub enum CPU<'a, P> {
     Invalid,
     Ready,
-    Dispatching(C, SpinLockGuard<'a, P>),
-    Running(C, &'a SpinLock<P>),
-    Pausing(C),
+    Dispatching(SpinLockGuard<'a, P>),
+    Running(&'a SpinLock<P>),
+    Pausing,
     Preempting(SpinLockGuard<'a, P>),
 }
 
-impl<'a, C, P> CPU<'a, C, P> {
+impl<'a, P> CPU<'a, P> {
     pub const fn assigned_process(&self) -> Option<&'a SpinLock<P>> {
         match self {
-            Self::Running(_, process) => Some(process),
+            Self::Running(process) => Some(process),
             _ => None,
         }
     }
@@ -30,27 +30,24 @@ impl<'a, C, P> CPU<'a, C, P> {
 
     pub fn start_dispatch(
         &mut self,
-        context: C,
         process: SpinLockGuard<'a, P>,
     ) -> Result<(), SpinLockGuard<'a, P>> {
         self.transition(|this| match this {
-            Self::Ready => (Self::Dispatching(context, process), Ok(())),
+            Self::Ready => (Self::Dispatching(process), Ok(())),
             other => (other, Err(process)),
         })
     }
 
     pub fn finish_dispatch(&mut self) -> Result<(), ()> {
         self.transition(|this| match this {
-            Self::Dispatching(context, process) => {
-                (Self::Running(context, SpinLock::unlock(process)), Ok(()))
-            }
+            Self::Dispatching(process) => (Self::Running(SpinLock::unlock(process)), Ok(())),
             other => (other, Err(())),
         })
     }
 
     pub fn pause(&mut self) -> Result<SpinLockGuard<'a, P>, ()> {
         self.transition(|this| match this {
-            Self::Running(context, process) => (Self::Pausing(context), Ok(process.lock())),
+            Self::Running(process) => (Self::Pausing, Ok(process.lock())),
             other => (other, Err(())),
         })
     }
@@ -58,9 +55,9 @@ impl<'a, C, P> CPU<'a, C, P> {
     pub fn start_preemption(
         &mut self,
         process: SpinLockGuard<'a, P>,
-    ) -> Result<C, SpinLockGuard<'a, P>> {
+    ) -> Result<(), SpinLockGuard<'a, P>> {
         self.transition(|this| match this {
-            Self::Pausing(context) => (Self::Preempting(process), Ok(context)),
+            Self::Pausing => (Self::Preempting(process), Ok(())),
             other => (other, Err(process)),
         })
     }

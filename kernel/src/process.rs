@@ -1,4 +1,4 @@
-mod cpu;
+mod mycpu;
 mod process;
 mod scheduler;
 mod table;
@@ -13,24 +13,23 @@ use crate::config::{NCPU, NPROC, ROOTDEV};
 use crate::interrupt::InterruptGuard;
 use crate::memory_layout::{kstack, kstack_index};
 use crate::process::process::ProcessContext;
+use crate::riscv::enable_interrupt;
 use crate::riscv::paging::PageTable;
-use crate::riscv::{self, enable_interrupt};
 use crate::spinlock::{SpinLock, SpinLockGuard};
 use crate::trap::usertrapret;
-use crate::{context, fs, interrupt};
+use crate::{cpu, fs, interrupt};
 
 use crate::{
-    context::Context as CPUContext,
     memory_layout::{TRAMPOLINE, TRAPFRAME},
     riscv::paging::{PGSIZE, PTE},
     trampoline::trampoline,
 };
 
-use self::cpu::CPU;
+use self::mycpu::CPU;
 use self::process::{Process, ProcessState};
 
 fn current() -> Option<&'static SpinLock<Process>> {
-    cpu().assigned_process()
+    mycpu().assigned_process()
 }
 
 pub fn read_memory<T>(addr: usize) -> Option<T> {
@@ -112,18 +111,13 @@ pub fn is_running() -> bool {
     unsafe { process.get().is_running() }
 }
 
-pub fn cpuid() -> usize {
-    assert!(!interrupt::is_enabled());
-    unsafe { riscv::read_reg!(tp) as usize }
-}
-
-fn cpu() -> InterruptGuard<&'static mut CPU<'static, *mut CPUContext, Process>> {
+fn mycpu() -> InterruptGuard<&'static mut CPU<'static, Process>> {
     InterruptGuard::with(|| unsafe {
         assert!(!interrupt::is_enabled());
-        assert!(cpuid() < NCPU);
+        assert!(cpu::id() < NCPU);
 
-        static mut CPUS: [CPU<*mut CPUContext, Process>; NCPU] = [const { CPU::Ready }; _];
-        &mut CPUS[cpuid()]
+        static mut CPUS: [CPU<Process>; NCPU] = [const { CPU::Ready }; _];
+        &mut CPUS[cpu::id()]
     })
 }
 
@@ -150,7 +144,7 @@ extern "C" fn finish_dispatch() {
     unsafe {
         static mut FIRST: bool = true;
 
-        cpu().finish_dispatch().unwrap();
+        mycpu().finish_dispatch().unwrap();
 
         if FIRST {
             FIRST = false;
@@ -244,7 +238,7 @@ pub fn sleep<T>(token: usize, guard: &mut SpinLockGuard<T>) {
     // (wakeup locks p->lock),
     // so it's okay to release lk.
 
-    let mut process = cpu().pause().unwrap();
+    let mut process = mycpu().pause().unwrap();
     SpinLock::unlock_temporarily(guard, || {
         // Go to sleep.
         process.state.sleep(token).unwrap();
@@ -300,7 +294,7 @@ pub unsafe fn exit(status: i32) {
 
     wakeup(process.parent as usize);
 
-    let mut process = cpu().pause().unwrap();
+    let mut process = mycpu().pause().unwrap();
     process.state.die(status).unwrap();
     drop(_guard);
 
@@ -317,13 +311,12 @@ pub fn scheduler() {
             if process.state.is_runnable() {
                 process.state.run().unwrap();
 
-                let mut cpu_context = CPUContext::zeroed();
                 let process_context = &process.context().unwrap().context as *const _;
-                cpu().start_dispatch(&mut cpu_context, process).unwrap();
+                mycpu().start_dispatch(process).unwrap();
 
-                unsafe { context::switch(&mut cpu_context, process_context) };
+                unsafe { cpu::dispatch(&*process_context) };
 
-                cpu().finish_preemption().unwrap();
+                mycpu().finish_preemption().unwrap();
             }
         }
     }
@@ -334,18 +327,18 @@ fn return_to_scheduler(mut process: SpinLockGuard<'static, Process>) {
     assert!(interrupt::get_depth() == 1);
     assert!(!process.state.is_running());
 
-    let process_context = &mut process.context().unwrap().context as *mut _;
-    let cpu_context = cpu().start_preemption(process).unwrap();
+    let context = &mut process.context().unwrap().context as *mut _;
+    mycpu().start_preemption(process).unwrap();
 
     let intena = interrupt::is_enabled_before();
-    unsafe { context::switch(process_context, &*cpu_context) };
+    unsafe { cpu::preemption(&mut *context) };
     interrupt::set_enabled_before(intena);
 
-    cpu().finish_dispatch().unwrap();
+    mycpu().finish_dispatch().unwrap();
 }
 
 pub fn pause() {
-    let mut process = cpu().pause().unwrap();
+    let mut process = mycpu().pause().unwrap();
     process.state.pause().unwrap();
     return_to_scheduler(process);
 }
