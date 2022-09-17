@@ -131,29 +131,34 @@ pub unsafe fn copyout_either<T: ?Sized>(user_dst: bool, dst: usize, src: &T) -> 
     }
 }
 
-pub fn id() -> Option<usize> {
-    Some(unsafe { map_assigned(Assigned::get)?.get().pid })
-}
-
 pub fn context() -> Option<&'static mut ProcessContext> {
     unsafe { map_assigned(Assigned::get)?.get_mut().context() }
 }
 
+pub fn id() -> Option<usize> {
+    let process = map_assigned(Assigned::get)?;
+    let process = process.lock();
+    Some(process.pid)
+}
+
 pub fn is_killed() -> Option<bool> {
-    Some(unsafe { map_assigned(Assigned::get)?.get().killed })
+    let process = map_assigned(Assigned::get)?;
+    let process = process.lock();
+    Some(process.killed)
 }
 
 pub fn set_killed() -> Option<()> {
-    unsafe { map_assigned(Assigned::get)?.get_mut().killed = true };
+    let process = map_assigned(Assigned::get)?;
+    let mut process = process.lock();
+    process.killed = true;
     Some(())
 }
 
 pub fn is_running() -> bool {
-    let Some(process) = map_assigned(Assigned::get) else {
-        return false;
-    };
-
-    unsafe { process.get().is_running() }
+    match map_assigned(Assigned::get) {
+        Some(process) => process.lock().is_running(),
+        None => false,
+    }
 }
 
 static KSTACK_USED: SpinLock<Bitmap<NPROC>> = SpinLock::new(Bitmap::new());
@@ -373,13 +378,13 @@ fn return_to_scheduler(mut process: SpinLockGuard<'static, Process>) {
 }
 
 pub fn pause() {
-    let mut process = map_assigned(|slot| slot.get()).unwrap().lock();
+    let mut process = map_assigned(Assigned::get).unwrap().lock();
     process.state.pause().unwrap();
     return_to_scheduler(process);
 }
 
 pub unsafe fn wait(addr: Option<usize>) -> Option<usize> {
-    let current = map_assigned(|slot| slot.get())?;
+    let current = map_assigned(Assigned::get)?;
     let mut guard = (*table::wait_lock()).lock();
     loop {
         let mut havekids = false;
