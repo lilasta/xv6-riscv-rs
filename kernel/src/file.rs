@@ -60,7 +60,7 @@ impl File {
     pub fn stat(&self) -> Result<Stat, ()> {
         match self {
             Self::Pipe { .. } => Err(()),
-            Self::Inode { inode, .. } | Self::Device { inode, .. } => Ok(inode.lock_ro().stat()),
+            Self::Inode { inode, .. } | Self::Device { inode, .. } => Ok(inode.lock().stat()),
         }
     }
 
@@ -77,7 +77,7 @@ impl File {
                     return Err(());
                 }
 
-                let mut inode = inode.lock_ro();
+                let mut inode = inode.lock();
                 let read = inode.copy_to::<u8>(true, addr, offset.load(Acquire), n)?;
                 offset.fetch_add(read, Release);
                 Ok(read)
@@ -125,8 +125,9 @@ impl File {
                     let n = (n - i).min(max);
 
                     let log = log::start();
-                    let mut inode = inode.lock_rw(&log);
-                    let result = inode.copy_from::<u8>(true, addr + i, offset.load(Acquire), n);
+                    let mut inode = inode.lock();
+                    let result =
+                        inode.copy_from::<u8>(true, addr + i, offset.load(Acquire), n, &log);
                     let wrote = match result {
                         Ok(wrote) => wrote,
                         Err(_) => 0,

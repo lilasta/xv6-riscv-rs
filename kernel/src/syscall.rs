@@ -216,7 +216,7 @@ fn sys_open() -> Result<u64, ()> {
         fs::create(path, InodeKind::File, 0, 0, &log)?
     } else {
         let inode_ref = fs::search_inode(path).ok_or(())?;
-        let inode = inode_ref.lock_rw(&log);
+        let inode = inode_ref.lock();
         (inode_ref, inode)
     };
 
@@ -248,7 +248,7 @@ fn sys_open() -> Result<u64, ()> {
     };
 
     if mode & O_TRUNC != 0 && inode.is_file() {
-        inode.truncate();
+        inode.truncate(&log);
     }
 
     drop(inode);
@@ -277,7 +277,7 @@ fn sys_chdir() -> Result<u64, ()> {
 
     let log = log::start();
     let inode_ref = fs::search_inode(path).ok_or(())?;
-    let inode = inode_ref.lock_ro();
+    let inode = inode_ref.lock();
 
     if !inode.is_directory() {
         return Err(());

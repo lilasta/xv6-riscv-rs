@@ -1,6 +1,5 @@
 use core::{
     mem::MaybeUninit,
-    ops::{Deref, DerefMut},
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -103,8 +102,8 @@ pub struct InodeReference<'i> {
 }
 
 impl<'i> InodeReference<'i> {
-    pub fn lock_ro(&self) -> InodeReadOnlyGuard<'i> {
-        let mut guard = InodeReadOnlyGuard {
+    pub fn lock(&self) -> InodeGuard<'i> {
+        let mut guard = InodeGuard {
             device: self.device,
             inode_number: self.inode_number,
             cache_index: self.cache_index,
@@ -120,13 +119,6 @@ impl<'i> InodeReference<'i> {
         }
 
         guard
-    }
-
-    pub fn lock_rw<'r>(&self, log: &'r LogGuard<'r>) -> InodeReadWriteGuard<'r, 'i> {
-        InodeReadWriteGuard {
-            guard: self.lock_ro(),
-            log,
-        }
     }
 
     pub fn drop_with_log(self, log: &LogGuard) {
@@ -149,173 +141,19 @@ impl<'a> Drop for InodeReference<'a> {
     }
 }
 
-impl<'i> Drop for InodeReadOnlyGuard<'i> {
-    fn drop(&mut self) {}
-}
-
-impl<'l, 'i> Drop for InodeReadWriteGuard<'l, 'i> {
+impl<'i> Drop for InodeGuard<'i> {
     fn drop(&mut self) {}
 }
 
 #[derive(Debug)]
-pub struct InodeReadOnlyGuard<'i> {
+pub struct InodeGuard<'i> {
     device: usize,
     inode_number: usize,
     cache_index: usize,
     inode: SleepLockGuard<'i, Inode>,
 }
 
-#[derive(Debug)]
-pub struct InodeReadWriteGuard<'l, 'i> {
-    guard: InodeReadOnlyGuard<'i>,
-    log: &'l LogGuard<'l>,
-}
-
-impl<'l, 'i> InodeReadWriteGuard<'l, 'i> {
-    pub fn copy_from<T>(
-        &mut self,
-        is_src_user: bool,
-        src: usize,
-        offset: usize,
-        count: usize,
-    ) -> Result<usize, ()> {
-        let type_size = core::mem::size_of::<T>();
-        let write_size = type_size * count;
-
-        if offset > self.inode.size as usize || offset.checked_add(write_size).is_none() {
-            return Err(());
-        }
-
-        if offset + write_size > MAXFILE * BSIZE {
-            return Err(());
-        }
-
-        let mut wrote = 0;
-        while wrote < write_size {
-            let offset = offset + wrote;
-
-            // TODO: REMOVE THIS HACK:
-            let log = unsafe { <*const _>::as_ref(self.log).unwrap() };
-            let block = self.offset_to_block(offset, Some(log)).ok_or(())?;
-
-            let mut buf = buffer::get(self.device_number(), block).unwrap();
-            let offset_in_block = offset % buf.size();
-            let len = (write_size - wrote).min(BSIZE - offset_in_block);
-            let is_copied = unsafe {
-                let dst = &mut buf.read_array::<u8>()[offset_in_block..][..len];
-                copyin_either(dst, is_src_user, src + wrote)
-            };
-            if is_copied {
-                self.log.write(&buf);
-            } else {
-                break;
-            }
-
-            wrote += len;
-        }
-
-        self.inode.size = self.inode.size.max((offset + wrote) as u32);
-        self.update();
-
-        Ok(wrote)
-    }
-
-    pub fn write<T>(&mut self, value: T, offset: usize) -> Result<(), ()> {
-        let wrote = self.copy_from::<T>(false, <*const T>::addr(&value), offset, 1)?;
-        if wrote == core::mem::size_of::<T>() {
-            Ok(())
-        } else {
-            Err(())
-        }
-    }
-
-    pub fn update(&mut self) {
-        let inode_start = unsafe { SUPERBLOCK.inodestart as usize };
-
-        let block_index = inode_start + self.inode_number / INODES_PER_BLOCK;
-        let in_block_index = self.inode_number % INODES_PER_BLOCK;
-
-        let mut block = buffer::get(self.device, block_index).unwrap();
-        let inodes = unsafe { block.read_array::<Inode>() };
-        inodes[in_block_index] = self.inode.clone();
-        self.log.write(&block);
-    }
-
-    pub fn truncate(&mut self) {
-        for addr in self.inode.addrs {
-            if addr != 0 {
-                unsafe { deallocate_block(self.device_number(), addr as usize, self.log) };
-            }
-        }
-        self.inode.addrs.fill(0);
-
-        if self.inode.chain != 0 {
-            let mut buf = buffer::get(self.device_number(), self.inode.chain as usize).unwrap();
-            let addrs = unsafe { buf.read::<[u32; NINDIRECT]>() };
-            for addr in addrs {
-                if *addr != 0 {
-                    unsafe {
-                        deallocate_block(self.device_number(), *addr as usize, self.log);
-                    }
-                }
-            }
-            unsafe { deallocate_block(self.device_number(), self.inode.chain as usize, self.log) };
-            self.inode.chain = 0;
-        }
-
-        self.inode.size = 0;
-        self.update();
-    }
-
-    pub fn link(&mut self, name: &str, inode_number: usize) -> Result<(), ()> {
-        if !self.is_directory() {
-            return Err(());
-        }
-
-        if self.lookup(name).is_some() {
-            return Err(());
-        }
-
-        let new_entry = {
-            let mut entry = DirectoryEntry {
-                inode_number: inode_number as u16,
-                name: [0; _],
-            };
-
-            let len = name.len().min(DirectoryEntry::NAME_LENGTH);
-            entry.name[..len].copy_from_slice(&name.as_bytes()[..len]);
-            entry
-        };
-
-        let entry_size = core::mem::size_of::<DirectoryEntry>();
-        for offset in (0..self.size()).step_by(entry_size) {
-            let entry = self.read::<DirectoryEntry>(offset).unwrap();
-            if entry.inode_number == 0 {
-                self.write(new_entry, offset).unwrap();
-                return Ok(());
-            }
-        }
-
-        let insert_offset = self.size() - self.size() % entry_size;
-        self.write(new_entry, insert_offset).or(Err(()))
-    }
-}
-
-impl<'l, 'i> Deref for InodeReadWriteGuard<'l, 'i> {
-    type Target = InodeReadOnlyGuard<'i>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.guard
-    }
-}
-
-impl<'l, 'i> DerefMut for InodeReadWriteGuard<'l, 'i> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.guard
-    }
-}
-
-impl<'i> InodeReadOnlyGuard<'i> {
+impl<'i> InodeGuard<'i> {
     pub fn is_directory(&self) -> bool {
         matches!(self.inode.kind, InodeKind::Directory)
     }
@@ -517,6 +355,134 @@ impl<'i> InodeReadOnlyGuard<'i> {
         }
         Some(true)
     }
+
+    pub fn copy_from<T>(
+        &mut self,
+        is_src_user: bool,
+        src: usize,
+        offset: usize,
+        count: usize,
+        log: &LogGuard,
+    ) -> Result<usize, ()> {
+        let type_size = core::mem::size_of::<T>();
+        let write_size = type_size * count;
+
+        if offset > self.inode.size as usize || offset.checked_add(write_size).is_none() {
+            return Err(());
+        }
+
+        if offset + write_size > MAXFILE * BSIZE {
+            return Err(());
+        }
+
+        let mut wrote = 0;
+        while wrote < write_size {
+            let offset = offset + wrote;
+
+            // TODO: REMOVE THIS HACK:
+            let block = self.offset_to_block(offset, Some(log)).ok_or(())?;
+
+            let mut buf = buffer::get(self.device_number(), block).unwrap();
+            let offset_in_block = offset % buf.size();
+            let len = (write_size - wrote).min(BSIZE - offset_in_block);
+            let is_copied = unsafe {
+                let dst = &mut buf.read_array::<u8>()[offset_in_block..][..len];
+                copyin_either(dst, is_src_user, src + wrote)
+            };
+            if is_copied {
+                log.write(&buf);
+            } else {
+                break;
+            }
+
+            wrote += len;
+        }
+
+        self.inode.size = self.inode.size.max((offset + wrote) as u32);
+        self.update(log);
+
+        Ok(wrote)
+    }
+
+    pub fn write<T>(&mut self, value: T, offset: usize, log: &LogGuard) -> Result<(), ()> {
+        let wrote = self.copy_from::<T>(false, <*const T>::addr(&value), offset, 1, log)?;
+        if wrote == core::mem::size_of::<T>() {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn update(&mut self, log: &LogGuard) {
+        let inode_start = unsafe { SUPERBLOCK.inodestart as usize };
+
+        let block_index = inode_start + self.inode_number / INODES_PER_BLOCK;
+        let in_block_index = self.inode_number % INODES_PER_BLOCK;
+
+        let mut block = buffer::get(self.device, block_index).unwrap();
+        let inodes = unsafe { block.read_array::<Inode>() };
+        inodes[in_block_index] = self.inode.clone();
+        log.write(&block);
+    }
+
+    pub fn truncate(&mut self, log: &LogGuard) {
+        for addr in self.inode.addrs {
+            if addr != 0 {
+                unsafe { deallocate_block(self.device_number(), addr as usize, log) };
+            }
+        }
+        self.inode.addrs.fill(0);
+
+        if self.inode.chain != 0 {
+            let mut buf = buffer::get(self.device_number(), self.inode.chain as usize).unwrap();
+            let addrs = unsafe { buf.read::<[u32; NINDIRECT]>() };
+            for addr in addrs {
+                if *addr != 0 {
+                    unsafe {
+                        deallocate_block(self.device_number(), *addr as usize, log);
+                    }
+                }
+            }
+            unsafe { deallocate_block(self.device_number(), self.inode.chain as usize, log) };
+            self.inode.chain = 0;
+        }
+
+        self.inode.size = 0;
+        self.update(log);
+    }
+
+    pub fn link(&mut self, name: &str, inode_number: usize, log: &LogGuard) -> Result<(), ()> {
+        if !self.is_directory() {
+            return Err(());
+        }
+
+        if self.lookup(name).is_some() {
+            return Err(());
+        }
+
+        let new_entry = {
+            let mut entry = DirectoryEntry {
+                inode_number: inode_number as u16,
+                name: [0; _],
+            };
+
+            let len = name.len().min(DirectoryEntry::NAME_LENGTH);
+            entry.name[..len].copy_from_slice(&name.as_bytes()[..len]);
+            entry
+        };
+
+        let entry_size = core::mem::size_of::<DirectoryEntry>();
+        for offset in (0..self.size()).step_by(entry_size) {
+            let entry = self.read::<DirectoryEntry>(offset).unwrap();
+            if entry.inode_number == 0 {
+                self.write(new_entry, offset, log).unwrap();
+                return Ok(());
+            }
+        }
+
+        let insert_offset = self.size() - self.size() % entry_size;
+        self.write(new_entry, insert_offset, log).or(Err(()))
+    }
 }
 
 #[repr(C)]
@@ -628,13 +594,13 @@ impl<const N: usize> InodeAllocator<N> {
 
         let reference = cache.reference_count(inode_ref.cache_index).unwrap();
         if reference == 1 {
-            let mut inode = inode_ref.lock_rw(log);
+            let mut inode = inode_ref.lock();
             if inode.counf_of_link() == 0 && inode_ref.is_initialized.load(Ordering::SeqCst) {
                 SpinLock::unlock_temporarily(&mut cache, move || {
                     assert!(inode.inode.nlink == 0);
-                    inode.truncate();
+                    inode.truncate(log);
                     inode.inode.kind = InodeKind::Unused;
-                    inode.update();
+                    inode.update(log);
                     inode_ref.is_initialized.store(false, Ordering::SeqCst);
                     drop(inode);
                 });
@@ -707,20 +673,20 @@ pub fn initialize(device: usize) {
     unsafe { SUPERBLOCK = superblock };
 }
 
-pub fn create<'a, 'b>(
+pub fn create(
     path: &str,
     kind: InodeKind,
     major: u16,
     minor: u16,
-    log: &'a LogGuard<'b>,
-) -> Result<(InodeReference<'b>, InodeReadWriteGuard<'a, 'b>), ()> {
+    log: &LogGuard,
+) -> Result<(InodeReference<'static>, InodeGuard<'static>), ()> {
     let (dir, name) = search_parent_inode(path).ok_or(())?;
-    let mut dir = dir.lock_rw(log);
+    let mut dir = dir.lock();
 
     match dir.lookup(name) {
         Some((inode_ref, _)) => {
             drop(dir);
-            let inode = inode_ref.lock_rw(log);
+            let inode = inode_ref.lock();
             return if kind == InodeKind::File && (inode.is_file() || inode.is_device()) {
                 Ok((inode_ref, inode))
             } else {
@@ -730,33 +696,33 @@ pub fn create<'a, 'b>(
         None => {
             let inode_number = INODE_ALLOC.allocate(dir.device_number(), kind, log)?;
             let inode_ref = get(dir.device_number(), inode_number).unwrap();
-            let mut inode = inode_ref.lock_rw(log);
+            let mut inode = inode_ref.lock();
             inode.inode.major = major;
             inode.inode.minor = minor;
             inode.inode.nlink = 1;
-            inode.update();
+            inode.update(log);
 
-            let bad = |mut inode: InodeReadWriteGuard| {
+            let bad = |mut inode: InodeGuard| {
                 inode.inode.nlink = 0;
-                inode.update();
+                inode.update(log);
                 Err(())
             };
 
             if kind == InodeKind::Directory {
-                if inode.link(".", inode.inode_number()).is_err()
-                    || inode.link("..", dir.inode_number()).is_err()
+                if inode.link(".", inode.inode_number(), log).is_err()
+                    || inode.link("..", dir.inode_number(), log).is_err()
                 {
                     return bad(inode);
                 }
             }
 
-            if dir.link(name, inode.inode_number()).is_err() {
+            if dir.link(name, inode.inode_number(), log).is_err() {
                 return bad(inode);
             }
 
             if kind == InodeKind::Directory {
                 dir.increment_link();
-                dir.update();
+                dir.update(log);
             }
 
             drop(dir);
@@ -768,7 +734,7 @@ pub fn create<'a, 'b>(
 pub fn link(new: &str, old: &str) -> Result<(), ()> {
     let log = log::start();
     let inode_ref = search_inode(old).ok_or(())?;
-    let mut ip = inode_ref.lock_rw(&log);
+    let mut ip = inode_ref.lock();
 
     if ip.is_directory() {
         return Err(());
@@ -777,13 +743,13 @@ pub fn link(new: &str, old: &str) -> Result<(), ()> {
     let dev = ip.device_number();
     let inum = ip.inode_number();
     ip.increment_link();
-    ip.update();
+    ip.update(&log);
     drop(ip);
 
     let bad = |inode_ref: InodeReference, log| {
-        let mut inode = inode_ref.lock_rw(&log);
+        let mut inode = inode_ref.lock();
         inode.decrement_link();
-        inode.update();
+        inode.update(&log);
         drop(inode);
         drop(inode_ref);
         drop(log);
@@ -793,14 +759,14 @@ pub fn link(new: &str, old: &str) -> Result<(), ()> {
     let Some((dir, name)) = search_parent_inode(new) else {
         return bad(inode_ref, log);
     };
-    let mut dir = dir.lock_rw(&log);
+    let mut dir = dir.lock();
 
     if dir.device_number() != dev {
         drop(dir);
         return bad(inode_ref, log);
     }
 
-    if dir.link(name, inum).is_err() {
+    if dir.link(name, inum, &log).is_err() {
         drop(dir);
         return bad(inode_ref, log);
     }
@@ -815,14 +781,14 @@ pub fn unlink(path: &str) -> Result<(), ()> {
     let log = log::start();
 
     let (dir, name) = search_parent_inode(path).ok_or(())?;
-    let mut dir = dir.lock_rw(&log);
+    let mut dir = dir.lock();
 
     if name == "." || name == ".." {
         return Err(());
     }
 
     let (ip, offset) = dir.lookup(name).ok_or(())?;
-    let mut ip = ip.lock_rw(&log);
+    let mut ip = ip.lock();
     assert!(ip.counf_of_link() > 0);
 
     if ip.is_empty() == Some(false) {
@@ -830,16 +796,16 @@ pub fn unlink(path: &str) -> Result<(), ()> {
     }
 
     let entry = DirectoryEntry::unused();
-    dir.write(entry, offset).unwrap();
+    dir.write(entry, offset, &log).unwrap();
 
     if ip.is_directory() {
         dir.decrement_link();
-        dir.update();
+        dir.update(&log);
     }
     drop(dir);
 
     ip.decrement_link();
-    ip.update();
+    ip.update(&log);
     drop(ip);
     drop(log);
     Ok(())
@@ -877,7 +843,7 @@ pub fn search_inode(path: &str) -> Option<InodeReference<'static>> {
             continue;
         }
 
-        let mut inode = inode_ref.lock_ro();
+        let mut inode = inode_ref.lock();
         if !inode.is_directory() {
             return None;
         }
@@ -907,7 +873,7 @@ pub fn search_parent_inode(path: &str) -> Option<(InodeReference<'static>, &str)
             continue;
         }
 
-        let mut inode = inode_ref.lock_ro();
+        let mut inode = inode_ref.lock();
         if !inode.is_directory() {
             return None;
         }

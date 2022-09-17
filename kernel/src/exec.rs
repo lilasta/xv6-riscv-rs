@@ -3,7 +3,7 @@ use alloc::ffi::CString;
 use crate::{
     config::MAXARG,
     elf::{ELFHeader, ProgramHeader},
-    fs::{self, InodeReadOnlyGuard},
+    fs::{self, InodeGuard},
     log, process,
     riscv::paging::{pg_roundup, PageTable, PGSIZE, PTE},
 };
@@ -22,7 +22,7 @@ fn flags2perm(flags: u32) -> u64 {
 fn load_segment(
     pagetable: &mut PageTable,
     va: usize,
-    inode: &mut InodeReadOnlyGuard,
+    inode: &mut InodeGuard,
     offset: usize,
     size: usize,
 ) -> bool {
@@ -41,7 +41,7 @@ pub unsafe fn execute(path: &str, argv: &[CString]) -> Result<usize, ()> {
     let Some(inode_ref) = fs::search_inode(path) else {
         return Err(());
     };
-    let mut inode = inode_ref.lock_rw(&log);
+    let mut inode = inode_ref.lock();
 
     let Ok(elf) = inode.read::<ELFHeader>(0) else {
         return Err(());
@@ -106,7 +106,7 @@ pub unsafe fn execute(path: &str, argv: &[CString]) -> Result<usize, ()> {
         }
     }
     drop(inode);
-    drop(inode_ref);
+    inode_ref.drop_with_log(&log);
     drop(log);
 
     let old_size = context.sz;
