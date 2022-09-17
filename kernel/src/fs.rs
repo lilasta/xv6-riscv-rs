@@ -626,10 +626,10 @@ impl<const N: usize> InodeAllocator<N> {
     pub fn release(&self, inode_ref: &InodeReference, log: &LogGuard) {
         let mut cache = self.cache.lock();
 
-        let refcnt = cache.reference_count(inode_ref.cache_index).unwrap();
-        if refcnt == 1 && inode_ref.is_initialized.load(Ordering::SeqCst) {
+        let reference = cache.reference_count(inode_ref.cache_index).unwrap();
+        if reference == 1 {
             let mut inode = inode_ref.lock_rw(log);
-            if inode.counf_of_link() == 0 {
+            if inode.counf_of_link() == 0 && inode_ref.is_initialized.load(Ordering::SeqCst) {
                 SpinLock::unlock_temporarily(&mut cache, move || {
                     assert!(inode.inode.nlink == 0);
                     inode.truncate();
@@ -640,6 +640,7 @@ impl<const N: usize> InodeAllocator<N> {
                 });
             }
         }
+
         cache.release(inode_ref.cache_index).unwrap();
     }
 }
@@ -706,72 +707,60 @@ pub fn initialize(device: usize) {
     unsafe { SUPERBLOCK = superblock };
 }
 
-pub trait InodeOps<'a> {
-    fn create<'b>(
-        &'b self,
-        path: &str,
-        kind: InodeKind,
-        major: u16,
-        minor: u16,
-    ) -> Result<(InodeReference<'a>, InodeReadWriteGuard<'b, 'a>), ()>;
-}
+pub fn create<'a, 'b>(
+    path: &str,
+    kind: InodeKind,
+    major: u16,
+    minor: u16,
+    log: &'a LogGuard<'b>,
+) -> Result<(InodeReference<'b>, InodeReadWriteGuard<'a, 'b>), ()> {
+    let (dir, name) = search_parent_inode(path).ok_or(())?;
+    let mut dir = dir.lock_rw(log);
 
-impl<'a> InodeOps<'a> for LogGuard<'a> {
-    fn create<'b>(
-        &'b self,
-        path: &str,
-        kind: InodeKind,
-        major: u16,
-        minor: u16,
-    ) -> Result<(InodeReference<'a>, InodeReadWriteGuard<'b, 'a>), ()> {
-        let (dir, name) = search_parent_inode(path).ok_or(())?;
-        let mut dir = dir.lock_rw(self);
+    match dir.lookup(name) {
+        Some((inode_ref, _)) => {
+            drop(dir);
+            let inode = inode_ref.lock_rw(log);
+            return if kind == InodeKind::File && (inode.is_file() || inode.is_device()) {
+                Ok((inode_ref, inode))
+            } else {
+                Err(())
+            };
+        }
+        None => {
+            let inode_number = INODE_ALLOC.allocate(dir.device_number(), kind, log)?;
+            let inode_ref = get(dir.device_number(), inode_number).unwrap();
+            let mut inode = inode_ref.lock_rw(log);
+            inode.inode.major = major;
+            inode.inode.minor = minor;
+            inode.inode.nlink = 1;
+            inode.update();
 
-        match dir.lookup(name) {
-            Some((inode_ref, _)) => {
-                drop(dir);
-                let inode = inode_ref.lock_rw(self);
-                return if kind == InodeKind::File && (inode.is_file() || inode.is_device()) {
-                    Ok((inode_ref, inode))
-                } else {
-                    Err(())
-                };
-            }
-            None => {
-                let inode_number = INODE_ALLOC.allocate(dir.device_number(), kind, self)?;
-                let inode_ref = get(dir.device_number(), inode_number).unwrap();
-                let mut inode = inode_ref.lock_rw(self);
-                inode.inode.major = major;
-                inode.inode.minor = minor;
-                inode.inode.nlink = 1;
+            let bad = |mut inode: InodeReadWriteGuard| {
+                inode.inode.nlink = 0;
                 inode.update();
+                Err(())
+            };
 
-                let bad = |mut inode: InodeReadWriteGuard| {
-                    inode.inode.nlink = 0;
-                    inode.update();
-                    Err(())
-                };
-
-                if kind == InodeKind::Directory {
-                    if inode.link(".", inode.inode_number()).is_err()
-                        || inode.link("..", dir.inode_number()).is_err()
-                    {
-                        return bad(inode);
-                    }
-                }
-
-                if dir.link(name, inode.inode_number()).is_err() {
+            if kind == InodeKind::Directory {
+                if inode.link(".", inode.inode_number()).is_err()
+                    || inode.link("..", dir.inode_number()).is_err()
+                {
                     return bad(inode);
                 }
-
-                if kind == InodeKind::Directory {
-                    dir.increment_link();
-                    dir.update();
-                }
-
-                drop(dir);
-                Ok((inode_ref, inode))
             }
+
+            if dir.link(name, inode.inode_number()).is_err() {
+                return bad(inode);
+            }
+
+            if kind == InodeKind::Directory {
+                dir.increment_link();
+                dir.update();
+            }
+
+            drop(dir);
+            Ok((inode_ref, inode))
         }
     }
 }
@@ -858,7 +847,7 @@ pub fn unlink(path: &str) -> Result<(), ()> {
 
 pub fn make_directory(path: &str) -> Result<(), ()> {
     let log = log::start();
-    let (r, i) = log.create(path, InodeKind::Directory, 0, 0)?;
+    let (r, i) = create(path, InodeKind::Directory, 0, 0, &log)?;
     drop(i);
     drop(r);
     Ok(())
@@ -866,7 +855,7 @@ pub fn make_directory(path: &str) -> Result<(), ()> {
 
 pub fn make_special_file(path: &str, major: u16, minor: u16) -> Result<(), ()> {
     let log = log::start();
-    let (r, i) = log.create(path, InodeKind::Device, major, minor)?;
+    let (r, i) = create(path, InodeKind::Device, major, minor, &log)?;
     drop(i);
     drop(r);
     Ok(())
