@@ -252,7 +252,7 @@ fn sys_open() -> Result<u64, ()> {
     }
 
     drop(inode);
-    drop(inode_ref);
+    inode_ref.drop_with_log(&log);
 
     Ok(fd as u64)
 }

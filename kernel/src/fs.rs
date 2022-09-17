@@ -12,7 +12,7 @@ use crate::{
     log::{self, LogGuard},
     process::{self, copyin_either, copyout_either},
     sleeplock::{SleepLock, SleepLockGuard},
-    spinlock::{SpinLock, SpinLockGuard},
+    spinlock::SpinLock,
 };
 
 const ROOTINO: usize = 1; // root i-number
@@ -130,23 +130,21 @@ impl<'i> InodeReference<'i> {
     }
 
     pub fn drop_with_log(self, log: &LogGuard) {
-        INODE_ALLOC.lock().release(&self, &log);
+        INODE_ALLOC.release(&self, &log);
         core::mem::forget(self);
     }
 }
 
 impl<'a> Clone for InodeReference<'a> {
     fn clone(&self) -> Self {
-        INODE_ALLOC.lock().duplicate(self)
+        INODE_ALLOC.duplicate(self)
     }
 }
 
 impl<'a> Drop for InodeReference<'a> {
     fn drop(&mut self) {
         let log = log::start();
-        let mut alloc = INODE_ALLOC.lock();
-        alloc.release(self, &log);
-        drop(alloc);
+        INODE_ALLOC.release(self, &log);
         drop(log);
     }
 }
@@ -497,7 +495,6 @@ impl<'i> InodeReadOnlyGuard<'i> {
 
             if cmp == entry.name {
                 return INODE_ALLOC
-                    .lock()
                     .get(self.device_number(), entry.inode_number as usize)
                     .map(|inode| (inode, offset));
             }
@@ -551,7 +548,7 @@ impl SuperBlock {
 }
 
 pub struct InodeAllocator<const N: usize> {
-    cache: CacheRc<InodeKey, N>,
+    cache: SpinLock<CacheRc<InodeKey, N>>,
     inodes: [SleepLock<Inode>; N],
     is_initialized: [AtomicBool; N],
 }
@@ -563,24 +560,19 @@ impl<const N: usize> InodeAllocator<N> {
 
     pub const fn new() -> Self {
         Self {
-            cache: CacheRc::new(),
+            cache: SpinLock::new(CacheRc::new()),
             inodes: [const { SleepLock::new(Inode::zeroed()) }; _],
             is_initialized: [const { AtomicBool::new(false) }; _],
         }
     }
 
-    fn allocate(
-        self: &mut SpinLockGuard<Self>,
-        device: usize,
-        kind: InodeKind,
-        log: &LogGuard,
-    ) -> Result<usize, ()> {
+    fn allocate(&self, device: usize, kind: InodeKind, log: &LogGuard) -> Result<usize, ()> {
         for inum in 1..(unsafe { SUPERBLOCK.ninodes as usize }) {
             let block_index = self.inode_block_at(inum);
             let in_block_index = inum % INODES_PER_BLOCK;
 
-            let mut block = buffer::get_with_unlock(device, block_index, self).unwrap();
-            let inodes = unsafe { block.read_array_with_unlock::<Inode, _>(self) };
+            let mut block = buffer::get(device, block_index).unwrap();
+            let inodes = unsafe { block.read_array::<Inode>() };
 
             let inode = &mut inodes[in_block_index];
             if inode.kind == InodeKind::Unused {
@@ -594,13 +586,10 @@ impl<const N: usize> InodeAllocator<N> {
         Err(())
     }
 
-    // TODO:
-    pub fn get(
-        self: &mut SpinLockGuard<'static, Self>,
-        device: usize,
-        inode_number: usize,
-    ) -> Option<InodeReference<'static>> {
-        let (cache_index, is_new) = self.cache.get(InodeKey {
+    pub fn get(&self, device: usize, inode_number: usize) -> Option<InodeReference> {
+        let mut cache = self.cache.lock();
+
+        let (cache_index, is_new) = cache.get(InodeKey {
             device,
             index: inode_number,
         })?;
@@ -609,36 +598,39 @@ impl<const N: usize> InodeAllocator<N> {
             self.is_initialized[cache_index].store(false, Ordering::SeqCst);
         }
 
+        SpinLock::unlock(cache);
+
         Some(InodeReference {
             device,
             inode_number,
             cache_index,
-            inode: unsafe { <*const _>::as_ref(&self.inodes[cache_index]).unwrap() },
-            is_initialized: unsafe {
-                <*const _>::as_ref(&self.is_initialized[cache_index]).unwrap()
-            },
+            inode: &self.inodes[cache_index],
+            is_initialized: &self.is_initialized[cache_index],
         })
     }
 
-    pub fn duplicate<'a>(
-        self: &mut SpinLockGuard<'a, Self>,
-        inode: &InodeReference<'a>,
-    ) -> InodeReference<'a> {
-        self.cache
-            .get(InodeKey {
-                device: inode.device,
-                index: inode.inode_number,
-            })
-            .unwrap();
+    pub fn duplicate<'a>(&self, inode: &InodeReference<'a>) -> InodeReference<'a> {
+        let mut cache = self.cache.lock();
+
+        let key = InodeKey {
+            device: inode.device,
+            index: inode.inode_number,
+        };
+        cache.get(key).unwrap();
+
+        SpinLock::unlock(cache);
+
         InodeReference { ..*inode }
     }
 
-    pub fn release(self: &mut SpinLockGuard<Self>, inode_ref: &InodeReference, log: &LogGuard) {
-        let refcnt = self.cache.reference_count(inode_ref.cache_index).unwrap();
+    pub fn release(&self, inode_ref: &InodeReference, log: &LogGuard) {
+        let mut cache = self.cache.lock();
+
+        let refcnt = cache.reference_count(inode_ref.cache_index).unwrap();
         if refcnt == 1 && inode_ref.is_initialized.load(Ordering::SeqCst) {
             let mut inode = inode_ref.lock_rw(log);
             if inode.counf_of_link() == 0 {
-                SpinLock::unlock_temporarily(self, move || {
+                SpinLock::unlock_temporarily(&mut cache, move || {
                     assert!(inode.inode.nlink == 0);
                     inode.truncate();
                     inode.inode.kind = InodeKind::Unused;
@@ -648,7 +640,7 @@ impl<const N: usize> InodeAllocator<N> {
                 });
             }
         }
-        self.cache.release(inode_ref.cache_index).unwrap();
+        cache.release(inode_ref.cache_index).unwrap();
     }
 }
 
@@ -693,7 +685,7 @@ unsafe fn deallocate_block(device: usize, block: usize, log: &LogGuard) {
     log.write(&bitmap_buf);
 }
 
-static INODE_ALLOC: SpinLock<InodeAllocator<NINODE>> = SpinLock::new(InodeAllocator::new());
+static INODE_ALLOC: InodeAllocator<NINODE> = InodeAllocator::new();
 
 fn write_zeros_to_block(device: usize, block: usize, log: &LogGuard) {
     let mut buf = buffer::get(device, block).unwrap();
@@ -746,10 +738,7 @@ impl<'a> InodeOps<'a> for LogGuard<'a> {
                 };
             }
             None => {
-                let mut alloc = INODE_ALLOC.lock();
-                let inode_number = alloc.allocate(dir.device_number(), kind, self)?;
-                drop(alloc);
-
+                let inode_number = INODE_ALLOC.allocate(dir.device_number(), kind, self)?;
                 let inode_ref = get(dir.device_number(), inode_number).unwrap();
                 let mut inode = inode_ref.lock_rw(self);
                 inode.inode.major = major;
@@ -884,7 +873,7 @@ pub fn make_special_file(path: &str, major: u16, minor: u16) -> Result<(), ()> {
 }
 
 pub fn get(device: usize, inode: usize) -> Option<InodeReference<'static>> {
-    INODE_ALLOC.lock().get(device, inode)
+    INODE_ALLOC.get(device, inode)
 }
 
 pub fn search_inode(path: &str) -> Option<InodeReference<'static>> {
