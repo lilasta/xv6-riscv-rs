@@ -10,7 +10,6 @@ use core::ptr::NonNull;
 use crate::allocator::KernelAllocator;
 use crate::bitmap::Bitmap;
 use crate::config::{NCPU, NPROC, ROOTDEV};
-use crate::interrupt::InterruptGuard;
 use crate::memory_layout::{kstack, kstack_index};
 use crate::process::process::ProcessContext;
 use crate::riscv::enable_interrupt;
@@ -29,7 +28,7 @@ use self::mycpu::CPU;
 use self::process::{Process, ProcessState};
 
 fn current() -> Option<&'static SpinLock<Process>> {
-    mycpu().assigned_process()
+    modify_cpu(|cpu| cpu.assigned_process())
 }
 
 pub fn read_memory<T>(addr: usize) -> Option<T> {
@@ -111,13 +110,13 @@ pub fn is_running() -> bool {
     unsafe { process.get().is_running() }
 }
 
-fn mycpu() -> InterruptGuard<&'static mut CPU<'static, Process>> {
-    InterruptGuard::with(|| unsafe {
+fn modify_cpu<R>(f: impl FnOnce(&mut CPU<'static, Process>) -> R) -> R {
+    interrupt::off(|| unsafe {
         assert!(!interrupt::is_enabled());
         assert!(cpu::id() < NCPU);
 
         static mut CPUS: [CPU<Process>; NCPU] = [const { CPU::Ready }; _];
-        &mut CPUS[cpu::id()]
+        f(&mut CPUS[cpu::id()])
     })
 }
 
@@ -144,7 +143,7 @@ extern "C" fn finish_dispatch() {
     unsafe {
         static mut FIRST: bool = true;
 
-        mycpu().finish_dispatch().unwrap();
+        modify_cpu(|cpu| cpu.finish_dispatch().unwrap());
 
         if FIRST {
             FIRST = false;
@@ -238,7 +237,7 @@ pub fn sleep<T>(token: usize, guard: &mut SpinLockGuard<T>) {
     // (wakeup locks p->lock),
     // so it's okay to release lk.
 
-    let mut process = mycpu().pause().unwrap();
+    let mut process = modify_cpu(|cpu| cpu.pause().unwrap());
     SpinLock::unlock_temporarily(guard, || {
         // Go to sleep.
         process.state.sleep(token).unwrap();
@@ -294,7 +293,7 @@ pub unsafe fn exit(status: i32) {
 
     wakeup(process.parent as usize);
 
-    let mut process = mycpu().pause().unwrap();
+    let mut process = modify_cpu(|cpu| cpu.pause().unwrap());
     process.state.die(status).unwrap();
     drop(_guard);
 
@@ -312,11 +311,11 @@ pub fn scheduler() {
                 process.state.run().unwrap();
 
                 let process_context = &process.context().unwrap().context as *const _;
-                mycpu().start_dispatch(process).unwrap();
+                modify_cpu(|cpu| cpu.start_dispatch(process).unwrap());
 
                 unsafe { cpu::dispatch(&*process_context) };
 
-                mycpu().finish_preemption().unwrap();
+                modify_cpu(|cpu| cpu.finish_preemption().unwrap());
             }
         }
     }
@@ -328,17 +327,17 @@ fn return_to_scheduler(mut process: SpinLockGuard<'static, Process>) {
     assert!(!process.state.is_running());
 
     let context = &mut process.context().unwrap().context as *mut _;
-    mycpu().start_preemption(process).unwrap();
+    modify_cpu(|cpu| cpu.start_preemption(process).unwrap());
 
     let intena = interrupt::is_enabled_before();
     unsafe { cpu::preemption(&mut *context) };
     interrupt::set_enabled_before(intena);
 
-    mycpu().finish_dispatch().unwrap();
+    modify_cpu(|cpu| cpu.finish_dispatch().unwrap());
 }
 
 pub fn pause() {
-    let mut process = mycpu().pause().unwrap();
+    let mut process = modify_cpu(|cpu| cpu.pause().unwrap());
     process.state.pause().unwrap();
     return_to_scheduler(process);
 }

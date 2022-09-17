@@ -1,5 +1,3 @@
-use core::ops::{Deref, DerefMut};
-
 use crate::{config::NCPU, riscv};
 
 static mut STATES: [InterruptState; NCPU] = [const { InterruptState::new() }; NCPU];
@@ -20,40 +18,6 @@ impl InterruptState {
         }
     }
 }
-
-pub struct InterruptGuard<T> {
-    value: T,
-}
-
-impl<T> InterruptGuard<T> {
-    pub fn with(init: impl FnOnce() -> T) -> Self {
-        push_off();
-        Self { value: init() }
-    }
-}
-
-impl<T> Drop for InterruptGuard<T> {
-    fn drop(&mut self) {
-        pop_off();
-    }
-}
-
-impl<T> Deref for InterruptGuard<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-impl<T> DerefMut for InterruptGuard<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.value
-    }
-}
-
-impl<T> !Sync for InterruptGuard<T> {}
-impl<T> !Send for InterruptGuard<T> {}
 
 fn hartid() -> usize {
     assert!(!is_enabled());
