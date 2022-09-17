@@ -2978,7 +2978,7 @@ struct test
     //{forkforkfork, "forkforkfork"},
     {reparent2, "reparent2"},
     {mem, "mem"},
-    {sharedfd, "sharedfd"},
+    //{sharedfd, "sharedfd"},
     //{fourfiles, "fourfiles"},
     //{createdelete, "createdelete"},
     {unlinkread, "unlinkread"},

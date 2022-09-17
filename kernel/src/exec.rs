@@ -106,7 +106,7 @@ pub unsafe fn execute(path: &str, argv: &[CString]) -> Result<usize, ()> {
         }
     }
     drop(inode);
-    inode_ref.drop_with_log(&log);
+    drop(inode_ref);
     drop(log);
 
     let old_size = context.sz;

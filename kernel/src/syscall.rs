@@ -212,12 +212,12 @@ fn sys_open() -> Result<u64, ()> {
 
     let log = log::start();
     let mode = arg_usize::<1>();
-    let (inode_ref, mut inode) = if mode & O_CREATE != 0 {
+    let mut inode = if mode & O_CREATE != 0 {
         fs::create(path, InodeKind::File, 0, 0, &log)?
     } else {
         let inode_ref = fs::search_inode(path).ok_or(())?;
         let inode = inode_ref.lock();
-        (inode_ref, inode)
+        inode
     };
 
     if inode.is_directory() && mode != O_RDONLY {
@@ -233,13 +233,13 @@ fn sys_open() -> Result<u64, ()> {
 
     let file = if inode.is_device() {
         File::new_device(
-            inode_ref.clone(),
+            inode.as_ref(),
             inode.device_major().unwrap(),
             readable,
             writable,
         )
     } else {
-        File::new_inode(inode_ref.clone(), readable, writable)
+        File::new_inode(inode.as_ref(), readable, writable)
     };
 
     let file = Arc::new(file);
@@ -252,7 +252,6 @@ fn sys_open() -> Result<u64, ()> {
     }
 
     drop(inode);
-    inode_ref.drop_with_log(&log);
 
     Ok(fd as u64)
 }
@@ -275,7 +274,6 @@ fn sys_chdir() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
     let path = arg_string::<0>(&mut path)?;
 
-    let log = log::start();
     let inode_ref = fs::search_inode(path).ok_or(())?;
     let inode = inode_ref.lock();
 
@@ -285,7 +283,7 @@ fn sys_chdir() -> Result<u64, ()> {
     drop(inode);
 
     let context = process::context().unwrap();
-    context.cwd.take().unwrap().drop_with_log(&log);
+    context.cwd.take();
     context.cwd.replace(inode_ref);
     Ok(0)
 }
