@@ -440,13 +440,18 @@ pub struct InodePin<'a> {
 }
 
 impl<'a> InodePin<'a> {
-    pub fn with_log<'log>(&self, log: &'log LogGuard) -> InodeReference<'a, 'log> {
-        INODE_ALLOC.duplicate(self.cache_index);
-        InodeReference {
+    pub fn into_ref<'log>(self, log: &'log LogGuard) -> InodeReference<'a, 'log> {
+        let reference = InodeReference {
             cache_index: self.cache_index,
             entry: self.entry,
             log,
-        }
+        };
+
+        INODE_ALLOC.duplicate(self.cache_index);
+
+        self.drop_with_log(log);
+
+        reference
     }
 
     pub fn drop_with_log(self, log: &LogGuard) {
@@ -900,7 +905,7 @@ pub fn search_inode<'log>(
             .as_ref()
             .cloned()
             .unwrap()
-            .with_log(log)
+            .into_ref(log)
     };
 
     for element in path.split("/") {
@@ -938,7 +943,7 @@ pub fn search_parent_inode<'p, 'log>(
             .as_ref()
             .cloned()
             .unwrap()
-            .with_log(log)
+            .into_ref(log)
     };
 
     let mut iter = path.split("/").peekable();
