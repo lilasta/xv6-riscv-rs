@@ -104,9 +104,9 @@ fn alloc_error(layout: core::alloc::Layout) -> ! {
     panic!("Cannot alloc: {:?}", layout);
 }
 
-static STARTED: AtomicBool = AtomicBool::new(false);
-
 pub unsafe extern "C" fn main() {
+    static STARTED: AtomicBool = AtomicBool::new(false);
+
     if cpu::id() == 0 {
         console::initialize();
         println!("");
