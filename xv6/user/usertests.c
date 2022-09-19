@@ -3332,7 +3332,7 @@ void outofinodes(char *s)
 
 struct test slowtests[] = {
     {bigdir, "bigdir"},
-    //{manywrites, "manywrites"},
+    {manywrites, "manywrites"},
     {badwrite, "badwrite"},
     {execout, "execout"},
     {diskfull, "diskfull"},
