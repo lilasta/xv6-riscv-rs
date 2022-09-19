@@ -2,8 +2,7 @@ use alloc::{ffi::CString, sync::Arc};
 use arrayvec::ArrayVec;
 
 use crate::{
-    allocator::KernelAllocator,
-    clock,
+    allocator, clock,
     config::{MAXARG, MAXPATH, NDEV},
     exec::execute,
     file::File,
@@ -306,13 +305,13 @@ fn sys_exec() -> Result<u64, ()> {
             break;
         }
 
-        let Some(mem) = KernelAllocator::get().allocate_page() else {
+        let Some(mem) = allocator::get().allocate_page() else {
             return Err(());
         };
 
         let buffer = unsafe { core::slice::from_raw_parts_mut(mem.as_ptr(), PGSIZE) };
         if unsafe { read_string_from_process_memory(addr, buffer).is_err() } {
-            KernelAllocator::get().deallocate_page(mem);
+            allocator::get().deallocate_page(mem);
             return Err(());
         }
 

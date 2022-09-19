@@ -6,7 +6,7 @@ mod trapframe;
 use core::mem::MaybeUninit;
 use core::ptr::NonNull;
 
-use crate::allocator::KernelAllocator;
+use crate::allocator;
 use crate::bitmap::Bitmap;
 use crate::config::{NCPU, NPROC, ROOTDEV};
 use crate::memory_layout::{kstack, kstack_index};
@@ -165,7 +165,7 @@ static KSTACK_USED: SpinLock<Bitmap<NPROC>> = SpinLock::new(Bitmap::new());
 
 pub fn initialize_kstack(pagetable: &mut PageTable) {
     for i in 0..NPROC {
-        let memory = KernelAllocator::get().allocate_page().unwrap();
+        let memory = allocator::get().allocate_page().unwrap();
         let pa = memory.addr().get();
         let va = kstack(i);
         pagetable.map(va, pa, PGSIZE, PTE::R | PTE::W).unwrap();
@@ -201,7 +201,7 @@ extern "C" fn finish_dispatch() {
 unsafe fn uvminit(pagetable: &mut PageTable, src: *const u8, size: usize) {
     assert!(size < PGSIZE);
 
-    let mem: NonNull<u8> = KernelAllocator::get().allocate().unwrap();
+    let mem: NonNull<u8> = allocator::get().allocate().unwrap();
     core::ptr::write_bytes(mem.as_ptr(), 0, PGSIZE);
 
     pagetable

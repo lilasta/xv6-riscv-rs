@@ -23,13 +23,6 @@ impl KernelAllocator {
         Self { head: None }
     }
 
-    // Singleton
-    pub fn get() -> SpinLockGuard<'static, KernelAllocator> {
-        #[global_allocator]
-        static mut ALLOCATOR: SpinLock<KernelAllocator> = SpinLock::new(KernelAllocator::uninit());
-        unsafe { ALLOCATOR.lock() }
-    }
-
     pub const fn is_initialized(&self) -> bool {
         !self.head.is_none()
     }
@@ -124,5 +117,11 @@ unsafe impl GlobalAlloc for SpinLock<KernelAllocator> {
 }
 
 pub fn initialize() {
-    KernelAllocator::get().initialize();
+    get().initialize();
+}
+
+pub fn get() -> SpinLockGuard<'static, KernelAllocator> {
+    #[global_allocator]
+    static ALLOCATOR: SpinLock<KernelAllocator> = SpinLock::new(KernelAllocator::uninit());
+    ALLOCATOR.lock()
 }

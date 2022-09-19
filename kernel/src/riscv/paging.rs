@@ -2,7 +2,7 @@ use core::ptr::NonNull;
 
 use alloc::boxed::Box;
 
-use crate::allocator::KernelAllocator;
+use crate::allocator;
 
 // bytes per page
 pub const PGSIZE: usize = 4096;
@@ -144,7 +144,7 @@ impl PageTable {
             let pte = self.search_entry(i, false).unwrap();
             assert!(pte.is_valid());
 
-            let mem = match KernelAllocator::get().allocate_page() {
+            let mem = match allocator::get().allocate_page() {
                 Some(mem) => mem,
                 None => {
                     to.unmap(0, i / PGSIZE, true);
@@ -158,7 +158,7 @@ impl PageTable {
             unsafe { core::ptr::copy(<*const u8>::from_bits(pa), mem.as_ptr(), PGSIZE) };
 
             if let Err(_) = to.map(i, mem.addr().get(), PGSIZE, flags) {
-                KernelAllocator::get().deallocate_page(mem);
+                allocator::get().deallocate_page(mem);
                 to.unmap(0, i / PGSIZE, true);
                 return Err(());
             }
@@ -214,7 +214,7 @@ impl PageTable {
                 let ptr = pte.get_physical_addr();
                 let ptr = <*mut _>::from_bits(ptr);
                 let ptr = NonNull::new(ptr).unwrap();
-                KernelAllocator::get().deallocate_page(ptr);
+                allocator::get().deallocate_page(ptr);
             }
 
             pte.clear();
@@ -231,7 +231,7 @@ impl PageTable {
         let grow_start = pg_roundup(old_size);
         let grow_end = new_size;
         for a in (grow_start..grow_end).step_by(PGSIZE) {
-            let Some(mem) = KernelAllocator::get().allocate_page() else {
+            let Some(mem) = allocator::get().allocate_page() else {
                 self.shrink(a, old_size).unwrap();
                 return Err(());
             };
@@ -243,7 +243,7 @@ impl PageTable {
             let result = self.map(a, mem.addr().get(), PGSIZE, perm | PTE::R | PTE::U);
 
             if result.is_err() {
-                KernelAllocator::get().deallocate_page(mem);
+                allocator::get().deallocate_page(mem);
                 self.shrink(a, old_size).unwrap();
                 return Err(());
             }
