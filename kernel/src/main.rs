@@ -14,6 +14,8 @@
 #![feature(const_nonnull_new)]
 #![feature(const_nonnull_slice_from_raw_parts)]
 #![feature(const_option)]
+#![feature(const_option_cloned)]
+#![feature(const_option_ext)]
 #![feature(const_ptr_as_ref)]
 #![feature(const_ptr_is_null)]
 #![feature(const_ptr_read)]

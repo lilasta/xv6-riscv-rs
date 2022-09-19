@@ -146,7 +146,6 @@ impl<K, const N: usize> Cache<K, N> {
 pub struct CacheRc<K, const N: usize> {
     cache: Cache<K, N>,
     counts: [usize; N],
-    pinned: [bool; N],
 }
 
 impl<K, const N: usize> CacheRc<K, N> {
@@ -154,7 +153,6 @@ impl<K, const N: usize> CacheRc<K, N> {
         Self {
             cache: Cache::new(),
             counts: [0; N],
-            pinned: [false; N],
         }
     }
 
@@ -183,33 +181,31 @@ impl<K, const N: usize> CacheRc<K, N> {
         }
     }
 
-    // TODO: PinGuard?
-    pub const fn pin(&mut self, index: usize) -> Option<()> {
-        let count = self.counts.get_mut(index)?;
-        let pin = self.pinned.get_mut(index)?;
-
-        assert!(*pin == false);
-
-        *count += 1;
-        *pin = true;
-
-        Some(())
+    pub const fn reference_count(&self, index: usize) -> Option<usize> {
+        self.counts.get(index).cloned()
     }
 
-    pub const fn unpin(&mut self, index: usize) -> Option<()> {
-        let count = self.counts.get_mut(index)?;
-        let pin = self.pinned.get_mut(index)?;
+    pub const fn increment_reference(&mut self, index: usize) -> Option<()> {
+        const fn increment(count: &mut usize) {
+            *count += 1;
+        }
 
-        assert!(*count > 1);
-        assert!(*pin == true);
-
-        *count -= 1;
-        *pin = false;
-
-        Some(())
+        self.counts.get_mut(index).map(increment)
     }
 
-    pub const fn reference_count(&mut self, index: usize) -> Option<usize> {
-        Some(*self.counts.get_mut(index)?)
+    pub const fn decrement_reference(&mut self, index: usize) -> Option<()> {
+        // 参照カウントを0にする場合はreleaseを使ってほしい
+        const fn is_more_than_one(count: &&mut usize) -> bool {
+            **count > 1
+        }
+
+        const fn decrement(count: &mut usize) {
+            *count -= 1;
+        }
+
+        self.counts
+            .get_mut(index)
+            .filter(is_more_than_one)
+            .map(decrement)
     }
 }

@@ -51,11 +51,11 @@ impl<'a, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, BSIZE, CSIZE> {
     }
 
     pub fn pin(&self) {
-        self.cache.pin(self);
+        self.cache.pin(self.cache_index);
     }
 
     pub fn unpin(&self) {
-        self.cache.unpin(self);
+        self.cache.unpin(self.cache_index);
     }
 
     pub fn clear(&mut self) {
@@ -132,7 +132,7 @@ impl<'a, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, BSIZE, CSIZE> {
 
 impl<'a, const BSIZE: usize, const CSIZE: usize> Drop for BufferGuard<'a, BSIZE, CSIZE> {
     fn drop(&mut self) {
-        self.cache.release(self);
+        self.cache.release(self.cache_index);
     }
 }
 
@@ -184,16 +184,16 @@ impl<const BSIZE: usize, const CSIZE: usize> BufferCache<BSIZE, CSIZE> {
         })
     }
 
-    fn release(&self, buffer: &BufferGuard<BSIZE, CSIZE>) {
-        self.cache.lock().release(buffer.cache_index).unwrap();
+    fn release(&self, index: usize) {
+        self.cache.lock().release(index).unwrap();
     }
 
-    fn pin(&self, guard: &BufferGuard<BSIZE, CSIZE>) {
-        self.cache.lock().pin(guard.cache_index).unwrap();
+    fn pin(&self, index: usize) {
+        self.cache.lock().increment_reference(index).unwrap();
     }
 
-    fn unpin(&self, guard: &BufferGuard<BSIZE, CSIZE>) {
-        self.cache.lock().unpin(guard.cache_index).unwrap();
+    fn unpin(&self, index: usize) {
+        self.cache.lock().decrement_reference(index).unwrap();
     }
 }
 
