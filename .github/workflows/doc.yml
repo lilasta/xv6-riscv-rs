@@ -30,7 +30,7 @@ jobs:
     - name: Deploy
       uses: actions/upload-pages-artifact@v1
       with:
-        path: kernel/target/doc
+        path: kernel/target/riscv64gc-unknown-none-elf/doc
 
   deploy:
      needs: doc
