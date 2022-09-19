@@ -108,13 +108,6 @@ impl<'a, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, BSIZE, CSIZE> {
         self.buffer.is_initialized = true;
     }
 
-    pub unsafe fn read_array_with_unlock<T, LT>(
-        &mut self,
-        lock: &mut SpinLockGuard<LT>,
-    ) -> &mut [T] {
-        SpinLock::unlock_temporarily(lock, || self.read_array::<T>())
-    }
-
     pub unsafe fn read_with_unlock<T, LT>(&mut self, lock: &mut SpinLockGuard<LT>) -> &mut T
     where
         [(); check_buffer_conversion::<T, BSIZE>()]:,
@@ -202,12 +195,4 @@ static CACHE: BufferCache<BSIZE, NBUF> = BufferCache::new();
 
 pub fn get(device: usize, block: usize) -> Option<BufferGuard<'static, BSIZE, NBUF>> {
     CACHE.get(device, block)
-}
-
-pub fn get_with_unlock<T>(
-    device: usize,
-    block: usize,
-    lock: &mut SpinLockGuard<T>,
-) -> Option<BufferGuard<'static, BSIZE, NBUF>> {
-    SpinLock::unlock_temporarily(lock, || CACHE.get(device, block))
 }
