@@ -654,12 +654,12 @@ impl SuperBlock {
     }
 }
 
-pub struct InodeAllocator<const N: usize> {
+pub struct InodeCache<const N: usize> {
     cache: SpinLock<CacheRc<InodeKey, N>>,
     inodes: [SleepLock<InodeEntry>; N],
 }
 
-impl<const N: usize> InodeAllocator<N> {
+impl<const N: usize> InodeCache<N> {
     pub const fn new() -> Self {
         Self {
             cache: SpinLock::new(CacheRc::new()),
@@ -724,7 +724,7 @@ impl<const N: usize> InodeAllocator<N> {
 
 static mut SUPERBLOCK: SuperBlock = SuperBlock::zeroed();
 
-static INODE_ALLOC: InodeAllocator<NINODE> = InodeAllocator::new();
+static INODE_ALLOC: InodeCache<NINODE> = InodeCache::new();
 
 fn write_zeros_to_block(device: usize, block: usize, log: &LogGuard) {
     let mut buf = buffer::get(device, block).unwrap();
