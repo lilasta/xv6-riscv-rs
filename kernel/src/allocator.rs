@@ -22,21 +22,8 @@ pub struct KernelAllocator {
 }
 
 impl KernelAllocator {
-    pub const fn uninit() -> Self {
+    pub const fn empty() -> Self {
         Self { head: None }
-    }
-
-    pub const fn is_initialized(&self) -> bool {
-        !self.head.is_none()
-    }
-
-    pub fn initialize(&mut self) {
-        assert!(!self.is_initialized());
-
-        let phy_start = symbol_addr!(end);
-        let phy_end = PHYSTOP;
-
-        self.register_blocks(phy_start, phy_end);
     }
 
     fn register_blocks(&mut self, phy_start: usize, phy_end: usize) {
@@ -123,11 +110,16 @@ unsafe impl GlobalAlloc for SpinLock<KernelAllocator> {
 }
 
 pub fn initialize() {
-    get().initialize();
+    let mut allocator = get();
+    assert!(allocator.head.is_none());
+
+    let phy_start = symbol_addr!(end);
+    let phy_end = PHYSTOP;
+    allocator.register_blocks(phy_start, phy_end);
 }
 
 pub fn get() -> SpinLockGuard<'static, KernelAllocator> {
     #[global_allocator]
-    static ALLOCATOR: SpinLock<KernelAllocator> = SpinLock::new(KernelAllocator::uninit());
+    static ALLOCATOR: SpinLock<KernelAllocator> = SpinLock::new(KernelAllocator::empty());
     ALLOCATOR.lock()
 }
