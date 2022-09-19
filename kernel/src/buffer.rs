@@ -189,11 +189,12 @@ impl<const BSIZE: usize, const CSIZE: usize> BufferCache<BSIZE, CSIZE> {
     }
 
     fn pin(&self, index: usize) {
-        self.cache.lock().increment_reference(index).unwrap();
+        self.cache.lock().duplicate(index).unwrap();
     }
 
     fn unpin(&self, index: usize) {
-        self.cache.lock().decrement_reference(index).unwrap();
+        let is_released = self.cache.lock().release(index).unwrap();
+        assert!(!is_released)
     }
 }
 

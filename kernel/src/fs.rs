@@ -435,8 +435,6 @@ impl InodeEntry {
 
 #[derive(Debug)]
 pub struct InodeReference<'a> {
-    device: usize,
-    inode_number: usize,
     cache_index: usize,
     entry: &'a SleepLock<InodeEntry>,
 }
@@ -448,7 +446,7 @@ impl<'a> InodeReference<'a> {
             entry: ManuallyDrop::new(self.entry.lock()),
         };
 
-        INODE_ALLOC.increment_reference(self.device, self.inode_number);
+        INODE_ALLOC.duplicate(self.cache_index);
 
         if !guard.is_initialized {
             guard.initialize();
@@ -461,7 +459,7 @@ impl<'a> InodeReference<'a> {
 
 impl<'a> Clone for InodeReference<'a> {
     fn clone(&self) -> Self {
-        INODE_ALLOC.increment_reference(self.device, self.inode_number);
+        INODE_ALLOC.duplicate(self.cache_index);
         Self { ..*self }
     }
 }
@@ -629,24 +627,13 @@ impl<const N: usize> InodeAllocator<N> {
         SpinLock::unlock(cache);
 
         Some(InodeReference {
-            device,
-            inode_number,
             cache_index,
             entry: &self.inodes[cache_index],
         })
     }
 
-    pub fn increment_reference<'a>(&self, device: usize, inode_number: usize) {
-        let mut cache = self.cache.lock();
-
-        cache
-            .get(InodeKey {
-                device,
-                index: inode_number,
-            })
-            .unwrap();
-
-        SpinLock::unlock(cache);
+    pub fn duplicate(&self, index: usize) {
+        self.cache.lock().duplicate(index);
     }
 
     pub fn release(&self, index: usize, log: &LogGuard) {

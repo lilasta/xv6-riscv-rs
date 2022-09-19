@@ -165,6 +165,17 @@ impl<K, const N: usize> CacheRc<K, N> {
         Some(found)
     }
 
+    pub const fn duplicate(&mut self, index: usize) -> Option<usize> {
+        const fn increment_count(count: &mut usize) {
+            *count += 1;
+        }
+
+        self.counts
+            .get_mut(index)
+            .map(increment_count)
+            .and(Some(index))
+    }
+
     pub fn release(&mut self, index: usize) -> Option<bool> {
         let count = self.counts.get_mut(index)?;
         match count {
@@ -183,29 +194,5 @@ impl<K, const N: usize> CacheRc<K, N> {
 
     pub const fn reference_count(&self, index: usize) -> Option<usize> {
         self.counts.get(index).cloned()
-    }
-
-    pub const fn increment_reference(&mut self, index: usize) -> Option<()> {
-        const fn increment(count: &mut usize) {
-            *count += 1;
-        }
-
-        self.counts.get_mut(index).map(increment)
-    }
-
-    pub const fn decrement_reference(&mut self, index: usize) -> Option<()> {
-        // 参照カウントを0にする場合はreleaseを使ってほしい
-        const fn is_more_than_one(count: &&mut usize) -> bool {
-            **count > 1
-        }
-
-        const fn decrement(count: &mut usize) {
-            *count -= 1;
-        }
-
-        self.counts
-            .get_mut(index)
-            .filter(is_more_than_one)
-            .map(decrement)
     }
 }
