@@ -36,7 +36,7 @@ fn main() {
     build_initcode(
         &format!("{prefix}gcc"),
         &format!("{prefix}ld"),
-        &format!("{prefix}objdump"),
+        &format!("{prefix}objcopy"),
         &out_dir,
     );
 }
@@ -60,8 +60,6 @@ fn print_ldflags() {
 }
 
 fn build_initcode(cc: &str, ld: &str, objcopy: &str, out_path: &PathBuf) {
-    println!("cargo:rerun-if-changed=asm/initcode.S");
-
     Command::new(cc)
         .args(CFLAGS)
         .args(&["-nostdinc", "-I.", "-Ikernel", "-c", "asm/initcode.S", "-o"])
