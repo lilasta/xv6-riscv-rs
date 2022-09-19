@@ -133,7 +133,7 @@ impl File {
                         Err(_) => 0,
                     };
                     offset.fetch_add(wrote, Release);
-                    drop(inode);
+                    inode.drop_with_lock(&log);
                     drop(log);
 
                     if wrote != n {

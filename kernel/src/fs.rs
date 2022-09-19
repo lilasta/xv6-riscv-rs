@@ -477,6 +477,14 @@ pub struct InodeGuard<'a> {
     entry: ManuallyDrop<SleepLockGuard<'a, InodeEntry>>,
 }
 
+impl<'a> InodeGuard<'a> {
+    pub fn drop_with_lock(mut self, log: &LogGuard) {
+        unsafe { ManuallyDrop::drop(&mut self.entry) };
+        INODE_ALLOC.release(self.cache_index, log);
+        core::mem::forget(self);
+    }
+}
+
 impl<'a> Deref for InodeGuard<'a> {
     type Target = InodeEntry;
 
@@ -752,13 +760,13 @@ pub fn link(new: &str, old: &str) -> Result<(), ()> {
     let inum = ip.inode_number;
     ip.increment_link();
     ip.update(&log);
-    drop(ip);
+    ip.drop_with_lock(&log);
 
     let bad = |inode_ref: InodeReference, log| {
         let mut inode = inode_ref.lock();
         inode.decrement_link();
         inode.update(&log);
-        drop(inode);
+        inode.drop_with_lock(&log);
         drop(inode_ref);
         drop(log);
         Err(())
@@ -779,7 +787,7 @@ pub fn link(new: &str, old: &str) -> Result<(), ()> {
         return bad(inode_ref, log);
     }
 
-    drop(dir);
+    dir.drop_with_lock(&log);
     drop(inode_ref);
     drop(log);
     Ok(())
@@ -810,11 +818,11 @@ pub fn unlink(path: &str) -> Result<(), ()> {
         dir.decrement_link();
         dir.update(&log);
     }
-    drop(dir);
+    dir.drop_with_lock(&log);
 
     ip.decrement_link();
     ip.update(&log);
-    drop(ip);
+    ip.drop_with_lock(&log);
     drop(log);
     Ok(())
 }

@@ -251,7 +251,7 @@ fn sys_open() -> Result<u64, ()> {
         inode.truncate(&log);
     }
 
-    drop(inode);
+    inode.drop_with_lock(&log);
 
     Ok(fd as u64)
 }

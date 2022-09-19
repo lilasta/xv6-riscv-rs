@@ -105,7 +105,7 @@ pub unsafe fn execute(path: &str, argv: &[CString]) -> Result<usize, ()> {
             return bad(pagetable, size);
         }
     }
-    drop(inode);
+    inode.drop_with_lock(&log);
     drop(inode_ref);
     drop(log);
 
