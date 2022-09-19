@@ -2,7 +2,10 @@
 //! kernel stacks, page-table pages,
 //! and pipe buffers. Allocates whole 4096-byte pages.
 
-use core::{alloc::GlobalAlloc, ptr::NonNull};
+use core::{
+    alloc::{AllocError, Allocator, GlobalAlloc, Layout},
+    ptr::NonNull,
+};
 
 use crate::{
     memory_layout::{symbol_addr, PHYSTOP},
@@ -83,36 +86,39 @@ impl KernelAllocator {
 
         Some(page)
     }
+}
 
-    pub fn allocate<T>(&mut self) -> Option<NonNull<T>> {
-        assert!(core::mem::size_of::<T>() <= PGSIZE);
-        self.allocate_page().map(NonNull::cast::<T>)
+unsafe impl Allocator for SpinLock<KernelAllocator> {
+    fn allocate(&self, layout: core::alloc::Layout) -> Result<NonNull<[u8]>, AllocError> {
+        if PGSIZE < layout.size() {
+            return Err(AllocError);
+        }
+
+        if PGSIZE % layout.align() != 0 {
+            return Err(AllocError);
+        }
+
+        match self.lock().allocate_page() {
+            Some(ptr) => Ok(NonNull::from_raw_parts(ptr.cast(), PGSIZE)),
+            None => Err(AllocError),
+        }
     }
 
-    pub fn deallocate<T>(&mut self, pa: NonNull<T>) {
-        assert!(core::mem::size_of::<T>() <= PGSIZE);
-        self.deallocate_page(pa.cast());
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, _: Layout) {
+        self.lock().deallocate_page(ptr);
     }
 }
 
 unsafe impl GlobalAlloc for SpinLock<KernelAllocator> {
-    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
-        if PGSIZE < layout.size() {
-            return core::ptr::null_mut();
-        }
-
-        if PGSIZE % layout.align() != 0 {
-            return core::ptr::null_mut();
-        }
-
-        match self.lock().allocate_page() {
-            Some(ptr) => ptr.as_ptr(),
-            None => core::ptr::null_mut(),
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        match self.allocate(layout) {
+            Ok(ptr) => ptr.as_mut_ptr().cast(),
+            Err(_) => core::ptr::null_mut(),
         }
     }
 
-    unsafe fn dealloc(&self, ptr: *mut u8, _: core::alloc::Layout) {
-        self.lock().deallocate_page(NonNull::new_unchecked(ptr));
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        self.deallocate(NonNull::new_unchecked(ptr), layout)
     }
 }
 

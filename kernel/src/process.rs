@@ -4,7 +4,6 @@ mod table;
 mod trapframe;
 
 use core::mem::MaybeUninit;
-use core::ptr::NonNull;
 
 use crate::allocator;
 use crate::bitmap::Bitmap;
@@ -201,7 +200,7 @@ extern "C" fn finish_dispatch() {
 unsafe fn uvminit(pagetable: &mut PageTable, src: *const u8, size: usize) {
     assert!(size < PGSIZE);
 
-    let mem: NonNull<u8> = allocator::get().allocate().unwrap();
+    let mem = allocator::get().allocate_page().unwrap();
     core::ptr::write_bytes(mem.as_ptr(), 0, PGSIZE);
 
     pagetable
