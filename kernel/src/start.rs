@@ -7,18 +7,18 @@ use crate::{
 };
 
 #[repr(C, align(16))]
-struct Stack0([u8; ENTRY_STACKSIZE * NCPU]);
+struct EntryStack([u8; ENTRY_STACKSIZE]);
 
-impl Stack0 {
+impl EntryStack {
     pub const fn zeroed() -> Self {
-        Stack0([0; _])
+        Self([0; _])
     }
 }
 
 // entry.S needs one stack per CPU.
 #[used]
 #[no_mangle]
-static mut STACK0: Stack0 = Stack0::zeroed();
+static mut STACK0: [EntryStack; NCPU] = [const { EntryStack::zeroed() }; NCPU];
 
 // a scratch area per CPU for machine-mode timer interrupts.
 #[used]
