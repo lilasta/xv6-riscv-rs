@@ -7,7 +7,7 @@ use crate::{
     config::{MAXARG, MAXPATH, NDEV},
     exec::execute,
     file::File,
-    fs::{self, InodeKind},
+    fs::{self, InodeGuard, InodeKind},
     log,
     pipe::Pipe,
     process,
@@ -215,7 +215,7 @@ fn sys_open() -> Result<u64, ()> {
     let mut inode = if mode & O_CREATE != 0 {
         fs::create(path, InodeKind::File, 0, 0, &log)?
     } else {
-        let inode_ref = fs::search_inode(path).ok_or(())?;
+        let inode_ref = fs::search_inode(path, &log).ok_or(())?;
         let inode = inode_ref.lock();
         inode
     };
@@ -233,13 +233,13 @@ fn sys_open() -> Result<u64, ()> {
 
     let file = if inode.is_device() {
         File::new_device(
-            inode.as_ref(),
+            InodeGuard::as_ref(&inode).pin(),
             inode.device_major().unwrap(),
             readable,
             writable,
         )
     } else {
-        File::new_inode(inode.as_ref(), readable, writable)
+        File::new_inode(InodeGuard::as_ref(&inode).pin(), readable, writable)
     };
 
     let file = Arc::new(file);
@@ -250,8 +250,6 @@ fn sys_open() -> Result<u64, ()> {
     if mode & O_TRUNC != 0 && inode.is_file() {
         inode.truncate(&log);
     }
-
-    inode.drop_with_lock(&log);
 
     Ok(fd as u64)
 }
@@ -274,17 +272,20 @@ fn sys_chdir() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
     let path = arg_string::<0>(&mut path)?;
 
-    let inode_ref = fs::search_inode(path).ok_or(())?;
+    let log = log::start();
+    let inode_ref = fs::search_inode(path, &log).ok_or(())?;
     let inode = inode_ref.lock();
 
     if !inode.is_directory() {
         return Err(());
     }
-    drop(inode);
 
     let context = process::context().unwrap();
     context.cwd.take();
-    context.cwd.replace(inode_ref);
+    context
+        .cwd
+        .replace(inode_ref.pin())
+        .map(|cwd| cwd.drop_with_log(&log));
     Ok(0)
 }
 

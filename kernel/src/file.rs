@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicUsize, Ordering::*};
 use crate::{
     buffer::BSIZE,
     config::{MAXOPBLOCKS, NDEV},
-    fs::{InodeReference, Stat},
+    fs::{InodePin, Stat},
     log,
     pipe::Pipe,
 };
@@ -16,13 +16,13 @@ pub enum File {
         pipe: Pipe<PIPESIZE>,
     },
     Inode {
-        inode: InodeReference<'static>,
+        inode: InodePin<'static>,
         offset: AtomicUsize,
         readable: bool,
         writable: bool,
     },
     Device {
-        inode: InodeReference<'static>,
+        inode: InodePin<'static>,
         major: usize,
         readable: bool,
         writable: bool,
@@ -34,7 +34,7 @@ impl File {
         Self::Pipe { pipe }
     }
 
-    pub const fn new_inode(inode: InodeReference<'static>, readable: bool, writable: bool) -> Self {
+    pub const fn new_inode(inode: InodePin<'static>, readable: bool, writable: bool) -> Self {
         Self::Inode {
             inode,
             offset: AtomicUsize::new(0),
@@ -44,7 +44,7 @@ impl File {
     }
 
     pub const fn new_device(
-        inode: InodeReference<'static>,
+        inode: InodePin<'static>,
         major: usize,
         readable: bool,
         writable: bool,
@@ -60,7 +60,11 @@ impl File {
     pub fn stat(&self) -> Result<Stat, ()> {
         match self {
             Self::Pipe { .. } => Err(()),
-            Self::Inode { inode, .. } | Self::Device { inode, .. } => Ok(inode.lock().stat()),
+            Self::Inode { inode, .. } | Self::Device { inode, .. } => {
+                let log = log::start();
+                let stat = inode.with_log(&log).lock().stat();
+                Ok(stat)
+            }
         }
     }
 
@@ -77,7 +81,8 @@ impl File {
                     return Err(());
                 }
 
-                let mut inode = inode.lock();
+                let log = log::start();
+                let mut inode = inode.with_log(&log).lock();
                 let read = inode.copy_to::<u8>(true, addr, offset.load(Acquire), n)?;
                 offset.fetch_add(read, Release);
                 Ok(read)
@@ -125,7 +130,7 @@ impl File {
                     let n = (n - i).min(max);
 
                     let log = log::start();
-                    let mut inode = inode.lock();
+                    let mut inode = inode.with_log(&log).lock();
                     let result =
                         inode.copy_from::<u8>(true, addr + i, offset.load(Acquire), n, &log);
                     let wrote = match result {
@@ -133,7 +138,7 @@ impl File {
                         Err(_) => 0,
                     };
                     offset.fetch_add(wrote, Release);
-                    inode.drop_with_lock(&log);
+                    drop(inode);
                     drop(log);
 
                     if wrote != n {

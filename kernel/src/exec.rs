@@ -38,7 +38,7 @@ fn load_segment(
 
 pub unsafe fn execute(path: &str, argv: &[CString]) -> Result<usize, ()> {
     let log = log::start();
-    let Some(inode_ref) = fs::search_inode(path) else {
+    let Some(inode_ref) = fs::search_inode(path, &log) else {
         return Err(());
     };
     let mut inode = inode_ref.lock();
@@ -105,7 +105,7 @@ pub unsafe fn execute(path: &str, argv: &[CString]) -> Result<usize, ()> {
             return bad(pagetable, size);
         }
     }
-    inode.drop_with_lock(&log);
+    drop(inode);
     drop(inode_ref);
     drop(log);
 

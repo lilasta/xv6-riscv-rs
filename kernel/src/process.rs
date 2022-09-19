@@ -15,7 +15,7 @@ use crate::riscv::enable_interrupt;
 use crate::riscv::paging::PageTable;
 use crate::spinlock::{SpinLock, SpinLockGuard};
 use crate::trap::usertrapret;
-use crate::{cpu, fs, interrupt};
+use crate::{cpu, fs, interrupt, log};
 
 use crate::{
     memory_layout::{TRAMPOLINE, TRAPFRAME},
@@ -226,7 +226,10 @@ pub unsafe fn setup_init_process() {
 
     context.trapframe.epc = 0;
     context.trapframe.sp = PGSIZE as _;
-    context.cwd = fs::search_inode(&"/");
+
+    let log = log::start();
+    context.cwd = fs::search_inode(&"/", &log).map(|inode| inode.pin());
+    drop(log);
 
     // process.name = "initcode";
 

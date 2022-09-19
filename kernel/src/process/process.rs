@@ -6,7 +6,7 @@ use crate::{
     config::NOFILE,
     context::Context as CPUContext,
     file::File,
-    fs::InodeReference,
+    fs::InodePin,
     process,
     riscv::paging::{PageTable, PGSIZE},
 };
@@ -187,13 +187,13 @@ impl Process {
 
 #[derive(Debug)]
 pub struct ProcessContext {
-    pub kstack: usize,                        // Virtual address of kernel stack
-    pub sz: usize,                            // Size of process memory (bytes)
-    pub pagetable: PageTable,                 // User page table
-    pub trapframe: Box<TrapFrame>,            // data page for trampoline.S
-    pub context: CPUContext,                  // swtch() here to run process
-    pub ofile: [Option<Arc<File>>; NOFILE],   // Open files
-    pub cwd: Option<InodeReference<'static>>, // Current directory
+    pub kstack: usize,                      // Virtual address of kernel stack
+    pub sz: usize,                          // Size of process memory (bytes)
+    pub pagetable: PageTable,               // User page table
+    pub trapframe: Box<TrapFrame>,          // data page for trampoline.S
+    pub context: CPUContext,                // swtch() here to run process
+    pub ofile: [Option<Arc<File>>; NOFILE], // Open files
+    pub cwd: Option<InodePin<'static>>,     // Current directory
 }
 
 impl ProcessContext {

@@ -71,7 +71,7 @@ impl Log {
         }
     }
 
-    fn start<'a>(mut self: SpinLockGuard<'a, Self>) -> LogGuard<'a> {
+    fn start(mut self: SpinLockGuard<'static, Self>) -> LogGuard {
         loop {
             if self.committing {
                 process::sleep(core::ptr::addr_of!(*self).addr(), &mut self);
@@ -123,12 +123,12 @@ impl Log {
 }
 
 #[derive(Debug)]
-pub struct LogGuard<'a> {
-    log: &'a SpinLock<Log>,
+pub struct LogGuard {
+    log: &'static SpinLock<Log>,
 }
 
-impl<'a> LogGuard<'a> {
-    fn new(log: &'a SpinLock<Log>) -> Self {
+impl LogGuard {
+    fn new(log: &'static SpinLock<Log>) -> Self {
         Self { log }
     }
 
@@ -137,7 +137,7 @@ impl<'a> LogGuard<'a> {
     }
 }
 
-impl<'a> Drop for LogGuard<'a> {
+impl Drop for LogGuard {
     fn drop(&mut self) {
         self.log.lock().end();
     }
@@ -145,7 +145,7 @@ impl<'a> Drop for LogGuard<'a> {
 
 static LOG: SpinLock<Log> = SpinLock::new(Log::new());
 
-pub fn start() -> LogGuard<'static> {
+pub fn start() -> LogGuard {
     LOG.lock().start()
 }
 

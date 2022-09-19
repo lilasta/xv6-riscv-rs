@@ -263,7 +263,11 @@ impl InodeEntry {
         }
     }
 
-    pub fn lookup(&mut self, name: &str) -> Option<(InodeReference<'static>, usize)> {
+    pub fn lookup<'log>(
+        &mut self,
+        name: &str,
+        log: &'log LogGuard,
+    ) -> Option<(InodeReference<'static, 'log>, usize)> {
         if !self.is_directory() {
             return None;
         }
@@ -280,7 +284,7 @@ impl InodeEntry {
 
             if cmp == entry.name {
                 return INODE_ALLOC
-                    .get(self.device, entry.inode_number as usize)
+                    .get(self.device, entry.inode_number as usize, log)
                     .map(|inode| (inode, offset));
             }
         }
@@ -364,7 +368,7 @@ impl InodeEntry {
             return Err(());
         }
 
-        if self.lookup(name).is_some() {
+        if self.lookup(name, log).is_some() {
             return Err(());
         }
 
@@ -427,23 +431,57 @@ impl InodeEntry {
         self.inode.size = 0;
         self.update(log);
     }
-
-    pub fn as_ref(&self) -> InodeReference<'static> {
-        INODE_ALLOC.get(self.device, self.inode_number).unwrap()
-    }
 }
 
 #[derive(Debug)]
-pub struct InodeReference<'a> {
+pub struct InodePin<'a> {
     cache_index: usize,
     entry: &'a SleepLock<InodeEntry>,
 }
 
-impl<'a> InodeReference<'a> {
-    pub fn lock(&self) -> InodeGuard<'a> {
+impl<'a> InodePin<'a> {
+    pub fn with_log<'log>(&self, log: &'log LogGuard) -> InodeReference<'a, 'log> {
+        INODE_ALLOC.duplicate(self.cache_index);
+        InodeReference {
+            cache_index: self.cache_index,
+            entry: self.entry,
+            log,
+        }
+    }
+
+    pub fn drop_with_log(self, log: &LogGuard) {
+        INODE_ALLOC.release(self.cache_index, &log);
+        core::mem::forget(self);
+    }
+}
+
+impl<'a> Clone for InodePin<'a> {
+    fn clone(&self) -> Self {
+        INODE_ALLOC.duplicate(self.cache_index);
+        Self { ..*self }
+    }
+}
+
+impl<'a> Drop for InodePin<'a> {
+    fn drop(&mut self) {
+        let log = log::start();
+        INODE_ALLOC.release(self.cache_index, &log);
+    }
+}
+
+#[derive(Debug)]
+pub struct InodeReference<'a, 'log> {
+    cache_index: usize,
+    entry: &'a SleepLock<InodeEntry>,
+    log: &'log LogGuard,
+}
+
+impl<'a, 'log> InodeReference<'a, 'log> {
+    pub fn lock(&self) -> InodeGuard<'a, 'log> {
         let mut guard = InodeGuard {
             cache_index: self.cache_index,
             entry: ManuallyDrop::new(self.entry.lock()),
+            log: self.log,
         };
 
         INODE_ALLOC.duplicate(self.cache_index);
@@ -455,37 +493,46 @@ impl<'a> InodeReference<'a> {
 
         guard
     }
+
+    pub fn pin(self) -> InodePin<'a> {
+        let pin = InodePin {
+            cache_index: self.cache_index,
+            entry: self.entry,
+        };
+        core::mem::forget(self);
+        pin
+    }
 }
 
-impl<'a> Clone for InodeReference<'a> {
+impl<'a, 'log> Clone for InodeReference<'a, 'log> {
     fn clone(&self) -> Self {
         INODE_ALLOC.duplicate(self.cache_index);
         Self { ..*self }
     }
 }
 
-impl<'a> Drop for InodeReference<'a> {
+impl<'a, 'log> Drop for InodeReference<'a, 'log> {
     fn drop(&mut self) {
-        let log = log::start();
-        INODE_ALLOC.release(self.cache_index, &log);
+        INODE_ALLOC.release(self.cache_index, self.log);
     }
 }
 
 #[derive(Debug)]
-pub struct InodeGuard<'a> {
+pub struct InodeGuard<'a, 'log> {
     cache_index: usize,
     entry: ManuallyDrop<SleepLockGuard<'a, InodeEntry>>,
+    log: &'log LogGuard,
 }
 
-impl<'a> InodeGuard<'a> {
-    pub fn drop_with_lock(mut self, log: &LogGuard) {
-        unsafe { ManuallyDrop::drop(&mut self.entry) };
-        INODE_ALLOC.release(self.cache_index, log);
-        core::mem::forget(self);
+impl<'a, 'log> InodeGuard<'a, 'log> {
+    pub fn as_ref(this: &Self) -> InodeReference<'a, 'log> {
+        INODE_ALLOC
+            .get(this.entry.device, this.entry.inode_number, this.log)
+            .unwrap()
     }
 }
 
-impl<'a> Deref for InodeGuard<'a> {
+impl<'a, 'log> Deref for InodeGuard<'a, 'log> {
     type Target = InodeEntry;
 
     fn deref(&self) -> &Self::Target {
@@ -493,18 +540,16 @@ impl<'a> Deref for InodeGuard<'a> {
     }
 }
 
-impl<'a> DerefMut for InodeGuard<'a> {
+impl<'a, 'log> DerefMut for InodeGuard<'a, 'log> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.entry
     }
 }
 
-impl<'i> Drop for InodeGuard<'i> {
+impl<'a, 'log> Drop for InodeGuard<'a, 'log> {
     fn drop(&mut self) {
         unsafe { ManuallyDrop::drop(&mut self.entry) };
-
-        let log = log::start();
-        INODE_ALLOC.release(self.cache_index, &log);
+        INODE_ALLOC.release(self.cache_index, self.log);
     }
 }
 
@@ -617,7 +662,12 @@ impl<const N: usize> InodeAllocator<N> {
         }
     }
 
-    pub fn get(&self, device: usize, inode_number: usize) -> Option<InodeReference> {
+    pub fn get<'a, 'log>(
+        &'a self,
+        device: usize,
+        inode_number: usize,
+        log: &'log LogGuard,
+    ) -> Option<InodeReference<'a, 'log>> {
         let mut cache = self.cache.lock();
 
         let (cache_index, is_new) = cache.get(InodeKey {
@@ -637,6 +687,7 @@ impl<const N: usize> InodeAllocator<N> {
         Some(InodeReference {
             cache_index,
             entry: &self.inodes[cache_index],
+            log,
         })
     }
 
@@ -689,17 +740,17 @@ pub fn initialize(device: usize) {
     unsafe { SUPERBLOCK = superblock };
 }
 
-pub fn create(
+pub fn create<'log>(
     path: &str,
     kind: InodeKind,
     major: u16,
     minor: u16,
-    log: &LogGuard,
-) -> Result<InodeGuard<'static>, ()> {
-    let (dir, name) = search_parent_inode(path).ok_or(())?;
-    let mut dir = dir.lock();
+    log: &'log LogGuard,
+) -> Result<InodeGuard<'static, 'log>, ()> {
+    let (dir_ref, name) = search_parent_inode(path, log).ok_or(())?;
+    let mut dir = dir_ref.lock();
 
-    match dir.lookup(name) {
+    match dir.lookup(name, log) {
         Some((inode_ref, _)) => {
             drop(dir);
             let inode = inode_ref.lock();
@@ -711,7 +762,7 @@ pub fn create(
         }
         None => {
             let inode_number = unsafe { SUPERBLOCK.allocate_inode(dir.device, kind, log)? };
-            let inode_ref = get(dir.device, inode_number).unwrap();
+            let inode_ref = get(dir.device, inode_number, log).ok_or(())?;
             let mut inode = inode_ref.lock();
             inode.inode.major = major;
             inode.inode.minor = minor;
@@ -741,7 +792,6 @@ pub fn create(
                 dir.update(log);
             }
 
-            drop(dir);
             Ok(inode)
         }
     }
@@ -749,62 +799,54 @@ pub fn create(
 
 pub fn link(new: &str, old: &str) -> Result<(), ()> {
     let log = log::start();
-    let inode_ref = search_inode(old).ok_or(())?;
-    let mut ip = inode_ref.lock();
+    let inode_ref = search_inode(old, &log).ok_or(())?;
+    let mut inode = inode_ref.lock();
 
-    if ip.is_directory() {
+    if inode.is_directory() {
         return Err(());
     }
 
-    let dev = ip.device;
-    let inum = ip.inode_number;
-    ip.increment_link();
-    ip.update(&log);
-    ip.drop_with_lock(&log);
+    let dev = inode.device;
+    let inum = inode.inode_number;
+    inode.increment_link();
+    inode.update(&log);
+    drop(inode);
 
     let bad = |inode_ref: InodeReference, log| {
         let mut inode = inode_ref.lock();
         inode.decrement_link();
-        inode.update(&log);
-        inode.drop_with_lock(&log);
-        drop(inode_ref);
-        drop(log);
+        inode.update(log);
         Err(())
     };
 
-    let Some((dir, name)) = search_parent_inode(new) else {
-        return bad(inode_ref, log);
+    let Some((dir_ref, name)) = search_parent_inode(new, &log) else {
+        return bad(inode_ref, &log);
     };
-    let mut dir = dir.lock();
+    let mut dir = dir_ref.lock();
 
     if dir.device != dev {
-        drop(dir);
-        return bad(inode_ref, log);
+        return bad(inode_ref, &log);
     }
 
     if dir.link(name, inum, &log).is_err() {
-        drop(dir);
-        return bad(inode_ref, log);
+        return bad(inode_ref, &log);
     }
 
-    dir.drop_with_lock(&log);
-    drop(inode_ref);
-    drop(log);
     Ok(())
 }
 
 pub fn unlink(path: &str) -> Result<(), ()> {
     let log = log::start();
 
-    let (dir, name) = search_parent_inode(path).ok_or(())?;
-    let mut dir = dir.lock();
+    let (dir_ref, name) = search_parent_inode(path, &log).ok_or(())?;
+    let mut dir = dir_ref.lock();
 
     if name == "." || name == ".." {
         return Err(());
     }
 
-    let (ip, offset) = dir.lookup(name).ok_or(())?;
-    let mut ip = ip.lock();
+    let (ip_ref, offset) = dir.lookup(name, &log).ok_or(())?;
+    let mut ip = ip_ref.lock();
     assert!(ip.counf_of_link() > 0);
 
     if ip.is_empty() == Some(false) {
@@ -818,12 +860,10 @@ pub fn unlink(path: &str) -> Result<(), ()> {
         dir.decrement_link();
         dir.update(&log);
     }
-    dir.drop_with_lock(&log);
+    drop(dir);
 
     ip.decrement_link();
     ip.update(&log);
-    ip.drop_with_lock(&log);
-    drop(log);
     Ok(())
 }
 
@@ -839,15 +879,28 @@ pub fn make_special_file(path: &str, major: u16, minor: u16) -> Result<(), ()> {
     Ok(())
 }
 
-pub fn get(device: usize, inode: usize) -> Option<InodeReference<'static>> {
-    INODE_ALLOC.get(device, inode)
+pub fn get<'log>(
+    device: usize,
+    inode: usize,
+    log: &'log LogGuard,
+) -> Option<InodeReference<'static, 'log>> {
+    INODE_ALLOC.get(device, inode, log)
 }
 
-pub fn search_inode(path: &str) -> Option<InodeReference<'static>> {
+pub fn search_inode<'log>(
+    path: &str,
+    log: &'log LogGuard,
+) -> Option<InodeReference<'static, 'log>> {
     let mut inode_ref = if path.starts_with("/") {
-        get(ROOTDEV, ROOTINO).unwrap()
+        get(ROOTDEV, ROOTINO, log).unwrap()
     } else {
-        process::context().unwrap().cwd.as_ref().cloned().unwrap()
+        process::context()
+            .unwrap()
+            .cwd
+            .as_ref()
+            .cloned()
+            .unwrap()
+            .with_log(log)
     };
 
     for element in path.split("/") {
@@ -860,7 +913,7 @@ pub fn search_inode(path: &str) -> Option<InodeReference<'static>> {
             return None;
         }
 
-        match inode.lookup(element) {
+        match inode.lookup(element, log) {
             Some((next, _)) => {
                 drop(inode);
                 inode_ref = next;
@@ -872,11 +925,20 @@ pub fn search_inode(path: &str) -> Option<InodeReference<'static>> {
     Some(inode_ref)
 }
 
-pub fn search_parent_inode(path: &str) -> Option<(InodeReference<'static>, &str)> {
+pub fn search_parent_inode<'p, 'log>(
+    path: &'p str,
+    log: &'log LogGuard,
+) -> Option<(InodeReference<'static, 'log>, &'p str)> {
     let mut inode_ref = if path.starts_with("/") {
-        get(ROOTDEV, ROOTINO).unwrap()
+        get(ROOTDEV, ROOTINO, log).unwrap()
     } else {
-        process::context().unwrap().cwd.as_ref().cloned().unwrap()
+        process::context()
+            .unwrap()
+            .cwd
+            .as_ref()
+            .cloned()
+            .unwrap()
+            .with_log(log)
     };
 
     let mut iter = path.split("/").peekable();
@@ -891,11 +953,10 @@ pub fn search_parent_inode(path: &str) -> Option<(InodeReference<'static>, &str)
         }
 
         if iter.peek().is_none() {
-            drop(inode);
             return Some((inode_ref, element));
         }
 
-        match inode.lookup(element) {
+        match inode.lookup(element, log) {
             Some((next, _)) => {
                 drop(inode);
                 inode_ref = next;

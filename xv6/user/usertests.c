@@ -2958,7 +2958,7 @@ struct test
     {rwsbrk, "rwsbrk"},
     {truncate1, "truncate1"},
     {truncate2, "truncate2"},
-    //{truncate3, "truncate3"},
+    {truncate3, "truncate3"},
     {openiputtest, "openiput"},
     {exitiputtest, "exitiput"},
     {iputtest, "iput"},
