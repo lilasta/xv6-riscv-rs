@@ -105,11 +105,6 @@ impl<T> SpinLock<T> {
         ret
     }
 
-    pub fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
-        let mut guard = self.lock();
-        f(guard.deref_mut())
-    }
-
     pub unsafe fn get(&self) -> &T {
         &*self.value.get()
     }
