@@ -14,10 +14,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
+    - name: Install gcc
+      run: sudo apt install gcc-riscv64-unknown-elf
+    - name: Install binutils
+      run: sudo apt install binutils-riscv64-unknown-elf
     - name: Add target
       run: rustup target add riscv64gc-unknown-none-elf
     - name: Run doc
-      run: cargo doc --no-deps
+      run: TOOLPREFIX=riscv64-unknown-elf- cargo doc --no-deps
       working-directory: kernel
     - name: Deploy
       uses: actions/upload-pages-artifact@v1

@@ -1,9 +1,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-const CC: &'static str = "riscv64-elf-gcc";
-const LD: &'static str = "riscv64-elf-ld";
-const OBJCOPY: &'static str = "riscv64-elf-objcopy";
+const TOOLPREFIX_DEFAULT: &'static str = "riscv64-elf-";
 
 const CFLAGS: &[&'static str] = &[
     "-Wall",
@@ -32,9 +30,15 @@ fn main() {
     print_rerun();
     print_ldflags();
 
+    let prefix = std::env::var("TOOLPREFIX").unwrap_or(TOOLPREFIX_DEFAULT.to_string());
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let out_dir = PathBuf::from(out_dir);
-    build_initcode(&out_dir);
+    build_initcode(
+        &format!("{prefix}gcc"),
+        &format!("{prefix}ld"),
+        &format!("{prefix}objdump"),
+        &out_dir,
+    );
 }
 
 fn print_rerun() {
@@ -55,17 +59,17 @@ fn print_ldflags() {
     println!("cargo:rustc-link-arg=linker.ld");
 }
 
-fn build_initcode(out_path: &PathBuf) {
+fn build_initcode(cc: &str, ld: &str, objcopy: &str, out_path: &PathBuf) {
     println!("cargo:rerun-if-changed=asm/initcode.S");
 
-    Command::new(CC)
+    Command::new(cc)
         .args(CFLAGS)
         .args(&["-nostdinc", "-I.", "-Ikernel", "-c", "asm/initcode.S", "-o"])
         .arg(out_path.join("initcode.o"))
         .status()
         .unwrap();
 
-    Command::new(LD)
+    Command::new(ld)
         .args(LDFLAGS)
         .args(&["-N", "-e", "start", "-Ttext", "0", "-o"])
         .arg(out_path.join("initcode.out"))
@@ -73,7 +77,7 @@ fn build_initcode(out_path: &PathBuf) {
         .status()
         .unwrap();
 
-    Command::new(OBJCOPY)
+    Command::new(objcopy)
         .args(&["-S", "-O", "binary"])
         .arg(out_path.join("initcode.out"))
         .arg(out_path.join("initcode"))
