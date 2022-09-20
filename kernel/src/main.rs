@@ -7,6 +7,7 @@
 #![feature(asm_const)]
 #![feature(arbitrary_self_types)]
 #![feature(const_convert)]
+#![feature(const_eval_select)]
 #![feature(const_for)]
 #![feature(const_maybe_uninit_uninit_array)]
 #![feature(const_maybe_uninit_zeroed)]
@@ -23,6 +24,7 @@
 #![feature(const_slice_index)]
 #![feature(const_trait_impl)]
 #![feature(const_try)]
+#![feature(core_intrinsics)]
 #![feature(cstr_from_bytes_until_nul)]
 #![feature(decl_macro)]
 #![feature(fn_traits)]
@@ -91,6 +93,28 @@ pub macro print($($arg:tt)*) {{
 
 pub macro println($($arg:tt)*) {{
     let _ = writeln!(CONSOLE.lock(), "{}", format_args!($($arg)*));
+}}
+
+pub macro runtime($e:expr) {{
+    use core::intrinsics::const_eval_select;
+    use core::marker::Destruct;
+
+    const fn nop<F>(_: F)
+    where
+        F: FnOnce(),
+        F: ~const Destruct,
+    {
+    }
+
+    fn run<F>(f: F)
+    where
+        F: FnOnce(),
+    {
+        f();
+    }
+
+    let assert = || $e;
+    unsafe { const_eval_select((assert,), nop, run) };
 }}
 
 #[panic_handler]

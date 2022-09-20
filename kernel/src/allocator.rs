@@ -10,6 +10,7 @@ use core::{
 use crate::{
     memory_layout::{symbol_addr, PHYSTOP},
     riscv::paging::{pg_roundup, PGSIZE},
+    runtime,
     spinlock::{SpinLock, SpinLockGuard},
 };
 
@@ -37,41 +38,39 @@ impl KernelAllocator {
         }
     }
 
+    // Allocate one 4096-byte page of physical memory.
+    // Returns a pointer that the kernel can use.
+    // Returns 0 if the memory cannot be allocated.
+    pub const fn allocate_page(&mut self) -> Option<NonNull<u8>> {
+        let page = self.head?;
+
+        self.head = unsafe { page.as_ref().next };
+
+        // fill with junk
+        unsafe { core::ptr::write_bytes(page.as_ptr(), 5, PGSIZE) };
+
+        Some(page.cast())
+    }
+
     // Free the page of physical memory pointed at by pa,
     // which normally should have been returned by a
     // call to kalloc().  (The exception is when
     // initializing the allocator; see kinit above.)
-    pub fn deallocate_page(&mut self, pa: NonNull<u8>) {
-        assert!(pa.addr().get() % PGSIZE == 0);
-        assert!(pa.addr().get() >= symbol_addr!(end));
-        assert!(pa.addr().get() < PHYSTOP);
+    pub const fn deallocate_page(&mut self, pa: NonNull<u8>) {
+        runtime!({
+            assert!(pa.addr().get() % PGSIZE == 0);
+            assert!(pa.addr().get() >= symbol_addr!(end));
+            assert!(pa.addr().get() < PHYSTOP);
+        });
 
         // Fill with junk to catch dangling refs.
-        unsafe {
-            core::ptr::write_bytes(pa.as_ptr(), 1, PGSIZE);
-        }
+        unsafe { core::ptr::write_bytes(pa.as_ptr(), 1, PGSIZE) };
 
         unsafe {
             let mut block: NonNull<Block> = pa.cast();
             block.as_mut().next = self.head;
             self.head = Some(block);
         }
-    }
-
-    // Allocate one 4096-byte page of physical memory.
-    // Returns a pointer that the kernel can use.
-    // Returns 0 if the memory cannot be allocated.
-    pub fn allocate_page(&mut self) -> Option<NonNull<u8>> {
-        let page = self.head?;
-
-        self.head = unsafe { page.as_ref().next };
-
-        let page: NonNull<u8> = page.cast();
-
-        // fill with junk
-        unsafe { core::ptr::write_bytes(page.as_ptr(), 5, PGSIZE) };
-
-        Some(page)
     }
 }
 
