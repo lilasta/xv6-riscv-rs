@@ -2,6 +2,7 @@
 #![no_main]
 #![allow(dead_code)]
 #![allow(incomplete_features)]
+#![allow(clippy::let_and_return)]
 #![deny(clippy::disallowed_methods)]
 #![feature(allocator_api)]
 #![feature(alloc_error_handler)]
