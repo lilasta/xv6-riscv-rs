@@ -109,6 +109,7 @@ impl<T> SpinLock<T> {
         &*self.value.get()
     }
 
+    #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_mut(&self) -> &mut T {
         &mut *self.value.get()
     }

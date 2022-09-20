@@ -179,7 +179,10 @@ impl UART {
         let mut tx = self.tx.lock();
 
         if self.is_panicked() {
-            loop {}
+            loop {
+                core::arch::riscv64::pause();
+                core::hint::spin_loop();
+            }
         }
 
         loop {
@@ -204,7 +207,10 @@ impl UART {
 
         interrupt::off(|| {
             if self.is_panicked() {
-                loop {}
+                loop {
+                    core::arch::riscv64::pause();
+                    core::hint::spin_loop();
+                }
             }
 
             // wait for Transmit Holding Empty to be set in LSR.

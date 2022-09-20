@@ -24,8 +24,7 @@ pub unsafe fn initialize_for_core() {
 // ask the PLIC what interrupt we should serve.
 pub unsafe fn plic_claim() -> u32 {
     let hart = read_reg!(tp);
-    let irq = <*mut u32>::from_bits(plic_sclaim(hart)).read();
-    irq
+    <*mut u32>::from_bits(plic_sclaim(hart)).read()
 }
 
 // tell the PLIC we've served this IRQ.

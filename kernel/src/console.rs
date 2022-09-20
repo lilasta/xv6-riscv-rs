@@ -102,7 +102,7 @@ impl Console {
                     return;
                 }
 
-                let c = if c == '\r' as u8 { b'\n' } else { c };
+                let c = if c == b'\r' { b'\n' } else { c };
 
                 // echo back to the user.
                 Self::putc(c);
@@ -171,7 +171,7 @@ impl<'a> SpinLockGuard<'a, Console> {
             }
         }
 
-        return (target - n) as i32;
+        (target - n) as i32
     }
 }
 

@@ -73,9 +73,8 @@ impl Log {
 
     fn start(mut self: SpinLockGuard<'static, Self>) -> LogGuard {
         loop {
-            if self.committing {
-                process::sleep(core::ptr::addr_of!(*self).addr(), &mut self);
-            } else if self.header.n as usize + (self.outstanding + 1) * MAXOPBLOCKS > LOGSIZE {
+            let is_full = self.header.n as usize + (self.outstanding + 1) * MAXOPBLOCKS > LOGSIZE;
+            if self.committing || is_full {
                 process::sleep(core::ptr::addr_of!(*self).addr(), &mut self);
             } else {
                 self.outstanding += 1;

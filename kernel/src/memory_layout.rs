@@ -38,8 +38,12 @@ pub const CLINT_MTIME: usize = CLINT + 0xBFF8; // cycles since boot.
 
 // qemu puts platform-level interrupt controller (PLIC) here.
 pub const PLIC: usize = 0x0c000000;
+
+#[allow(clippy::identity_op)]
 pub const PLIC_PRIORITY: usize = PLIC + 0x0;
+
 pub const PLIC_PENDING: usize = PLIC + 0x1000;
+
 pub const fn plic_menable(hart: u64) -> usize {
     PLIC + 0x2000 + hart as usize * 0x100
 }

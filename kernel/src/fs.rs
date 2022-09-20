@@ -455,7 +455,7 @@ impl<'a> InodePin<'a> {
     }
 
     pub fn drop_with_log(self, log: &LogGuard) {
-        INODE_ALLOC.release(self.cache_index, &log);
+        INODE_ALLOC.release(self.cache_index, log);
         core::mem::forget(self);
     }
 }
@@ -600,7 +600,7 @@ impl SuperBlock {
             let bitmap = unsafe { bitmap_buf.read::<Bitmap<{ BITMAP_BITS }>>() };
             match bitmap.allocate() {
                 Some(index) if (bi + index) < self.size as usize => {
-                    log.write(&mut bitmap_buf);
+                    log.write(&bitmap_buf);
 
                     let block = bi + index;
                     write_zeros_to_block(device, block, log);
@@ -644,7 +644,7 @@ impl SuperBlock {
             let inode = &mut inodes[in_block_index];
             if inode.kind == InodeKind::Unused {
                 inode.kind = kind;
-                log.write(&mut block);
+                log.write(&block);
 
                 return Ok(inum);
             }
@@ -729,7 +729,7 @@ static INODE_ALLOC: InodeCache<NINODE> = InodeCache::new();
 fn write_zeros_to_block(device: usize, block: usize, log: &LogGuard) {
     let mut buf = buffer::get(device, block).unwrap();
     buf.clear();
-    log.write(&mut buf);
+    log.write(&buf);
 }
 
 pub fn initialize(device: usize) {
@@ -759,11 +759,11 @@ pub fn create<'log>(
         Some((inode_ref, _)) => {
             drop(dir);
             let inode = inode_ref.lock();
-            return if kind == InodeKind::File && (inode.is_file() || inode.is_device()) {
+            if kind == InodeKind::File && (inode.is_file() || inode.is_device()) {
                 Ok(inode)
             } else {
                 Err(())
-            };
+            }
         }
         None => {
             let inode_number = unsafe { SUPERBLOCK.allocate_inode(dir.device, kind, log)? };
@@ -896,7 +896,7 @@ pub fn search_inode<'log>(
     path: &str,
     log: &'log LogGuard,
 ) -> Option<InodeReference<'static, 'log>> {
-    let mut inode_ref = if path.starts_with("/") {
+    let mut inode_ref = if path.starts_with('/') {
         get(ROOTDEV, ROOTINO, log).unwrap()
     } else {
         process::context()
@@ -908,7 +908,7 @@ pub fn search_inode<'log>(
             .into_ref(log)
     };
 
-    for element in path.split("/") {
+    for element in path.split('/') {
         if element.is_empty() {
             continue;
         }
@@ -934,7 +934,7 @@ pub fn search_parent_inode<'p, 'log>(
     path: &'p str,
     log: &'log LogGuard,
 ) -> Option<(InodeReference<'static, 'log>, &'p str)> {
-    let mut inode_ref = if path.starts_with("/") {
+    let mut inode_ref = if path.starts_with('/') {
         get(ROOTDEV, ROOTINO, log).unwrap()
     } else {
         process::context()
@@ -946,7 +946,7 @@ pub fn search_parent_inode<'p, 'log>(
             .into_ref(log)
     };
 
-    let mut iter = path.split("/").peekable();
+    let mut iter = path.split('/').peekable();
     while let Some(element) = iter.next() {
         if element.is_empty() {
             continue;

@@ -215,8 +215,7 @@ fn sys_open() -> Result<u64, ()> {
         fs::create(path, InodeKind::File, 0, 0, &log)?
     } else {
         let inode_ref = fs::search_inode(path, &log).ok_or(())?;
-        let inode = inode_ref.lock();
-        inode
+        inode_ref.lock()
     };
 
     if inode.is_directory() && mode != O_RDONLY {
