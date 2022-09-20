@@ -11,9 +11,9 @@ use crate::config::{NCPU, NPROC, ROOTDEV};
 use crate::memory_layout::{kstack, kstack_index};
 use crate::process::process::ProcessContext;
 use crate::riscv::enable_interrupt;
-use crate::riscv::paging::PageTable;
 use crate::spinlock::{SpinLock, SpinLockGuard};
 use crate::trap::usertrapret;
+use crate::vm::PageTable;
 use crate::{cpu, fs, interrupt, log};
 
 use crate::{
@@ -164,7 +164,7 @@ static KSTACK_USED: SpinLock<Bitmap<NPROC>> = SpinLock::new(Bitmap::new());
 
 pub fn initialize_kstack(pagetable: &mut PageTable) {
     for i in 0..NPROC {
-        let memory = allocator::get().allocate_page().unwrap();
+        let memory = allocator::get().lock().allocate_page().unwrap();
         let pa = memory.addr().get();
         let va = kstack(i);
         pagetable.map(va, pa, PGSIZE, PTE::R | PTE::W).unwrap();
@@ -200,7 +200,7 @@ extern "C" fn finish_dispatch() {
 unsafe fn uvminit(pagetable: &mut PageTable, src: *const u8, size: usize) {
     assert!(size < PGSIZE);
 
-    let mem = allocator::get().allocate_page().unwrap();
+    let mem = allocator::get().lock().allocate_page().unwrap();
     core::ptr::write_bytes(mem.as_ptr(), 0, PGSIZE);
 
     pagetable
@@ -239,7 +239,7 @@ pub unsafe fn setup_init_process() {
 }
 
 pub fn allocate_pagetable(trapframe: usize) -> Result<PageTable, ()> {
-    let mut pagetable = PageTable::allocate()?;
+    let mut pagetable = PageTable::allocate_in(allocator::get())?;
 
     // map the trampoline code (for system call return)
     // at the highest user virtual address.

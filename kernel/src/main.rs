@@ -22,6 +22,7 @@
 #![feature(const_ptr_is_null)]
 #![feature(const_ptr_read)]
 #![feature(const_ptr_write)]
+#![feature(const_result_drop)]
 #![feature(const_slice_index)]
 #![feature(const_trait_impl)]
 #![feature(const_try)]

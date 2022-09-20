@@ -2,20 +2,24 @@
 
 use core::arch::riscv64::sfence_vma;
 
+use crate::allocator::{self, KernelAllocator};
+use crate::spinlock::SpinLock;
 use crate::{
     memory_layout::{symbol_addr, KERNBASE, PHYSTOP, PLIC, TRAMPOLINE, UART0, VIRTIO0},
     process,
     riscv::{
-        paging::{PageTable, PGSIZE, PTE},
+        paging::{PGSIZE, PTE},
         satp::make_satp,
         write_csr,
     },
 };
 
+pub type PageTable = crate::riscv::paging::PageTable<&'static SpinLock<KernelAllocator>>;
+
 static mut KERNEL_PAGETABLE: Option<PageTable> = None;
 
 pub unsafe fn initialize() {
-    let mut pagetable = PageTable::allocate().unwrap();
+    let mut pagetable = PageTable::allocate_in(allocator::get()).unwrap();
     let etext = symbol_addr!(etext);
     let trampoline = symbol_addr!(trampoline);
 

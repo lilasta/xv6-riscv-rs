@@ -1,8 +1,7 @@
+use core::alloc::{Allocator, Layout};
 use core::ptr::NonNull;
 
 use alloc::boxed::Box;
-
-use crate::allocator;
 
 // bytes per page
 pub const PGSIZE: usize = 4096;
@@ -118,15 +117,19 @@ impl PTE {
     }
 }
 
+// TODO: [PTE; 512]'s align must be PGSIZE
 #[derive(Debug)]
-pub struct PageTable {
-    table: Box<[PTE; 512]>,
+pub struct PageTable<A: Allocator + Copy> {
+    table: Box<[PTE; 512], A>,
+    allocator: A,
 }
 
-impl PageTable {
-    pub fn allocate() -> Result<Self, ()> {
-        let table = Box::try_new([const { PTE::invalid() }; _]).map_err(|_| ())?;
-        Ok(Self { table })
+impl<A: Allocator + Copy> PageTable<A> {
+    const PAGE_LAYOUT: Layout = Layout::from_size_align(PGSIZE, PGSIZE).ok().unwrap();
+
+    pub fn allocate_in(allocator: A) -> Result<Self, ()> {
+        let table = Box::try_new_in([const { PTE::invalid() }; _], allocator).map_err(|_| ())?;
+        Ok(Self { table, allocator })
     }
 
     pub fn leak<'a>(mut self) -> &'a mut [PTE; 512] {
@@ -140,13 +143,15 @@ impl PageTable {
     }
 
     pub fn copy(&mut self, to: &mut Self, size: usize) -> Result<(), ()> {
+        let allocator = self.allocator;
+
         for i in (0..size).step_by(PGSIZE) {
             let pte = self.search_entry(i, false).unwrap();
             assert!(pte.is_valid());
 
-            let mem = match allocator::get().allocate_page() {
-                Some(mem) => mem,
-                None => {
+            let page = match allocator.allocate(Self::PAGE_LAYOUT) {
+                Ok(mem) => mem,
+                Err(_) => {
                     to.unmap(0, i / PGSIZE, true);
                     return Err(());
                 }
@@ -155,10 +160,11 @@ impl PageTable {
             let pa = pte.get_physical_addr();
             let flags = pte.get_flags();
 
-            unsafe { core::ptr::copy(<*const u8>::from_bits(pa), mem.as_ptr(), PGSIZE) };
+            unsafe { core::ptr::copy(<*const u8>::from_bits(pa), page.as_ptr().cast(), PGSIZE) };
 
-            if let Err(_) = to.map(i, mem.addr().get(), PGSIZE, flags) {
-                allocator::get().deallocate_page(mem);
+            let (ptr, size) = page.to_raw_parts();
+            if let Err(_) = to.map(i, ptr.addr().get(), size, flags) {
+                unsafe { allocator.deallocate(ptr.cast(), Self::PAGE_LAYOUT) }
                 to.unmap(0, i / PGSIZE, true);
                 return Err(());
             }
@@ -205,6 +211,7 @@ impl PageTable {
     pub fn unmap(&mut self, va: usize, npages: usize, free: bool) {
         assert!(va % PGSIZE == 0);
 
+        let allocator = self.allocator;
         for va in (va..).step_by(PGSIZE).take(npages) {
             let pte = self.search_entry(va, false).unwrap();
             assert!(pte.is_valid());
@@ -214,7 +221,7 @@ impl PageTable {
                 let ptr = pte.get_physical_addr();
                 let ptr = <*mut _>::from_bits(ptr);
                 let ptr = NonNull::new(ptr).unwrap();
-                allocator::get().deallocate_page(ptr);
+                unsafe { allocator.deallocate(ptr, Self::PAGE_LAYOUT) }
             }
 
             pte.clear();
@@ -231,19 +238,18 @@ impl PageTable {
         let grow_start = pg_roundup(old_size);
         let grow_end = new_size;
         for a in (grow_start..grow_end).step_by(PGSIZE) {
-            let Some(mem) = allocator::get().allocate_page() else {
+            let Ok(mem) = self.allocator.allocate(Self::PAGE_LAYOUT) else {
                 self.shrink(a, old_size).unwrap();
                 return Err(());
             };
 
-            unsafe {
-                core::ptr::write_bytes(mem.as_ptr(), 0, PGSIZE);
-            }
+            let (ptr, size) = mem.to_raw_parts();
+            unsafe { core::ptr::write_bytes(ptr.as_ptr().cast::<u8>(), 0, PGSIZE) };
 
-            let result = self.map(a, mem.addr().get(), PGSIZE, perm | PTE::R | PTE::U);
+            let result = self.map(a, ptr.addr().get(), size, perm | PTE::R | PTE::U);
 
             if result.is_err() {
-                allocator::get().deallocate_page(mem);
+                unsafe { self.allocator.deallocate(ptr.cast(), Self::PAGE_LAYOUT) };
                 self.shrink(a, old_size).unwrap();
                 return Err(());
             }
@@ -301,7 +307,7 @@ impl PageTable {
                     return Err(());
                 }
 
-                let new_table = Self::allocate()?;
+                let new_table = Self::allocate_in(self.allocator)?;
 
                 pte.clear();
                 pte.set_physical_addr(new_table.as_u64() as usize);
@@ -419,7 +425,7 @@ impl PageTable {
     }
 }
 
-impl Drop for PageTable {
+impl<A: Allocator + Copy> Drop for PageTable<A> {
     fn drop(&mut self) {
         for pte in self.table.iter_mut() {
             if pte.is_valid() {
@@ -429,8 +435,11 @@ impl Drop for PageTable {
 
                 let child = pte.get_physical_addr();
                 let child = child as *mut [PTE; 512];
-                let child = unsafe { Box::from_raw(child) };
-                drop(Self { table: child });
+                let child = unsafe { Box::from_raw_in(child, self.allocator) };
+                drop(Self {
+                    table: child,
+                    allocator: self.allocator,
+                });
 
                 pte.clear();
             }

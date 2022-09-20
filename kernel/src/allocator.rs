@@ -11,13 +11,14 @@ use crate::{
     memory_layout::{symbol_addr, PHYSTOP},
     riscv::paging::{pg_roundup, PGSIZE},
     runtime,
-    spinlock::{SpinLock, SpinLockGuard},
+    spinlock::SpinLock,
 };
 
 struct Block {
     next: Option<NonNull<Block>>,
 }
 
+#[derive(Debug)]
 pub struct KernelAllocator {
     head: Option<NonNull<Block>>,
 }
@@ -111,7 +112,7 @@ unsafe impl GlobalAlloc for SpinLock<KernelAllocator> {
 }
 
 pub fn initialize() {
-    let mut allocator = get();
+    let mut allocator = get().lock();
     assert!(allocator.head.is_none());
 
     let phy_start = symbol_addr!(end);
@@ -119,8 +120,8 @@ pub fn initialize() {
     allocator.register_blocks(phy_start, phy_end);
 }
 
-pub fn get() -> SpinLockGuard<'static, KernelAllocator> {
+pub fn get() -> &'static SpinLock<KernelAllocator> {
     #[global_allocator]
     static ALLOCATOR: SpinLock<KernelAllocator> = SpinLock::new(KernelAllocator::empty());
-    ALLOCATOR.lock()
+    &ALLOCATOR
 }

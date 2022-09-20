@@ -304,13 +304,13 @@ fn sys_exec() -> Result<u64, ()> {
             break;
         }
 
-        let Some(mem) = allocator::get().allocate_page() else {
+        let Some(mem) = allocator::get().lock().allocate_page() else {
             return Err(());
         };
 
         let buffer = unsafe { core::slice::from_raw_parts_mut(mem.as_ptr(), PGSIZE) };
         if unsafe { read_string_from_process_memory(addr, buffer).is_err() } {
-            allocator::get().deallocate_page(mem);
+            allocator::get().lock().deallocate_page(mem);
             return Err(());
         }
 

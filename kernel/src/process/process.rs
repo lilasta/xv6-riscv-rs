@@ -2,13 +2,10 @@ use core::ffi::c_char;
 
 use alloc::{boxed::Box, sync::Arc};
 
+use crate::vm::PageTable;
 use crate::{
-    config::NOFILE,
-    context::Context as CPUContext,
-    file::File,
-    fs::InodePin,
-    process,
-    riscv::paging::{PageTable, PGSIZE},
+    config::NOFILE, context::Context as CPUContext, file::File, fs::InodePin, process,
+    riscv::paging::PGSIZE,
 };
 
 use super::{free_pagetable, trapframe::TrapFrame};

@@ -1,11 +1,12 @@
 use alloc::ffi::CString;
 
+use crate::vm::PageTable;
 use crate::{
     config::MAXARG,
     elf::{ELFHeader, ProgramHeader},
     fs::{self, InodeGuard},
     log, process,
-    riscv::paging::{pg_roundup, PageTable, PGSIZE, PTE},
+    riscv::paging::{pg_roundup, PGSIZE, PTE},
 };
 
 fn flags2perm(flags: u32) -> u64 {
