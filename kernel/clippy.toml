@@ -1,0 +1,3 @@
+disallowed-methods = [
+    "alloc::boxed::Box::new",
+]

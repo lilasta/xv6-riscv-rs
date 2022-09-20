@@ -2,6 +2,7 @@
 #![no_main]
 #![allow(dead_code)]
 #![allow(incomplete_features)]
+#![deny(clippy::disallowed_methods)]
 #![feature(allocator_api)]
 #![feature(alloc_error_handler)]
 #![feature(asm_const)]
@@ -144,7 +145,9 @@ pub unsafe extern "C" fn main() {
         process::setup_init_process(); // first user process
         STARTED.store(true, Ordering::SeqCst);
     } else {
-        while !STARTED.load(Ordering::SeqCst) {}
+        while !STARTED.load(Ordering::SeqCst) {
+            core::hint::spin_loop();
+        }
 
         println!("hart {} starting", cpu::id());
         vm::initialize_for_core(); // turn on paging
