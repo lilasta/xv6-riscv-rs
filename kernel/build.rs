@@ -1,9 +1,9 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const TOOLPREFIX_DEFAULT: &'static str = "riscv64-elf-";
+const TOOLPREFIX_DEFAULT: &str = "riscv64-elf-";
 
-const CFLAGS: &[&'static str] = &[
+const CFLAGS: &[&str] = &[
     "-Wall",
     "-Werror",
     "-O",
@@ -23,14 +23,14 @@ const CFLAGS: &[&'static str] = &[
     "-mabi=lp64d",
 ];
 
-const LDFLAGS: &[&'static str] = &["-z", "max-page-size=4096"];
+const LDFLAGS: &[&str] = &["-z", "max-page-size=4096"];
 
 fn main() {
     std::env::set_var("CFLAGS", "");
     print_rerun();
     print_ldflags();
 
-    let prefix = std::env::var("TOOLPREFIX").unwrap_or(TOOLPREFIX_DEFAULT.to_string());
+    let prefix = std::env::var("TOOLPREFIX").unwrap_or_else(|_| TOOLPREFIX_DEFAULT.to_string());
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let out_dir = PathBuf::from(out_dir);
     build_initcode(
@@ -59,24 +59,24 @@ fn print_ldflags() {
     println!("cargo:rustc-link-arg=linker.ld");
 }
 
-fn build_initcode(cc: &str, ld: &str, objcopy: &str, out_path: &PathBuf) {
+fn build_initcode(cc: &str, ld: &str, objcopy: &str, out_path: &Path) {
     Command::new(cc)
         .args(CFLAGS)
-        .args(&["-nostdinc", "-I.", "-Ikernel", "-c", "asm/initcode.S", "-o"])
+        .args(["-nostdinc", "-I.", "-Ikernel", "-c", "asm/initcode.S", "-o"])
         .arg(out_path.join("initcode.o"))
         .status()
         .unwrap();
 
     Command::new(ld)
         .args(LDFLAGS)
-        .args(&["-N", "-e", "start", "-Ttext", "0", "-o"])
+        .args(["-N", "-e", "start", "-Ttext", "0", "-o"])
         .arg(out_path.join("initcode.out"))
         .arg(out_path.join("initcode.o"))
         .status()
         .unwrap();
 
     Command::new(objcopy)
-        .args(&["-S", "-O", "binary"])
+        .args(["-S", "-O", "binary"])
         .arg(out_path.join("initcode.out"))
         .arg(out_path.join("initcode"))
         .status()

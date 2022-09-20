@@ -88,11 +88,11 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use crate::console::CONSOLE;
 
 pub macro print($($arg:tt)*) {{
-    let _ = write!(CONSOLE.lock(), "{}", format_args!($($arg)*));
+    let _ = write!(CONSOLE.lock(), $($arg)*);
 }}
 
 pub macro println($($arg:tt)*) {{
-    let _ = writeln!(CONSOLE.lock(), "{}", format_args!($($arg)*));
+    let _ = writeln!(CONSOLE.lock(), $($arg)*);
 }}
 
 pub macro runtime($e:expr) {{
@@ -133,9 +133,9 @@ pub unsafe extern "C" fn main() {
 
     if cpu::id() == 0 {
         console::initialize();
-        println!("");
+        println!();
         println!("xv6 kernel is booting");
-        println!("");
+        println!();
         allocator::initialize(); // physical page allocator
         vm::initialize(); // create kernel page table
         vm::initialize_for_core(); // turn on paging
