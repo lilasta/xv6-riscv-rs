@@ -8,10 +8,9 @@ use crate::{
 
 pub const BSIZE: usize = 1024;
 
-pub const fn check_buffer_conversion<T, const SIZE: usize>() -> usize {
+const fn check_convertibility<T, const SIZE: usize>() {
     assert!(core::mem::size_of::<T>() <= SIZE);
     assert!(!core::mem::needs_drop::<T>());
-    0
 }
 
 #[derive(PartialEq, Eq)]
@@ -79,10 +78,9 @@ impl<'a, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, BSIZE, CSIZE> {
         )
     }
 
-    pub unsafe fn read<T>(&mut self) -> &mut T
-    where
-        [(); check_buffer_conversion::<T, BSIZE>()]:,
-    {
+    pub unsafe fn read<T>(&mut self) -> &mut T {
+        const { check_convertibility::<T, BSIZE>() };
+
         if !self.buffer.is_initialized {
             virtio::disk::read(
                 self.buffer.data.as_mut_ptr().addr(),
@@ -95,10 +93,9 @@ impl<'a, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, BSIZE, CSIZE> {
         &mut *self.buffer.data.as_mut_ptr().cast::<T>()
     }
 
-    pub unsafe fn write<T>(&mut self, src: &T)
-    where
-        [(); check_buffer_conversion::<T, BSIZE>()]:,
-    {
+    pub unsafe fn write<T>(&mut self, src: &T) {
+        const { check_convertibility::<T, BSIZE>() };
+
         self.buffer.data.as_mut_ptr().cast::<T>().copy_from(src, 1);
         virtio::disk::write(
             self.buffer.data.as_mut_ptr().addr(),
@@ -108,17 +105,15 @@ impl<'a, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, BSIZE, CSIZE> {
         self.buffer.is_initialized = true;
     }
 
-    pub unsafe fn read_with_unlock<T, LT>(&mut self, lock: &mut SpinLockGuard<LT>) -> &mut T
-    where
-        [(); check_buffer_conversion::<T, BSIZE>()]:,
-    {
+    pub unsafe fn read_with_unlock<T, LT>(&mut self, lock: &mut SpinLockGuard<LT>) -> &mut T {
+        const { check_convertibility::<T, BSIZE>() };
+
         SpinLock::unlock_temporarily(lock, || self.read::<T>())
     }
 
-    pub unsafe fn write_with_unlock<T, LT>(&mut self, src: &T, lock: &mut SpinLockGuard<LT>)
-    where
-        [(); check_buffer_conversion::<T, BSIZE>()]:,
-    {
+    pub unsafe fn write_with_unlock<T, LT>(&mut self, src: &T, lock: &mut SpinLockGuard<LT>) {
+        const { check_convertibility::<T, BSIZE>() };
+
         SpinLock::unlock_temporarily(lock, || self.write(src));
     }
 }
