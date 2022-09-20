@@ -173,7 +173,7 @@ impl InodeEntry {
         let mut block = buffer::get(self.device, block_index).unwrap();
         self.inode = unsafe { block.read_array::<Inode>()[in_block_index].clone() };
 
-        assert!(matches!(self.inode.kind, InodeKind::Unused) == false);
+        assert!(!matches!(self.inode.kind, InodeKind::Unused));
     }
 
     fn offset_to_block(&mut self, offset: usize, log: Option<&LogGuard>) -> Option<usize> {
@@ -186,7 +186,7 @@ impl InodeEntry {
             return Some(*addr as usize);
         }
 
-        if NDIRECT <= index && index < NDIRECT + NINDIRECT {
+        if (NDIRECT..NDIRECT + NINDIRECT).contains(&index) {
             let index = index - NDIRECT;
 
             if self.inode.chain == 0 {

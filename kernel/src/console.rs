@@ -17,7 +17,7 @@ use crate::{
 };
 
 const fn ctrl(x: char) -> u8 {
-    (x as u8).wrapping_sub('@' as u8)
+    (x as u8).wrapping_sub(b'@')
 }
 
 pub struct Console {
@@ -81,7 +81,7 @@ impl Console {
             }
             const { ctrl('U') } => {
                 while self.edit_index != self.write_index
-                    && self.buf[(self.edit_index - 1) % Self::INPUT_BUF_LEN] != ('\n' as u8)
+                    && self.buf[(self.edit_index - 1) % Self::INPUT_BUF_LEN] != b'\n'
                 {
                     self.edit_index -= 1;
                     Self::backspace();
@@ -102,7 +102,7 @@ impl Console {
                     return;
                 }
 
-                let c = if c == '\r' as u8 { '\n' as u8 } else { c };
+                let c = if c == '\r' as u8 { b'\n' } else { c };
 
                 // echo back to the user.
                 Self::putc(c);
@@ -111,7 +111,7 @@ impl Console {
                 self.buf[self.edit_index % Self::INPUT_BUF_LEN] = c;
                 self.edit_index += 1; // TODO: Overflow?
 
-                if c == ('\n' as u8)
+                if c == b'\n'
                     || c == ctrl('D')
                     || self.edit_index == self.read_index + Self::INPUT_BUF_LEN
                 {
@@ -164,7 +164,7 @@ impl<'a> SpinLockGuard<'a, Console> {
             dst += 1;
             n -= 1;
 
-            if c == ('\n' as u8) {
+            if c == b'\n' {
                 // a whole line has arrived, return to
                 // the user-level read().
                 break;

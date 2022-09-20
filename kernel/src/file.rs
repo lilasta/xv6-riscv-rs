@@ -131,12 +131,9 @@ impl File {
 
                     let log = log::start();
                     let mut inode = inode.clone().into_ref(&log).lock();
-                    let result =
-                        inode.copy_from::<u8>(true, addr + i, offset.load(Acquire), n, &log);
-                    let wrote = match result {
-                        Ok(wrote) => wrote,
-                        Err(_) => 0,
-                    };
+                    let wrote = inode
+                        .copy_from::<u8>(true, addr + i, offset.load(Acquire), n, &log)
+                        .unwrap_or(0);
                     offset.fetch_add(wrote, Release);
                     drop(inode);
                     drop(log);

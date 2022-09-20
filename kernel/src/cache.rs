@@ -54,7 +54,7 @@ impl<K, const N: usize> Cache<K, N> {
         this
     }
 
-    fn indexes<'a>(&'a self) -> impl 'a + Iterator<Item = usize> {
+    fn indexes(&self) -> impl '_ + Iterator<Item = usize> {
         core::iter::successors(Some(self.head), |current| {
             if *current == self.tail {
                 None
@@ -64,7 +64,7 @@ impl<K, const N: usize> Cache<K, N> {
         })
     }
 
-    fn indexes_rev<'a>(&'a self) -> impl 'a + Iterator<Item = usize> {
+    fn indexes_rev(&self) -> impl '_ + Iterator<Item = usize> {
         core::iter::successors(Some(self.tail), |current| {
             if *current == self.head {
                 None
@@ -78,24 +78,15 @@ impl<K, const N: usize> Cache<K, N> {
     where
         K: PartialEq,
     {
-        for i in self.indexes() {
-            if self.links[i].key.as_ref() == Some(key) {
-                return Some(i);
-            }
-        }
-        None
+        self.indexes()
+            .find(|i| self.links[*i].key.as_ref() == Some(key))
     }
 
     fn find_unused(&self) -> Option<usize>
     where
         K: PartialEq,
     {
-        for i in self.indexes_rev() {
-            if self.links[i].key.is_none() {
-                return Some(i);
-            }
-        }
-        None
+        self.indexes_rev().find(|i| self.links[*i].key.is_none())
     }
 
     pub fn get(&mut self, key: K) -> Option<(usize, bool)>
