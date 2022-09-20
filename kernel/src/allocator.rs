@@ -46,10 +46,12 @@ impl KernelAllocator {
 
         self.head = unsafe { page.as_ref().next };
 
+        let page = page.cast::<u8>();
+
         // fill with junk
         unsafe { core::ptr::write_bytes(page.as_ptr(), 5, PGSIZE) };
 
-        Some(page.cast())
+        Some(page)
     }
 
     // Free the page of physical memory pointed at by pa,

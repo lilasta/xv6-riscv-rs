@@ -32,7 +32,6 @@
 #![feature(generic_const_exprs)]
 #![feature(inline_const)]
 #![feature(inline_const_pat)]
-#![feature(let_else)]
 #![feature(maybe_uninit_uninit_array)]
 #![feature(mixed_integer_ops)]
 #![feature(negative_impls)]
