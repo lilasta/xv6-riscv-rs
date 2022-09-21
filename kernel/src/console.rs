@@ -9,11 +9,11 @@
 //!   control-p -- print process list
 //!
 
+use crate::uart;
 use crate::{
     file::{DeviceFile, DEVICEFILES},
     process,
     spinlock::{SpinLock, SpinLockGuard},
-    uart::UART,
 };
 
 const fn ctrl(x: char) -> u8 {
@@ -40,7 +40,7 @@ impl Console {
     }
 
     pub fn backspace() {
-        let uart = UART::get();
+        let uart = uart::get();
         uart.putc_blocking(0x08); // '\b'
         uart.putc_blocking(0x20); // ' '
         uart.putc_blocking(0x08); // '\b'
@@ -52,7 +52,7 @@ impl Console {
     // but not from write().
     //
     pub fn putc(c: u8) {
-        UART::get().putc_blocking(c);
+        uart::get().putc_blocking(c);
     }
 
     //
@@ -192,7 +192,7 @@ pub fn consoleintr(c: i32) {
 }
 
 pub unsafe fn initialize() {
-    UART::get().init();
+    uart::get().init();
 
     // connect read and write system calls
     // to consoleread and consolewrite.

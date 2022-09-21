@@ -79,17 +79,10 @@ impl TransmitBuffer {
 
 pub struct UART {
     tx: SpinLock<TransmitBuffer>,
-
-    // from printf.c
     panicked: AtomicBool,
 }
 
 impl UART {
-    pub fn get() -> &'static Self {
-        static THIS: UART = UART::new();
-        &THIS
-    }
-
     // the UART control registers are memory-mapped
     // at address UART0. this macro returns the
     // address of one of the registers.
@@ -248,6 +241,11 @@ impl UART {
     }
 }
 
+pub fn get() -> &'static UART {
+    static UART: UART = UART::new();
+    &UART
+}
+
 pub unsafe fn uartintr() {
-    UART::get().handle_interrupt();
+    get().handle_interrupt();
 }
