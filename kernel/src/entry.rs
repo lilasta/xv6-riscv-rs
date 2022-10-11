@@ -7,7 +7,7 @@
 //!
 //! 擬似的な関数として記述すると以下のようになる。
 //!
-//! ```rust
+//! ```rust,ignore
 //! fn _entry() {
 //!     a0 = ENTRY_STACKSIZE * (mhartid + 1);
 //!     sp = STACK0 + a0;

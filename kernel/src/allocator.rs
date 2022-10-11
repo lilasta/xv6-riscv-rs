@@ -1,6 +1,4 @@
-//! Physical memory allocator, for user processes,
-//! kernel stacks, page-table pages,
-//! and pipe buffers. Allocates whole 4096-byte pages.
+//! メモリアロケータ
 
 use core::{
     alloc::{AllocError, Allocator, GlobalAlloc, Layout},
@@ -14,65 +12,62 @@ use crate::{
     spinlock::SpinLock,
 };
 
-struct Block {
-    next: Option<NonNull<Block>>,
+/// 空きページ。
+struct UnusedPage {
+    /// 次の空きページへのリンク
+    next: Option<NonNull<Self>>,
 }
 
+/// カーネルで使用されるメモリアロケータ。
+///
+/// 連続したメモリ領域を4096バイトのページ単位に分割して配布する。
 #[derive(Debug)]
 pub struct KernelAllocator {
-    head: Option<NonNull<Block>>,
+    /// 先頭の空きページ
+    head: Option<NonNull<UnusedPage>>,
 }
 
 impl KernelAllocator {
+    /// アロケータを作成する。
     pub const fn empty() -> Self {
         Self { head: None }
     }
 
-    fn register_blocks(&mut self, phy_start: usize, phy_end: usize) {
-        let phy_start = pg_roundup(phy_start);
-        let range = phy_start..=(phy_end - PGSIZE);
+    /// メモリ領域をページ単位に分割し
+    /// アロケータに登録する。
+    fn register_pages(&mut self, addr_start: usize, addr_end: usize) {
+        let addr_start = pg_roundup(addr_start);
+        let range = addr_start..=(addr_end - PGSIZE);
 
         for page in range.step_by(PGSIZE) {
-            let page = page as *mut u8;
+            let page = <*mut u8>::from_bits(page);
             let page = NonNull::new(page).unwrap();
             self.deallocate_page(page);
         }
     }
 
-    // Allocate one 4096-byte page of physical memory.
-    // Returns a pointer that the kernel can use.
-    // Returns 0 if the memory cannot be allocated.
+    /// 空きページを返す。
     pub const fn allocate_page(&mut self) -> Option<NonNull<u8>> {
         let page = self.head?;
 
         self.head = unsafe { page.as_ref().next };
 
-        let page = page.cast::<u8>();
-
-        // fill with junk
-        unsafe { core::ptr::write_bytes(page.as_ptr(), 5, PGSIZE) };
-
-        Some(page)
+        Some(page.cast::<u8>())
     }
 
-    // Free the page of physical memory pointed at by pa,
-    // which normally should have been returned by a
-    // call to kalloc().  (The exception is when
-    // initializing the allocator; see kinit above.)
-    pub const fn deallocate_page(&mut self, pa: NonNull<u8>) {
+    /// ページを解放する。
+    pub const fn deallocate_page(&mut self, page: NonNull<u8>) {
         runtime!({
-            assert!(pa.addr().get() % PGSIZE == 0);
-            assert!(pa.addr().get() >= symbol_addr!(end));
-            assert!(pa.addr().get() < PHYSTOP);
+            let addr = page.addr().get();
+            assert!(addr % PGSIZE == 0);
+            assert!(addr >= symbol_addr!(end));
+            assert!(addr < PHYSTOP);
         });
 
-        // Fill with junk to catch dangling refs.
-        unsafe { core::ptr::write_bytes(pa.as_ptr(), 1, PGSIZE) };
-
         unsafe {
-            let mut block: NonNull<Block> = pa.cast();
-            block.as_mut().next = self.head;
-            self.head = Some(block);
+            let mut page = page.cast::<UnusedPage>();
+            page.as_mut().next = self.head;
+            self.head = Some(page);
         }
     }
 }
@@ -115,9 +110,9 @@ pub fn initialize() {
     let mut allocator = get().lock();
     assert!(allocator.head.is_none());
 
-    let phy_start = symbol_addr!(end);
-    let phy_end = PHYSTOP;
-    allocator.register_blocks(phy_start, phy_end);
+    let start = symbol_addr!(end);
+    let end = PHYSTOP;
+    allocator.register_pages(start, end);
 }
 
 pub fn get() -> &'static SpinLock<KernelAllocator> {
