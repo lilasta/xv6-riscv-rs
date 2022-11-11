@@ -103,6 +103,14 @@ pub macro runtime($e:expr) {{
     unsafe { const_eval_select((assert,), nop, run) };
 }}
 
+pub macro const_for($i:ident in ($s:expr, $e:expr) $b:block) {{
+    let mut $i = $s;
+    while $i < $e {
+        $b;
+        $i += 1;
+    }
+}}
+
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     let _ = writeln!(CONSOLE.lock(), "{}", info);

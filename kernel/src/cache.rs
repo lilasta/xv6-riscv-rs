@@ -1,11 +1,13 @@
-struct Link<K> {
+use crate::const_for;
+
+struct Link<Key> {
     index: usize,
     next: usize,
     prev: usize,
-    key: Option<K>,
+    key: Option<Key>,
 }
 
-impl<K> Link<K> {
+impl<Key> Link<Key> {
     const fn dangling() -> Self {
         Self {
             index: 0,
@@ -16,13 +18,13 @@ impl<K> Link<K> {
     }
 }
 
-pub struct Cache<K, const N: usize> {
-    links: [Link<K>; N],
+pub struct Cache<Key, const N: usize> {
+    links: [Link<Key>; N],
     head: usize,
     tail: usize,
 }
 
-impl<K, const N: usize> Cache<K, N> {
+impl<Key, const N: usize> Cache<Key, N> {
     pub const fn new() -> Self {
         let mut this = Self {
             links: [const { Link::dangling() }; _],
@@ -30,26 +32,27 @@ impl<K, const N: usize> Cache<K, N> {
             tail: 0,
         };
 
-        let mut i = 0;
-        while i < N {
+        const_for!(i in (0, N) {
             this.links[i].index = i;
-            i += 1;
-        }
+        });
 
-        this.head = 0;
-        this.tail = 0;
+        // +---------+
+        // |         |
+        // +-->[0]---+
         this.links[0].next = 0;
         this.links[0].prev = 0;
 
-        let mut i = 1;
-        while i < N {
+        const_for!(i in (1, N) {
+            // +--------- ... <--------+
+            // |                       |
+            // +->tail--->[i]--->head--+
             this.links[i].prev = this.tail;
             this.links[i].next = this.head;
             this.links[this.head].prev = i;
             this.links[this.tail].next = i;
+
             this.tail = i;
-            i += 1;
-        }
+        });
 
         this
     }
@@ -74,9 +77,9 @@ impl<K, const N: usize> Cache<K, N> {
         })
     }
 
-    fn find(&self, key: &K) -> Option<usize>
+    fn find(&self, key: &Key) -> Option<usize>
     where
-        K: PartialEq,
+        Key: PartialEq,
     {
         self.indexes()
             .find(|i| self.links[*i].key.as_ref() == Some(key))
@@ -84,14 +87,14 @@ impl<K, const N: usize> Cache<K, N> {
 
     fn find_unused(&self) -> Option<usize>
     where
-        K: PartialEq,
+        Key: PartialEq,
     {
         self.indexes_rev().find(|i| self.links[*i].key.is_none())
     }
 
-    pub fn get(&mut self, key: K) -> Option<(usize, bool)>
+    pub fn get(&mut self, key: Key) -> Option<(usize, bool)>
     where
-        K: PartialEq,
+        Key: PartialEq,
     {
         if let Some(i) = self.find(&key) {
             return Some((i, false));
@@ -127,6 +130,7 @@ impl<K, const N: usize> Cache<K, N> {
 
             self.links[self.head].prev = index;
             self.links[self.tail].next = index;
+
             self.tail = index;
         }
 
@@ -134,12 +138,12 @@ impl<K, const N: usize> Cache<K, N> {
     }
 }
 
-pub struct CacheRc<K, const N: usize> {
-    cache: Cache<K, N>,
+pub struct CacheRc<Key, const N: usize> {
+    cache: Cache<Key, N>,
     counts: [usize; N],
 }
 
-impl<K, const N: usize> CacheRc<K, N> {
+impl<Key, const N: usize> CacheRc<Key, N> {
     pub const fn new() -> Self {
         Self {
             cache: Cache::new(),
@@ -147,9 +151,9 @@ impl<K, const N: usize> CacheRc<K, N> {
         }
     }
 
-    pub fn get(&mut self, key: K) -> Option<(usize, bool)>
+    pub fn get(&mut self, key: Key) -> Option<(usize, bool)>
     where
-        K: PartialEq,
+        Key: PartialEq,
     {
         let found = self.cache.get(key)?;
         self.counts[found.0] += 1;
