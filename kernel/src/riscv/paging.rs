@@ -160,7 +160,13 @@ impl<A: Allocator + Copy> PageTable<A> {
             let pa = pte.get_physical_addr();
             let flags = pte.get_flags();
 
-            unsafe { core::ptr::copy(<*const u8>::from_bits(pa), page.as_ptr().cast(), PGSIZE) };
+            unsafe {
+                core::ptr::copy(
+                    core::ptr::from_exposed_addr::<u8>(pa),
+                    page.as_ptr().cast(),
+                    PGSIZE,
+                )
+            };
 
             let (ptr, size) = page.to_raw_parts();
             if let Err(_) = to.map(i, ptr.addr().get(), size, flags) {
@@ -219,7 +225,7 @@ impl<A: Allocator + Copy> PageTable<A> {
 
             if free {
                 let ptr = pte.get_physical_addr();
-                let ptr = <*mut _>::from_bits(ptr);
+                let ptr = core::ptr::from_exposed_addr_mut(ptr);
                 let ptr = NonNull::new(ptr).unwrap();
                 unsafe { allocator.deallocate(ptr, Self::PAGE_LAYOUT) }
             }
@@ -300,7 +306,7 @@ impl<A: Allocator + Copy> PageTable<A> {
 
             if pte.is_valid() {
                 let nested_table_ptr = pte.get_physical_addr();
-                let nested_table_ptr = <*mut _>::from_bits(nested_table_ptr);
+                let nested_table_ptr = core::ptr::from_exposed_addr_mut(nested_table_ptr);
                 table = unsafe { &mut *nested_table_ptr };
             } else {
                 if !alloc {
@@ -357,7 +363,7 @@ impl<A: Allocator + Copy> PageTable<A> {
             unsafe {
                 core::ptr::copy(
                     <*const T>::cast::<u8>(src).add(copied),
-                    <*mut u8>::from_bits(pa0 + offset),
+                    core::ptr::from_exposed_addr_mut::<u8>(pa0 + offset),
                     bytes,
                 );
             }
@@ -384,7 +390,7 @@ impl<A: Allocator + Copy> PageTable<A> {
             let bytes = (PGSIZE - offset).min(remain);
 
             core::ptr::copy(
-                <*const u8>::from_bits(pa0 + offset),
+                core::ptr::from_exposed_addr::<u8>(pa0 + offset),
                 <*mut T>::cast::<u8>(dst).add(copied),
                 bytes,
             );
@@ -408,7 +414,7 @@ impl<A: Allocator + Copy> PageTable<A> {
             let offset = src_va - va0;
             let n = (PGSIZE - offset).min(dst.len() - read);
 
-            let src = <*const u8>::from_bits(pa0 + offset);
+            let src = core::ptr::from_exposed_addr::<u8>(pa0 + offset);
             for i in 0..n {
                 let c = *src.add(i);
                 dst[read + i] = c;

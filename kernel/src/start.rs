@@ -69,8 +69,8 @@ unsafe fn initialize_timer() {
 
     // ask the CLINT for a timer interrupt.
     let interval = 1000000; // cycles; about 1/10th second in qemu.
-    <*mut u64>::from_bits(clint_mtimecmp(id))
-        .write(<*const u64>::from_bits(CLINT_MTIME).read() + interval);
+    core::ptr::from_exposed_addr_mut::<u64>(clint_mtimecmp(id))
+        .write(core::ptr::from_exposed_addr::<u64>(CLINT_MTIME).read() + interval);
 
     // prepare information in scratch[] for timervec.
     // scratch[0..2] : space for timervec to save registers.

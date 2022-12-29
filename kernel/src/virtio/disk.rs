@@ -58,11 +58,11 @@ pub struct Disk {
 }
 
 unsafe fn read_reg(r: usize) -> u32 {
-    <*const u32>::from_bits(VIRTIO0 + r).read_volatile()
+    core::ptr::from_exposed_addr::<u32>(VIRTIO0 + r).read_volatile()
 }
 
 unsafe fn write_reg(r: usize, val: u32) {
-    <*mut u32>::from_bits(VIRTIO0 + r).write_volatile(val);
+    core::ptr::from_exposed_addr_mut::<u32>(VIRTIO0 + r).write_volatile(val);
 }
 
 impl Disk {

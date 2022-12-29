@@ -29,7 +29,6 @@
 #![feature(inline_const_pat)]
 #![feature(maybe_uninit_uninit_array)]
 #![feature(ptr_metadata)]
-#![feature(ptr_to_from_bits)]
 #![feature(slice_ptr_get)]
 #![feature(stdsimd)]
 #![feature(strict_provenance)]

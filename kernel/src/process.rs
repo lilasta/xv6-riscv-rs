@@ -100,7 +100,7 @@ pub unsafe fn copyin_either<T: ?Sized>(dst: &mut T, user_src: bool, src: usize) 
         proc_context.pagetable.read(dst, src).is_ok()
     } else {
         core::ptr::copy(
-            <*const u8>::from_bits(src),
+            core::ptr::from_exposed_addr::<u8>(src),
             <*mut T>::cast::<u8>(dst),
             core::mem::size_of_val(dst),
         );
@@ -123,7 +123,7 @@ pub unsafe fn copyout_either<T: ?Sized>(user_dst: bool, dst: usize, src: &T) -> 
     } else {
         core::ptr::copy(
             <*const T>::cast::<u8>(src),
-            <*mut u8>::from_bits(dst),
+            core::ptr::from_exposed_addr_mut::<u8>(dst),
             core::mem::size_of_val(src),
         );
         true

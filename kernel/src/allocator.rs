@@ -40,7 +40,7 @@ impl KernelAllocator {
         let range = addr_start..=(addr_end - PGSIZE);
 
         for page in range.step_by(PGSIZE) {
-            let page = <*mut u8>::from_bits(page);
+            let page = core::ptr::from_exposed_addr_mut::<u8>(page);
             let page = NonNull::new(page).unwrap();
             self.deallocate_page(page);
         }

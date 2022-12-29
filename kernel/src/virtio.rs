@@ -156,5 +156,5 @@ mod descriptor {
 
 // the address of virtio mmio register r.
 pub fn mmio_register(reg: usize) -> *mut u32 {
-    <*mut _>::from_bits(VIRTIO0 + reg)
+    core::ptr::from_exposed_addr_mut(VIRTIO0 + reg)
 }
