@@ -166,23 +166,17 @@ impl UART {
         let mut tx = self.tx.lock();
 
         if self.is_panicked() {
-            loop {
-                core::arch::riscv64::pause();
-                core::hint::spin_loop();
-            }
+            crate::halt();
         }
 
-        loop {
-            if tx.is_full() {
-                // buffer is full.
-                // wait for uartstart() to open up space in the buffer.
-                process::sleep(&*tx as *const _ as usize, &mut tx);
-            } else {
-                tx.queue(c);
-                unsafe { Self::send(tx) };
-                break;
-            }
+        while tx.is_full() {
+            // buffer is full.
+            // wait for uartstart() to open up space in the buffer.
+            process::sleep(&*tx as *const _ as usize, &mut tx);
         }
+
+        tx.queue(c);
+        unsafe { Self::send(tx) };
     }
 
     // alternate version of uartputc() that doesn't
@@ -194,10 +188,7 @@ impl UART {
 
         interrupt::off(|| {
             if self.is_panicked() {
-                loop {
-                    core::arch::riscv64::pause();
-                    core::hint::spin_loop();
-                }
+                crate::halt();
             }
 
             // wait for Transmit Holding Empty to be set in LSR.
@@ -211,7 +202,7 @@ impl UART {
         use reg::*;
 
         unsafe {
-            if reg::read(LSR) & 0x01 != 0 {
+            if reg::read(LSR) & LSR_RX_READY != 0 {
                 Some(reg::read(RHR)) // input data is ready.
             } else {
                 None
@@ -224,12 +215,8 @@ impl UART {
     // both. called from trap.c.
     pub fn handle_interrupt(&'static self) {
         // read and process incoming characters.
-        loop {
-            let c = self.getc();
-            match c {
-                Some(c) => consoleintr(c as i32),
-                None => break,
-            }
+        while let Some(ch) = self.getc() {
+            consoleintr(ch as i32);
         }
 
         // send buffered characters.

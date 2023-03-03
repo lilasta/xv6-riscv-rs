@@ -110,10 +110,17 @@ pub macro const_for($i:ident in ($s:expr, $e:expr) $b:block) {{
     }
 }}
 
+pub fn halt() -> ! {
+    loop {
+        core::arch::riscv64::pause();
+        core::hint::spin_loop();
+    }
+}
+
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     let _ = writeln!(CONSOLE.lock(), "{}", info);
-    loop {}
+    halt()
 }
 
 #[alloc_error_handler]
