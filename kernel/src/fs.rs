@@ -267,7 +267,7 @@ impl InodeEntry {
         &mut self,
         name: &str,
         log: &'log LogGuard,
-    ) -> Option<(InodeReference<'static, 'log>, usize)> {
+    ) -> Option<(InodeReference<'log>, usize)> {
         if !self.is_directory() {
             return None;
         }
@@ -434,13 +434,13 @@ impl InodeEntry {
 }
 
 #[derive(Debug)]
-pub struct InodePin<'a> {
+pub struct InodePin {
     cache_index: usize,
-    entry: &'a SleepLock<InodeEntry>,
+    entry: &'static SleepLock<InodeEntry>,
 }
 
-impl<'a> InodePin<'a> {
-    pub fn into_ref<'log>(self, log: &'log LogGuard) -> InodeReference<'a, 'log> {
+impl InodePin {
+    pub fn into_ref<'log>(self, log: &'log LogGuard) -> InodeReference<'log> {
         let reference = InodeReference {
             cache_index: self.cache_index,
             entry: self.entry,
@@ -460,14 +460,14 @@ impl<'a> InodePin<'a> {
     }
 }
 
-impl<'a> Clone for InodePin<'a> {
+impl Clone for InodePin {
     fn clone(&self) -> Self {
         INODE_ALLOC.duplicate(self.cache_index);
         Self { ..*self }
     }
 }
 
-impl<'a> Drop for InodePin<'a> {
+impl Drop for InodePin {
     fn drop(&mut self) {
         let log = log::start();
         INODE_ALLOC.release(self.cache_index, &log);
@@ -475,14 +475,14 @@ impl<'a> Drop for InodePin<'a> {
 }
 
 #[derive(Debug)]
-pub struct InodeReference<'a, 'log> {
+pub struct InodeReference<'log> {
     cache_index: usize,
-    entry: &'a SleepLock<InodeEntry>,
+    entry: &'static SleepLock<InodeEntry>,
     log: &'log LogGuard,
 }
 
-impl<'a, 'log> InodeReference<'a, 'log> {
-    pub fn lock(&self) -> InodeGuard<'a, 'log> {
+impl<'log> InodeReference<'log> {
+    pub fn lock(&self) -> InodeGuard<'log> {
         let mut guard = InodeGuard {
             cache_index: self.cache_index,
             entry: ManuallyDrop::new(self.entry.lock()),
@@ -499,7 +499,7 @@ impl<'a, 'log> InodeReference<'a, 'log> {
         guard
     }
 
-    pub fn pin(self) -> InodePin<'a> {
+    pub fn pin(self) -> InodePin {
         let pin = InodePin {
             cache_index: self.cache_index,
             entry: self.entry,
@@ -509,35 +509,35 @@ impl<'a, 'log> InodeReference<'a, 'log> {
     }
 }
 
-impl<'a, 'log> Clone for InodeReference<'a, 'log> {
+impl<'log> Clone for InodeReference<'log> {
     fn clone(&self) -> Self {
         INODE_ALLOC.duplicate(self.cache_index);
         Self { ..*self }
     }
 }
 
-impl<'a, 'log> Drop for InodeReference<'a, 'log> {
+impl<'log> Drop for InodeReference<'log> {
     fn drop(&mut self) {
         INODE_ALLOC.release(self.cache_index, self.log);
     }
 }
 
 #[derive(Debug)]
-pub struct InodeGuard<'a, 'log> {
+pub struct InodeGuard<'log> {
     cache_index: usize,
-    entry: ManuallyDrop<SleepLockGuard<'a, InodeEntry>>,
+    entry: ManuallyDrop<SleepLockGuard<InodeEntry>>,
     log: &'log LogGuard,
 }
 
-impl<'a, 'log> InodeGuard<'a, 'log> {
-    pub fn as_ref(this: &Self) -> InodeReference<'a, 'log> {
+impl<'log> InodeGuard<'log> {
+    pub fn as_ref(this: &Self) -> InodeReference<'log> {
         INODE_ALLOC
             .get(this.entry.device, this.entry.inode_number, this.log)
             .unwrap()
     }
 }
 
-impl<'a, 'log> Deref for InodeGuard<'a, 'log> {
+impl<'log> Deref for InodeGuard<'log> {
     type Target = InodeEntry;
 
     fn deref(&self) -> &Self::Target {
@@ -545,13 +545,13 @@ impl<'a, 'log> Deref for InodeGuard<'a, 'log> {
     }
 }
 
-impl<'a, 'log> DerefMut for InodeGuard<'a, 'log> {
+impl<'log> DerefMut for InodeGuard<'log> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.entry
     }
 }
 
-impl<'a, 'log> Drop for InodeGuard<'a, 'log> {
+impl<'log> Drop for InodeGuard<'log> {
     fn drop(&mut self) {
         unsafe { ManuallyDrop::drop(&mut self.entry) };
         INODE_ALLOC.release(self.cache_index, self.log);
@@ -667,12 +667,12 @@ impl<const N: usize> InodeCache<N> {
         }
     }
 
-    pub fn get<'a, 'log>(
-        &'a self,
+    pub fn get<'log>(
+        &'static self,
         device: usize,
         inode_number: usize,
         log: &'log LogGuard,
-    ) -> Option<InodeReference<'a, 'log>> {
+    ) -> Option<InodeReference<'log>> {
         let mut cache = self.cache.lock();
 
         let (cache_index, is_new) = cache.get(InodeKey {
@@ -700,7 +700,7 @@ impl<const N: usize> InodeCache<N> {
         self.cache.lock().duplicate(index);
     }
 
-    pub fn release(&self, index: usize, log: &LogGuard) {
+    pub fn release(&'static self, index: usize, log: &LogGuard) {
         let mut cache = self.cache.lock();
 
         let reference = cache.reference_count(index).unwrap();
@@ -751,7 +751,7 @@ pub fn create<'log>(
     major: u16,
     minor: u16,
     log: &'log LogGuard,
-) -> Result<InodeGuard<'static, 'log>, ()> {
+) -> Result<InodeGuard<'log>, ()> {
     let (dir_ref, name) = search_parent_inode(path, log).ok_or(())?;
     let mut dir = dir_ref.lock();
 
@@ -884,18 +884,11 @@ pub fn make_special_file(path: &str, major: u16, minor: u16) -> Result<(), ()> {
     Ok(())
 }
 
-pub fn get<'log>(
-    device: usize,
-    inode: usize,
-    log: &'log LogGuard,
-) -> Option<InodeReference<'static, 'log>> {
+pub fn get<'log>(device: usize, inode: usize, log: &'log LogGuard) -> Option<InodeReference<'log>> {
     INODE_ALLOC.get(device, inode, log)
 }
 
-pub fn search_inode<'log>(
-    path: &str,
-    log: &'log LogGuard,
-) -> Option<InodeReference<'static, 'log>> {
+pub fn search_inode<'log>(path: &str, log: &'log LogGuard) -> Option<InodeReference<'log>> {
     let mut inode_ref = if path.starts_with('/') {
         get(ROOTDEV, ROOTINO, log).unwrap()
     } else {
@@ -933,7 +926,7 @@ pub fn search_inode<'log>(
 pub fn search_parent_inode<'p, 'log>(
     path: &'p str,
     log: &'log LogGuard,
-) -> Option<(InodeReference<'static, 'log>, &'p str)> {
+) -> Option<(InodeReference<'log>, &'p str)> {
     let mut inode_ref = if path.starts_with('/') {
         get(ROOTDEV, ROOTINO, log).unwrap()
     } else {

@@ -190,7 +190,7 @@ pub struct ProcessContext {
     pub trapframe: Box<TrapFrame>,          // data page for trampoline.S
     pub context: CPUContext,                // swtch() here to run process
     pub ofile: [Option<Arc<File>>; NOFILE], // Open files
-    pub cwd: Option<InodePin<'static>>,     // Current directory
+    pub cwd: Option<InodePin>,              // Current directory
 }
 
 impl ProcessContext {

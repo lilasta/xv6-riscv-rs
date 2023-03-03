@@ -35,7 +35,7 @@ impl<const SIZE: usize> Buffer<SIZE> {
 
 pub struct BufferGuard<'a, const BSIZE: usize, const CSIZE: usize> {
     cache: &'a BufferCache<BSIZE, CSIZE>,
-    buffer: SleepLockGuard<'a, Buffer<BSIZE>>,
+    buffer: SleepLockGuard<Buffer<BSIZE>>,
     block_number: usize,
     cache_index: usize,
 }
@@ -140,7 +140,7 @@ impl<const BSIZE: usize, const CSIZE: usize> BufferCache<BSIZE, CSIZE> {
     /// バッファを取得します。
     /// もし目的のバッファが使用中であればスリープして待機するため、
     /// スピンロックを保持している場合はこの関数を使用する前に解除する必要があります。
-    pub fn get(&self, device: usize, block: usize) -> Option<BufferGuard<BSIZE, CSIZE>> {
+    pub fn get(&'static self, device: usize, block: usize) -> Option<BufferGuard<BSIZE, CSIZE>> {
         // キャッシュのロックを保持しておきます
         let mut cache = self.cache.lock();
 

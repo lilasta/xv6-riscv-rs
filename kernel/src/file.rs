@@ -16,13 +16,13 @@ pub enum File {
         pipe: Pipe<PIPESIZE>,
     },
     Inode {
-        inode: InodePin<'static>,
+        inode: InodePin,
         offset: AtomicUsize,
         readable: bool,
         writable: bool,
     },
     Device {
-        inode: InodePin<'static>,
+        inode: InodePin,
         major: usize,
         readable: bool,
         writable: bool,
@@ -34,7 +34,7 @@ impl File {
         Self::Pipe { pipe }
     }
 
-    pub const fn new_inode(inode: InodePin<'static>, readable: bool, writable: bool) -> Self {
+    pub const fn new_inode(inode: InodePin, readable: bool, writable: bool) -> Self {
         Self::Inode {
             inode,
             offset: AtomicUsize::new(0),
@@ -43,12 +43,7 @@ impl File {
         }
     }
 
-    pub const fn new_device(
-        inode: InodePin<'static>,
-        major: usize,
-        readable: bool,
-        writable: bool,
-    ) -> Self {
+    pub const fn new_device(inode: InodePin, major: usize, readable: bool, writable: bool) -> Self {
         Self::Device {
             inode,
             major,
