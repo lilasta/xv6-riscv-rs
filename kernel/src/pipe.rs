@@ -19,14 +19,14 @@ impl<const SIZE: usize> Pipe<SIZE> {
         Some((read, write))
     }
 
-    pub fn write(&self, addr: usize, n: usize) -> Result<usize, ()> {
+    pub fn write(&'static self, addr: usize, n: usize) -> Result<usize, ()> {
         match self {
             Self::Read(_) => Err(()),
             Self::Write(inner) => inner.lock().write(addr, n),
         }
     }
 
-    pub fn read(&self, addr: usize, n: usize) -> Result<usize, ()> {
+    pub fn read(&'static self, addr: usize, n: usize) -> Result<usize, ()> {
         match self {
             Self::Read(inner) => inner.lock().read(addr, n),
             Self::Write(_) => Err(()),
@@ -75,7 +75,7 @@ impl<const SIZE: usize> PipeInner<SIZE> {
         process::wakeup(core::ptr::addr_of!(self.read).addr());
     }
 
-    fn write(self: &mut SpinLockGuard<Self>, addr: usize, n: usize) -> Result<usize, ()> {
+    fn write(self: &mut SpinLockGuard<'static, Self>, addr: usize, n: usize) -> Result<usize, ()> {
         let mut i = 0;
         while i < n {
             if !self.read_open || process::is_killed() == Some(true) {
@@ -102,7 +102,7 @@ impl<const SIZE: usize> PipeInner<SIZE> {
         Ok(i)
     }
 
-    fn read(self: &mut SpinLockGuard<Self>, addr: usize, n: usize) -> Result<usize, ()> {
+    fn read(self: &mut SpinLockGuard<'static, Self>, addr: usize, n: usize) -> Result<usize, ()> {
         while self.read == self.write && self.write_open {
             if process::is_killed() == Some(true) {
                 return Err(());

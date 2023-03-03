@@ -125,7 +125,7 @@ impl Console {
     }
 }
 
-impl<'a> SpinLockGuard<'a, Console> {
+impl SpinLockGuard<'static, Console> {
     //
     // user read()s from the console go here.
     // copy (up to) a whole input line to dst.

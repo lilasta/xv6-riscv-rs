@@ -272,7 +272,7 @@ pub fn free_pagetable(pagetable: &mut PageTable, size: usize) {
     }
 }
 
-pub fn sleep<T>(token: usize, guard: &mut SpinLockGuard<T>) {
+pub fn sleep<T>(token: usize, guard: &mut SpinLockGuard<'static, T>) {
     // Must acquire p->lock in order to
     // change p->state and then call sched.
     // Once we hold p->lock, we can be

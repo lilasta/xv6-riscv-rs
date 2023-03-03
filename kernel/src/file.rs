@@ -63,7 +63,7 @@ impl File {
         }
     }
 
-    pub fn read(&self, addr: usize, n: usize) -> Result<usize, ()> {
+    pub fn read(&'static self, addr: usize, n: usize) -> Result<usize, ()> {
         match self {
             Self::Pipe { pipe } => pipe.read(addr, n),
             Self::Inode {
@@ -100,7 +100,7 @@ impl File {
         }
     }
 
-    pub fn write(&self, addr: usize, n: usize) -> Result<usize, ()> {
+    pub fn write(&'static self, addr: usize, n: usize) -> Result<usize, ()> {
         match self {
             Self::Pipe { pipe } => pipe.write(addr, n),
             Self::Inode {

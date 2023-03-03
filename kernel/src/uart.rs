@@ -168,7 +168,7 @@ impl UART {
     // because it may block, it can't be called
     // from interrupts; it's only suitable for use
     // by write().
-    pub fn putc(&self, c: u8) {
+    pub fn putc(&'static self, c: u8) {
         let mut tx = self.tx.lock();
 
         if self.is_panicked() {
