@@ -1,19 +1,18 @@
 //! low-level driver routines for 16550a UART.
 
-use core::{
-    ptr::NonNull,
-    sync::atomic::{AtomicBool, Ordering::*},
-};
+use core::sync::atomic::{AtomicBool, Ordering::*};
 
 use crate::{
     console::consoleintr,
-    interrupt,
-    memory_layout::UART0,
-    process,
+    interrupt, process,
     spinlock::{SpinLock, SpinLockGuard},
 };
 
 mod reg {
+    use core::ptr::NonNull;
+
+    use crate::memory_layout::UART0;
+
     // the UART control registers.
     // some have different meanings for
     // read vs write.
@@ -37,98 +36,69 @@ mod reg {
 
     pub const LSR_RX_READY: u8 = 1 << 0; // input is waiting to be read from RHR
     pub const LSR_TX_IDLE: u8 = 1 << 5; // THR can accept another character to send
+
+    // the UART control registers are memory-mapped
+    // at address UART0. this macro returns the
+    // address of one of the registers.
+    fn ptr(reg: usize) -> NonNull<u8> {
+        UART0.map_addr(|addr| addr.saturating_add(reg))
+    }
+
+    pub unsafe fn read(reg: usize) -> u8 {
+        ptr(reg).as_ptr().read_volatile()
+    }
+
+    pub unsafe fn write(reg: usize, value: u8) {
+        ptr(reg).as_ptr().write_volatile(value)
+    }
 }
 
-struct TransmitBuffer {
+struct TransmitBuffer<const SIZE: usize> {
     // the transmit output buffer.
-    buf: [u8; Self::SIZE],
+    buffer: [u8; SIZE],
 
     // write next to uart_tx_buf[uart_tx_w % UART_TX_BUF_SIZE]
-    w: usize,
+    write_at: usize,
 
     // read next from uart_tx_buf[uart_tx_r % UART_TX_BUF_SIZE]
-    r: usize,
+    read_at: usize,
 }
 
-impl TransmitBuffer {
-    const SIZE: usize = 32;
-
-    pub const fn new() -> TransmitBuffer {
+impl<const SIZE: usize> TransmitBuffer<SIZE> {
+    pub const fn new() -> Self {
         Self {
-            buf: [0; _],
-            w: 0,
-            r: 0,
+            buffer: [0; _],
+            write_at: 0,
+            read_at: 0,
         }
     }
 
+    pub const fn is_empty(&self) -> bool {
+        self.write_at == self.read_at
+    }
+
     pub const fn is_full(&self) -> bool {
-        self.w == self.r + TransmitBuffer::SIZE
+        self.write_at == self.read_at + SIZE
     }
 
     pub const fn queue(&mut self, value: u8) {
-        self.buf[self.w % Self::SIZE] = value;
-        self.w += 1; // TODO: Overflow?
+        self.buffer[self.write_at % SIZE] = value;
+        self.write_at += 1; // TODO: Overflow?
     }
 
     pub const fn dequeue(&mut self) -> u8 {
-        let value = self.buf[self.r % Self::SIZE];
-        self.r += 1; // TODO: Overflow?
+        let value = self.buffer[self.read_at % SIZE];
+        self.read_at += 1; // TODO: Overflow?
         value
     }
 }
 
 pub struct UART {
-    tx: SpinLock<TransmitBuffer>,
+    tx: SpinLock<TransmitBuffer<32>>,
     panicked: AtomicBool,
 }
 
 impl UART {
-    // the UART control registers are memory-mapped
-    // at address UART0. this macro returns the
-    // address of one of the registers.
-    fn reg(reg: usize) -> NonNull<u8> {
-        UART0.map_addr(|addr| addr.saturating_add(reg))
-    }
-
-    fn read_reg(&self, reg: usize) -> u8 {
-        let src = Self::reg(reg).as_ptr();
-        unsafe { core::ptr::read_volatile(src) }
-    }
-
-    fn write_reg(&self, reg: usize, value: u8) {
-        let dst = Self::reg(reg).as_ptr();
-        unsafe { core::ptr::write_volatile(dst, value) }
-    }
-
-    fn is_panicked(&self) -> bool {
-        self.panicked.load(Relaxed)
-    }
-
-    fn send(&self, mut tx: SpinLockGuard<TransmitBuffer>) {
-        use reg::*;
-
-        loop {
-            if tx.w == tx.r {
-                // transmit buffer is empty.
-                return;
-            }
-
-            if self.read_reg(LSR) & LSR_TX_IDLE == 0 {
-                // the UART transmit holding register is full,
-                // so we cannot give it another byte.
-                // it will interrupt when it's ready for a new byte.
-                return;
-            }
-
-            let c = tx.dequeue();
-
-            // maybe uartputc() is waiting for space in the buffer.
-            process::wakeup(self as *const _ as usize);
-
-            self.write_reg(THR, c);
-        }
-    }
-
     pub const fn new() -> Self {
         Self {
             tx: SpinLock::new(TransmitBuffer::new()),
@@ -136,30 +106,54 @@ impl UART {
         }
     }
 
-    pub fn init(&self) {
+    fn is_panicked(&self) -> bool {
+        self.panicked.load(Relaxed)
+    }
+
+    unsafe fn send(mut tx: SpinLockGuard<'static, TransmitBuffer<32>>) {
+        use reg::*;
+
+        while !tx.is_empty() {
+            if reg::read(LSR) & LSR_TX_IDLE == 0 {
+                // the UART transmit holding register is full,
+                // so we cannot give it another byte.
+                // it will interrupt when it's ready for a new byte.
+                break;
+            }
+
+            let ch = tx.dequeue();
+
+            // maybe uartputc() is waiting for space in the buffer.
+            process::wakeup(&*tx as *const _ as usize);
+
+            reg::write(THR, ch);
+        }
+    }
+
+    pub unsafe fn init(&self) {
         use reg::*;
 
         // disable interrupts.
-        self.write_reg(IER, 0x00);
+        reg::write(IER, 0x00);
 
         // special mode to set baud rate.
-        self.write_reg(LCR, LCR_BAUD_LATCH);
+        reg::write(LCR, LCR_BAUD_LATCH);
 
         // LSB for baud rate of 38.4K.
-        self.write_reg(0, 0x03);
+        reg::write(0, 0x03);
 
         // MSB for baud rate of 38.4K.
-        self.write_reg(1, 0x00);
+        reg::write(1, 0x00);
 
         // leave set-baud mode,
         // and set word length to 8 bits, no parity.
-        self.write_reg(LCR, LCR_EIGHT_BITS);
+        reg::write(LCR, LCR_EIGHT_BITS);
 
         // reset and enable FIFOs.
-        self.write_reg(FCR, FCR_FIFO_ENABLE | FCR_FIFO_CLEAR);
+        reg::write(FCR, FCR_FIFO_ENABLE | FCR_FIFO_CLEAR);
 
         // enable transmit and receive interrupts.
-        self.write_reg(IER, IER_TX_ENABLE | IER_RX_ENABLE);
+        reg::write(IER, IER_TX_ENABLE | IER_RX_ENABLE);
     }
 
     // add a character to the output buffer and tell the
@@ -182,10 +176,10 @@ impl UART {
             if tx.is_full() {
                 // buffer is full.
                 // wait for uartstart() to open up space in the buffer.
-                process::sleep(self as *const _ as usize, &mut tx);
+                process::sleep(&*tx as *const _ as usize, &mut tx);
             } else {
                 tx.queue(c);
-                self.send(tx);
+                unsafe { Self::send(tx) };
                 break;
             }
         }
@@ -207,26 +201,28 @@ impl UART {
             }
 
             // wait for Transmit Holding Empty to be set in LSR.
-            while self.read_reg(LSR) & LSR_TX_IDLE == 0 {}
+            while unsafe { reg::read(LSR) & LSR_TX_IDLE == 0 } {}
 
-            self.write_reg(THR, c);
+            unsafe { reg::write(THR, c) };
         })
     }
 
     pub fn getc(&self) -> Option<u8> {
         use reg::*;
 
-        if self.read_reg(LSR) & 0x01 != 0 {
-            Some(self.read_reg(RHR)) // input data is ready.
-        } else {
-            None
+        unsafe {
+            if reg::read(LSR) & 0x01 != 0 {
+                Some(reg::read(RHR)) // input data is ready.
+            } else {
+                None
+            }
         }
     }
 
     // handle a uart interrupt, raised because input has
     // arrived, or the uart is ready for more output, or
     // both. called from trap.c.
-    pub fn handle_interrupt(&self) {
+    pub fn handle_interrupt(&'static self) {
         // read and process incoming characters.
         loop {
             let c = self.getc();
@@ -237,7 +233,7 @@ impl UART {
         }
 
         // send buffered characters.
-        self.send(self.tx.lock());
+        unsafe { Self::send(self.tx.lock()) };
     }
 }
 
