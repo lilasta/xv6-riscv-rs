@@ -1,5 +1,5 @@
 use crate::{
-    cache::CacheRc,
+    cache::RcCache,
     config::NBUF,
     sleeplock::{SleepLock, SleepLockGuard},
     spinlock::{SpinLock, SpinLockGuard},
@@ -126,14 +126,14 @@ impl<'a, const BSIZE: usize, const CSIZE: usize> Drop for BufferGuard<'a, BSIZE,
 
 pub struct BufferCache<const BSIZE: usize, const CSIZE: usize> {
     buffers: [SleepLock<Buffer<BSIZE>>; CSIZE],
-    cache: SpinLock<CacheRc<BufferKey, CSIZE>>,
+    cache: SpinLock<RcCache<BufferKey, CSIZE>>,
 }
 
 impl<const BSIZE: usize, const CSIZE: usize> BufferCache<BSIZE, CSIZE> {
     pub const fn new() -> Self {
         Self {
             buffers: [const { SleepLock::new(Buffer::zeroed()) }; _],
-            cache: SpinLock::new(CacheRc::new()),
+            cache: SpinLock::new(RcCache::new()),
         }
     }
 

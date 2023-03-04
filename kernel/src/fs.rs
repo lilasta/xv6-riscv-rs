@@ -6,7 +6,7 @@ use core::{
 use crate::{
     bitmap::Bitmap,
     buffer::{self, BSIZE},
-    cache::CacheRc,
+    cache::RcCache,
     config::{NINODE, ROOTDEV},
     log::{self, LogGuard},
     process::{self, copyin_either, copyout_either},
@@ -181,7 +181,7 @@ impl InodeEntry {
 
         if let Some(addr) = self.inode.addrs.get_mut(index) {
             if *addr == 0 {
-                *addr = unsafe { SUPERBLOCK.allocate_block(self.device, log?)? as u32 };
+                *addr = unsafe { allocate_block(&SUPERBLOCK, self.device, log?)? as u32 };
             }
             return Some(*addr as usize);
         }
@@ -190,14 +190,15 @@ impl InodeEntry {
             let index = index - NDIRECT;
 
             if self.inode.chain == 0 {
-                self.inode.chain = unsafe { SUPERBLOCK.allocate_block(self.device, log?)? as u32 };
+                self.inode.chain =
+                    unsafe { allocate_block(&SUPERBLOCK, self.device, log?)? as u32 };
             }
 
             let mut buf = buffer::get(self.device, self.inode.chain as usize)?;
             let addrs = unsafe { buf.read::<[u32; NINDIRECT]>() };
             let addr = if addrs[index] == 0 {
                 let log = log?;
-                let allocated = unsafe { SUPERBLOCK.allocate_block(self.device, log)? };
+                let allocated = unsafe { allocate_block(&SUPERBLOCK, self.device, log)? };
                 addrs[index] = allocated as u32;
                 log.write(&buf);
                 allocated
@@ -411,7 +412,7 @@ impl InodeEntry {
     pub fn truncate(&mut self, log: &LogGuard) {
         for addr in self.inode.addrs {
             if addr != 0 {
-                unsafe { SUPERBLOCK.deallocate_block(self.device, addr as usize, log) };
+                unsafe { deallocate_block(&SUPERBLOCK, self.device, addr as usize, log) };
             }
         }
         self.inode.addrs.fill(0);
@@ -421,10 +422,10 @@ impl InodeEntry {
             let addrs = unsafe { buf.read::<[u32; NINDIRECT]>() };
             for addr in addrs {
                 if *addr != 0 {
-                    unsafe { SUPERBLOCK.deallocate_block(self.device, *addr as usize, log) };
+                    unsafe { deallocate_block(&SUPERBLOCK, self.device, *addr as usize, log) };
                 }
             }
-            unsafe { SUPERBLOCK.deallocate_block(self.device, self.inode.chain as usize, log) };
+            unsafe { deallocate_block(&SUPERBLOCK, self.device, self.inode.chain as usize, log) };
             self.inode.chain = 0;
         }
 
@@ -585,84 +586,84 @@ impl SuperBlock {
         }
     }
 
-    fn inode_block_at(&self, index: usize) -> usize {
+    pub const fn inode_block_at(&self, index: usize) -> usize {
         self.inodestart as usize + index / INODES_PER_BLOCK
     }
 
-    fn bitmap_at(&self, index: usize) -> usize {
+    pub const fn bitmap_at(&self, index: usize) -> usize {
         self.bmapstart as usize + index / BITMAP_BITS
-    }
-
-    pub unsafe fn allocate_block(&self, device: usize, log: &LogGuard) -> Option<usize> {
-        for bi in (0..(self.size as usize)).step_by(BITMAP_BITS) {
-            let mut bitmap_buf = buffer::get(device, self.bitmap_at(bi)).unwrap();
-
-            let bitmap = unsafe { bitmap_buf.read::<Bitmap<{ BITMAP_BITS }>>() };
-            match bitmap.allocate() {
-                Some(index) if (bi + index) < self.size as usize => {
-                    log.write(&bitmap_buf);
-
-                    let block = bi + index;
-                    write_zeros_to_block(device, block, log);
-                    return Some(block);
-                }
-                Some(index) => {
-                    bitmap.deallocate(index).unwrap();
-                    return None;
-                }
-                None => {
-                    continue;
-                }
-            }
-        }
-        None
-    }
-
-    pub unsafe fn deallocate_block(&self, device: usize, block: usize, log: &LogGuard) {
-        let mut bitmap_buf = buffer::get(device, self.bitmap_at(block)).unwrap();
-
-        let bitmap = unsafe { bitmap_buf.read::<Bitmap<{ BITMAP_BITS }>>() };
-        bitmap.deallocate(block % BITMAP_BITS).unwrap();
-        assert!(bitmap.get(block % BITMAP_BITS) == Some(false));
-
-        log.write(&bitmap_buf);
-    }
-
-    pub fn allocate_inode(
-        &self,
-        device: usize,
-        kind: InodeKind,
-        log: &LogGuard,
-    ) -> Result<usize, ()> {
-        for inum in 1..(self.ninodes as usize) {
-            let block_index = self.inode_block_at(inum);
-            let in_block_index = inum % INODES_PER_BLOCK;
-
-            let mut block = buffer::get(device, block_index).unwrap();
-            let inodes = unsafe { block.read_array::<Inode>() };
-
-            let inode = &mut inodes[in_block_index];
-            if inode.kind == InodeKind::Unused {
-                inode.kind = kind;
-                log.write(&block);
-
-                return Ok(inum);
-            }
-        }
-
-        Err(())
     }
 }
 
+unsafe fn allocate_block(superblock: &SuperBlock, device: usize, log: &LogGuard) -> Option<usize> {
+    for bi in (0..(superblock.size as usize)).step_by(BITMAP_BITS) {
+        let mut bitmap_buf = buffer::get(device, superblock.bitmap_at(bi)).unwrap();
+
+        let bitmap = unsafe { bitmap_buf.read::<Bitmap<{ BITMAP_BITS }>>() };
+        match bitmap.allocate() {
+            Some(index) if (bi + index) < superblock.size as usize => {
+                log.write(&bitmap_buf);
+
+                let block = bi + index;
+                write_zeros_to_block(device, block, log);
+                return Some(block);
+            }
+            Some(index) => {
+                bitmap.deallocate(index).unwrap();
+                return None;
+            }
+            None => {
+                continue;
+            }
+        }
+    }
+    None
+}
+
+unsafe fn deallocate_block(superblock: &SuperBlock, device: usize, block: usize, log: &LogGuard) {
+    let mut bitmap_buf = buffer::get(device, superblock.bitmap_at(block)).unwrap();
+
+    let bitmap = unsafe { bitmap_buf.read::<Bitmap<{ BITMAP_BITS }>>() };
+    bitmap.deallocate(block % BITMAP_BITS).unwrap();
+    assert!(bitmap.get(block % BITMAP_BITS) == Some(false));
+
+    log.write(&bitmap_buf);
+}
+
+fn allocate_inode(
+    superblock: &SuperBlock,
+    device: usize,
+    kind: InodeKind,
+    log: &LogGuard,
+) -> Result<usize, ()> {
+    for inum in 1..(superblock.ninodes as usize) {
+        let block_index = superblock.inode_block_at(inum);
+        let in_block_index = inum % INODES_PER_BLOCK;
+
+        let mut block = buffer::get(device, block_index).unwrap();
+        let inodes = unsafe { block.read_array::<Inode>() };
+
+        let inode = &mut inodes[in_block_index];
+        if inode.kind == InodeKind::Unused {
+            inode.kind = kind;
+            log.write(&block);
+
+            return Ok(inum);
+        }
+    }
+
+    Err(())
+}
+
 pub struct InodeCache<const N: usize> {
-    cache: SpinLock<CacheRc<InodeKey, N>>,
+    cache: SpinLock<RcCache<InodeKey, N>>,
     inodes: [SleepLock<InodeEntry>; N],
 }
 
 impl<const N: usize> InodeCache<N> {
     pub const fn new() -> Self {
         Self {
-            cache: SpinLock::new(CacheRc::new()),
+            cache: SpinLock::new(RcCache::new()),
             inodes: [const { SleepLock::new(InodeEntry::zeroed()) }; _],
         }
     }
@@ -766,7 +767,7 @@ pub fn create<'log>(
             }
         }
         None => {
-            let inode_number = unsafe { SUPERBLOCK.allocate_inode(dir.device, kind, log)? };
+            let inode_number = unsafe { allocate_inode(&SUPERBLOCK, dir.device, kind, log)? };
             let inode_ref = get(dir.device, inode_number, log).ok_or(())?;
             let mut inode = inode_ref.lock();
             inode.inode.major = major;

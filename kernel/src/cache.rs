@@ -138,12 +138,12 @@ impl<Key, const N: usize> Cache<Key, N> {
     }
 }
 
-pub struct CacheRc<Key, const N: usize> {
+pub struct RcCache<Key, const N: usize> {
     cache: Cache<Key, N>,
     counts: [usize; N],
 }
 
-impl<Key, const N: usize> CacheRc<Key, N> {
+impl<Key, const N: usize> RcCache<Key, N> {
     pub const fn new() -> Self {
         Self {
             cache: Cache::new(),
