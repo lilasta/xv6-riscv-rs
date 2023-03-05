@@ -2,6 +2,7 @@ use crate::filesystem::buffer::BSIZE;
 use crate::filesystem::inode::Inode;
 
 pub mod buffer;
+pub mod directory_entry;
 pub mod inode;
 pub mod log;
 pub mod superblock;

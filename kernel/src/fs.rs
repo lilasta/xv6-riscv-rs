@@ -5,6 +5,7 @@ use crate::bitmap::Bitmap;
 use crate::cache::RcCache;
 use crate::config::{NINODE, ROOTDEV};
 use crate::filesystem::buffer::{self, BSIZE};
+use crate::filesystem::directory_entry::DirectoryEntry;
 use crate::filesystem::inode::{Inode, InodeKind};
 use crate::filesystem::log::{self};
 use crate::filesystem::superblock::SuperBlock;
@@ -14,24 +15,6 @@ use crate::filesystem::{
 use crate::process::{self, copyin_either, copyout_either};
 use crate::sleeplock::{SleepLock, SleepLockGuard};
 use crate::spinlock::SpinLock;
-
-#[repr(C)]
-#[derive(Debug)]
-pub struct DirectoryEntry {
-    inode_number: u16,
-    name: [u8; Self::NAME_LENGTH],
-}
-
-impl DirectoryEntry {
-    pub const NAME_LENGTH: usize = 14;
-
-    pub const fn unused() -> Self {
-        Self {
-            inode_number: 0,
-            name: [0; _],
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Debug, Clone)]
@@ -229,17 +212,13 @@ impl CachedInode {
 
         for offset in (0..self.size()).step_by(core::mem::size_of::<DirectoryEntry>()) {
             let entry = self.read::<DirectoryEntry>(offset).unwrap();
-            if entry.inode_number == 0 {
+            if entry.inode_number() == 0 {
                 continue;
             }
 
-            let mut cmp = [0; DirectoryEntry::NAME_LENGTH];
-            let len = name.len().min(DirectoryEntry::NAME_LENGTH);
-            cmp[..len].copy_from_slice(&name.as_bytes()[..len]);
-
-            if cmp == entry.name {
+            if entry.is(name) {
                 return INODE_ALLOC
-                    .get(self.device, entry.inode_number as usize)
+                    .get(self.device, entry.inode_number())
                     .map(|inode| (inode, offset));
             }
         }
@@ -255,7 +234,7 @@ impl CachedInode {
         let entry_size = core::mem::size_of::<DirectoryEntry>();
         for off in ((2 * entry_size)..(self.inode.size as usize)).step_by(entry_size) {
             let entry = self.read::<DirectoryEntry>(off).unwrap();
-            if entry.inode_number != 0 {
+            if entry.inode_number() != 0 {
                 return Some(false);
             }
         }
@@ -326,21 +305,12 @@ impl CachedInode {
             return Err(());
         }
 
-        let new_entry = {
-            let mut entry = DirectoryEntry {
-                inode_number: inode_number as u16,
-                name: [0; _],
-            };
-
-            let len = name.len().min(DirectoryEntry::NAME_LENGTH);
-            entry.name[..len].copy_from_slice(&name.as_bytes()[..len]);
-            entry
-        };
+        let new_entry = DirectoryEntry::new(inode_number, name);
 
         let entry_size = core::mem::size_of::<DirectoryEntry>();
         for offset in (0..self.size()).step_by(entry_size) {
             let entry = self.read::<DirectoryEntry>(offset).unwrap();
-            if entry.inode_number == 0 {
+            if entry.inode_number() == 0 {
                 self.write(new_entry, offset).unwrap();
                 return Ok(());
             }
