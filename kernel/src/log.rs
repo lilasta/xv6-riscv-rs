@@ -71,14 +71,14 @@ impl Log {
         }
     }
 
-    fn start(mut self: SpinLockGuard<'static, Self>) -> LogGuard {
+    fn start(mut self: SpinLockGuard<'static, Self>) -> Logger {
         loop {
             let is_full = self.header.n as usize + (self.outstanding + 1) * MAXOPBLOCKS > LOGSIZE;
             if self.committing || is_full {
                 process::sleep(core::ptr::addr_of!(*self).addr(), &mut self);
             } else {
                 self.outstanding += 1;
-                return LogGuard::new(SpinLock::unlock(self));
+                return Logger::new(SpinLock::unlock(self));
             }
         }
     }
@@ -122,11 +122,11 @@ impl Log {
 }
 
 #[derive(Debug)]
-pub struct LogGuard {
+pub struct Logger {
     log: &'static SpinLock<Log>,
 }
 
-impl LogGuard {
+impl Logger {
     fn new(log: &'static SpinLock<Log>) -> Self {
         Self { log }
     }
@@ -136,7 +136,7 @@ impl LogGuard {
     }
 }
 
-impl Drop for LogGuard {
+impl Drop for Logger {
     fn drop(&mut self) {
         self.log.lock().end();
     }
@@ -144,7 +144,7 @@ impl Drop for LogGuard {
 
 static LOG: SpinLock<Log> = SpinLock::new(Log::new());
 
-pub fn start() -> LogGuard {
+pub fn start() -> Logger {
     LOG.lock().start()
 }
 

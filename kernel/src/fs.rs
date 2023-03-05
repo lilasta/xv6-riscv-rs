@@ -8,7 +8,7 @@ use crate::{
     buffer::{self, BSIZE},
     cache::RcCache,
     config::{NINODE, ROOTDEV},
-    log::{self, LogGuard},
+    log::{self, Logger},
     process::{self, copyin_either, copyout_either},
     sleeplock::{SleepLock, SleepLockGuard},
     spinlock::SpinLock,
@@ -176,7 +176,7 @@ impl InodeEntry {
         assert!(!matches!(self.inode.kind, InodeKind::Unused));
     }
 
-    fn offset_to_block(&mut self, offset: usize, log: Option<&LogGuard>) -> Option<usize> {
+    fn offset_to_block(&mut self, offset: usize, log: Option<&Logger>) -> Option<usize> {
         let index = offset / BSIZE;
 
         if let Some(addr) = self.inode.addrs.get_mut(index) {
@@ -267,7 +267,7 @@ impl InodeEntry {
     pub fn lookup<'log>(
         &mut self,
         name: &str,
-        log: &'log LogGuard,
+        log: &'log Logger,
     ) -> Option<(InodeReference<'log>, usize)> {
         if !self.is_directory() {
             return None;
@@ -314,7 +314,7 @@ impl InodeEntry {
         src: usize,
         offset: usize,
         count: usize,
-        log: &LogGuard,
+        log: &Logger,
     ) -> Result<usize, ()> {
         let type_size = core::mem::size_of::<T>();
         let write_size = type_size * count;
@@ -355,7 +355,7 @@ impl InodeEntry {
         Ok(wrote)
     }
 
-    pub fn write<T>(&mut self, value: T, offset: usize, log: &LogGuard) -> Result<(), ()> {
+    pub fn write<T>(&mut self, value: T, offset: usize, log: &Logger) -> Result<(), ()> {
         let wrote = self.copy_from::<T>(false, <*const T>::addr(&value), offset, 1, log)?;
         if wrote == core::mem::size_of::<T>() {
             Ok(())
@@ -364,7 +364,7 @@ impl InodeEntry {
         }
     }
 
-    pub fn link(&mut self, name: &str, inode_number: usize, log: &LogGuard) -> Result<(), ()> {
+    pub fn link(&mut self, name: &str, inode_number: usize, log: &Logger) -> Result<(), ()> {
         if !self.is_directory() {
             return Err(());
         }
@@ -397,7 +397,7 @@ impl InodeEntry {
         self.write(new_entry, insert_offset, log).or(Err(()))
     }
 
-    pub fn update(&mut self, log: &LogGuard) {
+    pub fn update(&mut self, log: &Logger) {
         let inode_start = unsafe { SUPERBLOCK.inodestart as usize };
 
         let block_index = inode_start + self.inode_number / INODES_PER_BLOCK;
@@ -409,7 +409,7 @@ impl InodeEntry {
         log.write(&block);
     }
 
-    pub fn truncate(&mut self, log: &LogGuard) {
+    pub fn truncate(&mut self, log: &Logger) {
         for addr in self.inode.addrs {
             if addr != 0 {
                 unsafe { deallocate_block(&SUPERBLOCK, self.device, addr as usize, log) };
@@ -441,7 +441,7 @@ pub struct InodePin {
 }
 
 impl InodePin {
-    pub fn into_ref<'log>(self, log: &'log LogGuard) -> InodeReference<'log> {
+    pub fn into_ref<'log>(self, log: &'log Logger) -> InodeReference<'log> {
         let reference = InodeReference {
             cache_index: self.cache_index,
             entry: self.entry,
@@ -455,7 +455,7 @@ impl InodePin {
         reference
     }
 
-    pub fn drop_with_log(self, log: &LogGuard) {
+    pub fn drop_with_log(self, log: &Logger) {
         INODE_ALLOC.release(self.cache_index, log);
         core::mem::forget(self);
     }
@@ -479,7 +479,7 @@ impl Drop for InodePin {
 pub struct InodeReference<'log> {
     cache_index: usize,
     entry: &'static SleepLock<InodeEntry>,
-    log: &'log LogGuard,
+    log: &'log Logger,
 }
 
 impl<'log> InodeReference<'log> {
@@ -527,7 +527,7 @@ impl<'log> Drop for InodeReference<'log> {
 pub struct InodeGuard<'log> {
     cache_index: usize,
     entry: ManuallyDrop<SleepLockGuard<InodeEntry>>,
-    log: &'log LogGuard,
+    log: &'log Logger,
 }
 
 impl<'log> InodeGuard<'log> {
@@ -595,7 +595,7 @@ impl SuperBlock {
     }
 }
 
-unsafe fn allocate_block(superblock: &SuperBlock, device: usize, log: &LogGuard) -> Option<usize> {
+unsafe fn allocate_block(superblock: &SuperBlock, device: usize, log: &Logger) -> Option<usize> {
     for bi in (0..(superblock.size as usize)).step_by(BITMAP_BITS) {
         let mut bitmap_buf = buffer::get(device, superblock.bitmap_at(bi)).unwrap();
 
@@ -620,7 +620,7 @@ unsafe fn allocate_block(superblock: &SuperBlock, device: usize, log: &LogGuard)
     None
 }
 
-unsafe fn deallocate_block(superblock: &SuperBlock, device: usize, block: usize, log: &LogGuard) {
+unsafe fn deallocate_block(superblock: &SuperBlock, device: usize, block: usize, log: &Logger) {
     let mut bitmap_buf = buffer::get(device, superblock.bitmap_at(block)).unwrap();
 
     let bitmap = unsafe { bitmap_buf.read::<Bitmap<{ BITMAP_BITS }>>() };
@@ -634,7 +634,7 @@ fn allocate_inode(
     superblock: &SuperBlock,
     device: usize,
     kind: InodeKind,
-    log: &LogGuard,
+    log: &Logger,
 ) -> Result<usize, ()> {
     for inum in 1..(superblock.ninodes as usize) {
         let block_index = superblock.inode_block_at(inum);
@@ -672,7 +672,7 @@ impl<const N: usize> InodeCache<N> {
         &'static self,
         device: usize,
         inode_number: usize,
-        log: &'log LogGuard,
+        log: &'log Logger,
     ) -> Option<InodeReference<'log>> {
         let mut cache = self.cache.lock();
 
@@ -701,7 +701,7 @@ impl<const N: usize> InodeCache<N> {
         self.cache.lock().duplicate(index);
     }
 
-    pub fn release(&'static self, index: usize, log: &LogGuard) {
+    pub fn release(&'static self, index: usize, log: &Logger) {
         let mut cache = self.cache.lock();
 
         let reference = cache.reference_count(index).unwrap();
@@ -727,7 +727,7 @@ static mut SUPERBLOCK: SuperBlock = SuperBlock::zeroed();
 
 static INODE_ALLOC: InodeCache<NINODE> = InodeCache::new();
 
-fn write_zeros_to_block(device: usize, block: usize, log: &LogGuard) {
+fn write_zeros_to_block(device: usize, block: usize, log: &Logger) {
     let mut buf = buffer::get(device, block).unwrap();
     buf.clear();
     log.write(&buf);
@@ -751,7 +751,7 @@ pub fn create<'log>(
     kind: InodeKind,
     major: u16,
     minor: u16,
-    log: &'log LogGuard,
+    log: &'log Logger,
 ) -> Result<InodeGuard<'log>, ()> {
     let (dir_ref, name) = search_parent_inode(path, log).ok_or(())?;
     let mut dir = dir_ref.lock();
@@ -885,21 +885,17 @@ pub fn make_special_file(path: &str, major: u16, minor: u16) -> Result<(), ()> {
     Ok(())
 }
 
-pub fn get<'log>(device: usize, inode: usize, log: &'log LogGuard) -> Option<InodeReference<'log>> {
+pub fn get<'log>(device: usize, inode: usize, log: &'log Logger) -> Option<InodeReference<'log>> {
     INODE_ALLOC.get(device, inode, log)
 }
 
-pub fn search_inode<'log>(path: &str, log: &'log LogGuard) -> Option<InodeReference<'log>> {
+pub fn search_inode<'log>(path: &str, log: &'log Logger) -> Option<InodeReference<'log>> {
     let mut inode_ref = if path.starts_with('/') {
         get(ROOTDEV, ROOTINO, log).unwrap()
     } else {
-        process::context()
-            .unwrap()
-            .cwd
-            .as_ref()
-            .cloned()
-            .unwrap()
-            .into_ref(log)
+        let context = process::context()?;
+        let cwd = context.cwd.clone()?;
+        cwd.into_ref(log)
     };
 
     for element in path.split('/') {
@@ -926,18 +922,14 @@ pub fn search_inode<'log>(path: &str, log: &'log LogGuard) -> Option<InodeRefere
 
 pub fn search_parent_inode<'p, 'log>(
     path: &'p str,
-    log: &'log LogGuard,
+    log: &'log Logger,
 ) -> Option<(InodeReference<'log>, &'p str)> {
     let mut inode_ref = if path.starts_with('/') {
         get(ROOTDEV, ROOTINO, log).unwrap()
     } else {
-        process::context()
-            .unwrap()
-            .cwd
-            .as_ref()
-            .cloned()
-            .unwrap()
-            .into_ref(log)
+        let context = process::context()?;
+        let cwd = context.cwd.clone()?;
+        cwd.into_ref(log)
     };
 
     let mut iter = path.split('/').peekable();
