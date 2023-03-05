@@ -71,16 +71,16 @@ impl Log {
         }
     }
 
-    fn start(mut self: SpinLockGuard<'static, Self>) -> Logger {
-        loop {
-            let is_full = self.header.n as usize + (self.outstanding + 1) * MAXOPBLOCKS > LOGSIZE;
-            if self.committing || is_full {
-                process::sleep(core::ptr::addr_of!(*self).addr(), &mut self);
-            } else {
-                self.outstanding += 1;
-                return Logger::new(SpinLock::unlock(self));
-            }
+    const fn is_full(&self) -> bool {
+        self.header.n as usize + (self.outstanding + 1) * MAXOPBLOCKS > LOGSIZE
+    }
+
+    fn start(mut self: SpinLockGuard<'static, Self>) {
+        while self.committing || self.is_full() {
+            process::sleep(core::ptr::addr_of!(*self).addr(), &mut self);
         }
+
+        self.outstanding += 1;
     }
 
     fn commit(self: &mut SpinLockGuard<Self>) {
@@ -121,31 +121,13 @@ impl Log {
     }
 }
 
-#[derive(Debug)]
-pub struct Logger {
-    log: &'static SpinLock<Log>,
-}
-
-impl Logger {
-    fn new(log: &'static SpinLock<Log>) -> Self {
-        Self { log }
-    }
-
-    pub fn write<T>(&self, buf: &Buffer<T, BSIZE, NBUF>) {
-        self.log.lock().write(buf);
-    }
-}
-
-impl Drop for Logger {
-    fn drop(&mut self) {
-        self.log.lock().end();
-    }
-}
-
 static LOG: SpinLock<Log> = SpinLock::new(Log::new());
 
-pub fn start() -> Logger {
-    LOG.lock().start()
+pub fn with<R, F: FnOnce() -> R>(f: F) -> R {
+    LOG.lock().start();
+    let ret = f();
+    LOG.lock().end();
+    ret
 }
 
 fn read_header(log: &mut SpinLockGuard<Log>) -> Option<()> {
@@ -217,4 +199,8 @@ pub fn initialize(device: usize, sb: &SuperBlock) {
     read_header(&mut log).unwrap();
     install_blocks(&mut log, true);
     write_header(&mut log).unwrap();
+}
+
+pub fn write<T>(buf: &Buffer<T, BSIZE, NBUF>) {
+    LOG.lock().write(buf);
 }

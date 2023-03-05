@@ -3,7 +3,7 @@ mod scheduler;
 mod table;
 mod trapframe;
 
-use core::mem::MaybeUninit;
+use core::mem::{ManuallyDrop, MaybeUninit};
 
 use crate::allocator;
 use crate::bitmap::Bitmap;
@@ -227,9 +227,9 @@ pub unsafe fn setup_init_process() {
     context.trapframe.epc = 0;
     context.trapframe.sp = PGSIZE as _;
 
-    let log = log::start();
-    context.cwd = fs::search_inode(&"/", &log).map(|inode| inode.pin());
-    drop(log);
+    log::with(|| {
+        context.cwd = fs::search_inode(&"/").map(ManuallyDrop::new);
+    });
 
     // process.name = "initcode";
 

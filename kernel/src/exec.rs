@@ -39,77 +39,81 @@ fn load_segment(
 }
 
 pub unsafe fn execute(path: &str, argv: &[CString]) -> Result<usize, ()> {
-    let log = log::start();
-    let Some(inode_ref) = fs::search_inode(path, &log) else {
-        return Err(());
-    };
-    let mut inode = inode_ref.lock();
-
-    let Ok(elf) = inode.read::<ELFHeader>(0) else {
-        return Err(());
-    };
-
-    if !elf.validate_magic() {
-        return Err(());
-    }
-
-    let Some(context) = process::context() else {
-        return Err(());
-    };
-
-    let Ok(mut pagetable) = process::allocate_pagetable(core::ptr::addr_of!(*context.trapframe).addr()) else {
-        return Err(());
-    };
-
     let bad = |mut pagetable, size| {
         process::free_pagetable(&mut pagetable, size);
         Err(())
     };
 
-    // Load program into memory.
-    let mut size = 0;
-    for offset in (elf.phoff..)
-        .step_by(core::mem::size_of::<ProgramHeader>())
-        .take(elf.phnum as usize)
-    {
-        let Ok(header) = inode.read::<ProgramHeader>(offset) else {
-            return bad(pagetable, size);
+    let (elf, context, size, mut pagetable) = log::with(|| {
+        let Some(inode_ref) = fs::search_inode(path) else {
+            return Err(());
+        };
+        let mut inode = inode_ref.lock();
+
+        let Ok(elf) = inode.read::<ELFHeader>(0) else {
+            return Err(());
         };
 
-        if header.kind != ProgramHeader::KIND_LOAD {
-            continue;
+        if !elf.validate_magic() {
+            return Err(());
         }
 
-        if header.memsz < header.filesz {
-            return bad(pagetable, size);
-        }
+        let Some(context) = process::context() else {
+            return Err(());
+        };
 
-        if header.vaddr + header.memsz < header.vaddr {
-            return bad(pagetable, size);
-        }
+        let Ok(mut pagetable) = process::allocate_pagetable(core::ptr::addr_of!(*context.trapframe).addr()) else {
+            return Err(());
+        };
 
-        if header.vaddr % PGSIZE != 0 {
-            return bad(pagetable, size);
-        }
+        // Load program into memory.
+        let mut size = 0;
+        for offset in (elf.phoff..)
+            .step_by(core::mem::size_of::<ProgramHeader>())
+            .take(elf.phnum as usize)
+        {
+            let Ok(header) = inode.read::<ProgramHeader>(offset) else {
+                return bad(pagetable, size);
+            };
 
-        match pagetable.grow(size, header.vaddr + header.memsz, flags2perm(header.flags)) {
-            Ok(new_size) => size = new_size,
-            Err(_) => return bad(pagetable, size),
-        }
+            if header.kind != ProgramHeader::KIND_LOAD {
+                continue;
+            }
 
-        if !load_segment(
-            &mut pagetable,
-            header.vaddr,
-            &mut inode,
-            header.off,
-            header.filesz,
-        ) {
-            return bad(pagetable, size);
+            if header.memsz < header.filesz {
+                return bad(pagetable, size);
+            }
+
+            if header.vaddr + header.memsz < header.vaddr {
+                return bad(pagetable, size);
+            }
+
+            if header.vaddr % PGSIZE != 0 {
+                return bad(pagetable, size);
+            }
+
+            match pagetable.grow(size, header.vaddr + header.memsz, flags2perm(header.flags)) {
+                Ok(new_size) => size = new_size,
+                Err(_) => return bad(pagetable, size),
+            }
+
+            if !load_segment(
+                &mut pagetable,
+                header.vaddr,
+                &mut inode,
+                header.off,
+                header.filesz,
+            ) {
+                return bad(pagetable, size);
+            }
         }
-    }
-    drop(inode);
-    drop(inode_ref);
-    drop(log);
+        Ok((elf, context, size, pagetable))
+    })?;
+
+    let bad = |mut pagetable, size| {
+        process::free_pagetable(&mut pagetable, size);
+        Err(())
+    };
 
     let old_size = context.sz;
 

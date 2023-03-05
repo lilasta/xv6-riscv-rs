@@ -1,3 +1,5 @@
+use core::mem::ManuallyDrop;
+
 use alloc::{ffi::CString, sync::Arc};
 use arrayvec::ArrayVec;
 
@@ -210,47 +212,48 @@ fn sys_open() -> Result<u64, ()> {
     const O_CREATE: usize = 0x200;
     const O_TRUNC: usize = 0x400;
 
-    let log = log::start();
-    let mode = arg_usize::<1>();
-    let mut inode = if mode & O_CREATE != 0 {
-        fs::create(path, InodeKind::File, 0, 0, &log)?
-    } else {
-        let inode_ref = fs::search_inode(path, &log).ok_or(())?;
-        inode_ref.lock()
-    };
+    log::with(|| {
+        let mode = arg_usize::<1>();
+        let mut inode = if mode & O_CREATE != 0 {
+            fs::create(path, InodeKind::File, 0, 0)?
+        } else {
+            let inode_ref = fs::search_inode(path).ok_or(())?;
+            inode_ref.lock()
+        };
 
-    if inode.is_directory() && mode != O_RDONLY {
-        return Err(());
-    }
+        if inode.is_directory() && mode != O_RDONLY {
+            return Err(());
+        }
 
-    if inode.is_device() && inode.device_major() >= Some(NDEV) {
-        return Err(());
-    }
+        if inode.is_device() && inode.device_major() >= Some(NDEV) {
+            return Err(());
+        }
 
-    let readable = mode & O_WRONLY == 0;
-    let writable = mode & O_WRONLY != 0 || mode & O_RDWR != 0;
+        let readable = mode & O_WRONLY == 0;
+        let writable = mode & O_WRONLY != 0 || mode & O_RDWR != 0;
 
-    let file = if inode.is_device() {
-        File::new_device(
-            InodeGuard::as_ref(&inode).pin(),
-            inode.device_major().unwrap(),
-            readable,
-            writable,
-        )
-    } else {
-        File::new_inode(InodeGuard::as_ref(&inode).pin(), readable, writable)
-    };
+        let file = if inode.is_device() {
+            File::new_device(
+                InodeGuard::as_ref(&inode),
+                inode.device_major().unwrap(),
+                readable,
+                writable,
+            )
+        } else {
+            File::new_inode(InodeGuard::as_ref(&inode), readable, writable)
+        };
 
-    let file = Arc::new(file);
-    let Ok(fd) =  fdalloc(file) else {
-        return Err(());
-    };
+        let file = Arc::new(file);
+        let Ok(fd) =  fdalloc(file) else {
+            return Err(());
+        };
 
-    if mode & O_TRUNC != 0 && inode.is_file() {
-        inode.truncate(&log);
-    }
+        if mode & O_TRUNC != 0 && inode.is_file() {
+            inode.truncate();
+        }
 
-    Ok(fd as u64)
+        Ok(fd as u64)
+    })
 }
 
 fn sys_mkdir() -> Result<u64, ()> {
@@ -271,21 +274,24 @@ fn sys_chdir() -> Result<u64, ()> {
     let mut path = [0u8; MAXPATH];
     let path = arg_string::<0>(&mut path)?;
 
-    let log = log::start();
-    let inode_ref = fs::search_inode(path, &log).ok_or(())?;
-    let inode = inode_ref.lock();
+    log::with(|| {
+        let inode_ref = fs::search_inode(path).ok_or(())?;
+        let inode = inode_ref.lock();
 
-    if !inode.is_directory() {
-        return Err(());
-    }
+        if !inode.is_directory() {
+            return Err(());
+        }
 
-    let context = process::context().unwrap();
-    context.cwd.take();
-    context
-        .cwd
-        .replace(inode_ref.pin())
-        .map(|cwd| cwd.drop_with_log(&log));
-    Ok(0)
+        let context = process::context().unwrap();
+        context.cwd.take();
+
+        let mut cwd = context.cwd.replace(ManuallyDrop::new(inode_ref));
+        if let Some(ref mut cwd) = cwd {
+            log::with(|| unsafe { ManuallyDrop::drop(cwd) });
+        }
+
+        Ok(0)
+    })
 }
 
 fn sys_exec() -> Result<u64, ()> {

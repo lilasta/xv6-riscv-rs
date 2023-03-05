@@ -1,10 +1,12 @@
+use core::mem::ManuallyDrop;
 use core::sync::atomic::{AtomicUsize, Ordering::*};
 
+use crate::fs::InodeReference;
 use crate::{
     config::{MAXOPBLOCKS, NDEV},
     filesystem::buffer::BSIZE,
     filesystem::log,
-    fs::{InodePin, Stat},
+    fs::Stat,
     pipe::Pipe,
 };
 
@@ -16,13 +18,13 @@ pub enum File {
         pipe: Pipe<PIPESIZE>,
     },
     Inode {
-        inode: InodePin,
+        inode: ManuallyDrop<InodeReference>,
         offset: AtomicUsize,
         readable: bool,
         writable: bool,
     },
     Device {
-        inode: InodePin,
+        inode: ManuallyDrop<InodeReference>,
         major: usize,
         readable: bool,
         writable: bool,
@@ -34,18 +36,23 @@ impl File {
         Self::Pipe { pipe }
     }
 
-    pub const fn new_inode(inode: InodePin, readable: bool, writable: bool) -> Self {
+    pub const fn new_inode(inode: InodeReference, readable: bool, writable: bool) -> Self {
         Self::Inode {
-            inode,
+            inode: ManuallyDrop::new(inode),
             offset: AtomicUsize::new(0),
             readable,
             writable,
         }
     }
 
-    pub const fn new_device(inode: InodePin, major: usize, readable: bool, writable: bool) -> Self {
+    pub const fn new_device(
+        inode: InodeReference,
+        major: usize,
+        readable: bool,
+        writable: bool,
+    ) -> Self {
         Self::Device {
-            inode,
+            inode: ManuallyDrop::new(inode),
             major,
             readable,
             writable,
@@ -56,9 +63,7 @@ impl File {
         match self {
             Self::Pipe { .. } => Err(()),
             Self::Inode { inode, .. } | Self::Device { inode, .. } => {
-                let log = log::start();
-                let stat = inode.clone().into_ref(&log).lock().stat();
-                Ok(stat)
+                log::with(|| Ok(inode.lock().stat()))
             }
         }
     }
@@ -76,11 +81,13 @@ impl File {
                     return Err(());
                 }
 
-                let log = log::start();
-                let mut inode = inode.clone().into_ref(&log).lock();
-                let read = inode.copy_to::<u8>(true, addr, offset.load(Acquire), n)?;
-                offset.fetch_add(read, Release);
-                Ok(read)
+                log::with(|| {
+                    let read = inode
+                        .lock()
+                        .copy_to::<u8>(true, addr, offset.load(Acquire), n)?;
+                    offset.fetch_add(read, Release);
+                    Ok(read)
+                })
             }
             Self::Device {
                 major, readable, ..
@@ -124,14 +131,14 @@ impl File {
                 while i < n {
                     let n = (n - i).min(max);
 
-                    let log = log::start();
-                    let mut inode = inode.clone().into_ref(&log).lock();
-                    let wrote = inode
-                        .copy_from::<u8>(true, addr + i, offset.load(Acquire), n, &log)
-                        .unwrap_or(0);
-                    offset.fetch_add(wrote, Release);
-                    drop(inode);
-                    drop(log);
+                    let wrote = log::with(|| {
+                        let wrote = inode
+                            .lock()
+                            .copy_from::<u8>(true, addr + i, offset.load(Acquire), n)
+                            .unwrap_or(0);
+                        offset.fetch_add(wrote, Release);
+                        wrote
+                    });
 
                     if wrote != n {
                         break;
@@ -159,6 +166,17 @@ impl File {
                     Ok(result as usize)
                 }
             }
+        }
+    }
+}
+
+impl Drop for File {
+    fn drop(&mut self) {
+        match self {
+            Self::Inode { inode, .. } | Self::Device { inode, .. } => {
+                log::with(|| unsafe { ManuallyDrop::drop(inode) })
+            }
+            _ => {}
         }
     }
 }
