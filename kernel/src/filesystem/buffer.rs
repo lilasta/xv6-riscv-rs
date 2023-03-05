@@ -151,26 +151,6 @@ impl<const BSIZE: usize, const CSIZE: usize> BufferCache<BSIZE, CSIZE> {
         })
     }
 
-    unsafe fn with_clear<T>(
-        &'static self,
-        device: usize,
-        block: usize,
-    ) -> Option<Buffer<'static, T, BSIZE, CSIZE>> {
-        const { check_convertibility::<T, BSIZE>() };
-
-        let (index, mut buffer, _) = self.get(device, block)?;
-
-        buffer.fill(0);
-
-        Some(Buffer {
-            cache: self,
-            buffer,
-            block_number: block,
-            cache_index: index,
-            phantom: PhantomData,
-        })
-    }
-
     fn release(&self, index: usize) {
         self.cache.lock().release(index).unwrap();
     }
@@ -197,13 +177,6 @@ pub fn with_write<T>(
     src: &T,
 ) -> Option<Buffer<'static, T, BSIZE, NBUF>> {
     CACHE.with_write(device, block, src)
-}
-
-pub unsafe fn with_clear<T>(
-    device: usize,
-    block: usize,
-) -> Option<Buffer<'static, T, BSIZE, NBUF>> {
-    CACHE.with_clear(device, block)
 }
 
 pub unsafe fn flush<T: 'static>(mut buffer: Buffer<'static, T, BSIZE, NBUF>) {

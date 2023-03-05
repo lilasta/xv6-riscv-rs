@@ -696,20 +696,15 @@ static mut SUPERBLOCK: SuperBlock = SuperBlock::zeroed();
 static INODE_ALLOC: InodeCache<NINODE> = InodeCache::new();
 
 fn write_zeros_to_block(device: usize, block: usize, log: &Logger) {
-    let buf = unsafe { buffer::with_clear::<()>(device, block).unwrap() };
+    let buf = buffer::with_write::<[u8; BSIZE]>(device, block, &[0; _]).unwrap();
     log.write(&buf);
 }
 
 pub fn initialize(device: usize) {
-    fn read_superblock(device: usize) -> Option<SuperBlock> {
-        let buf = unsafe { buffer::with_read::<SuperBlock>(device, 1)? };
-        Some((*buf).clone())
-    }
-
-    let superblock = read_superblock(device).unwrap();
+    let superblock = unsafe { buffer::with_read::<SuperBlock>(device, 1).unwrap() };
     assert!(superblock.magic == FSMAGIC);
     log::initialize(device, &superblock);
-    unsafe { SUPERBLOCK = superblock };
+    unsafe { SUPERBLOCK = (*superblock).clone() };
 }
 
 pub fn create<'log>(
