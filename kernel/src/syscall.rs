@@ -1,13 +1,14 @@
 use alloc::{ffi::CString, sync::Arc};
 use arrayvec::ArrayVec;
 
+use crate::filesystem::inode::InodeKind;
 use crate::{
     allocator, clock,
     config::{MAXARG, MAXPATH, NDEV},
     exec::execute,
     file::File,
     filesystem::log,
-    fs::{self, InodeGuard, InodeKind},
+    fs::{self, InodeGuard},
     pipe::Pipe,
     process,
     riscv::paging::{PGSIZE, PTE},

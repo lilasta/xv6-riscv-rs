@@ -203,7 +203,6 @@ fn write_log(log: &mut SpinLockGuard<Log>) {
         SpinLock::unlock_temporarily(log, move || unsafe {
             let from = buffer::with_read::<[u8; BSIZE]>(device, inode_in).unwrap();
             let to = buffer::with_write(device, inode_out, &*from).unwrap();
-
             buffer::flush(to);
         });
     }

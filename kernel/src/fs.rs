@@ -1,8 +1,11 @@
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
 
+use crate::filesystem::inode::{Inode, InodeKind};
 use crate::filesystem::superblock::SuperBlock;
-use crate::filesystem::{BITMAP_BITS, INODES_PER_BLOCK};
+use crate::filesystem::{
+    BITMAP_BITS, FSMAGIC, INODES_PER_BLOCK, MAXFILE, NDIRECT, NINDIRECT, ROOTINO,
+};
 use crate::{
     bitmap::Bitmap,
     cache::RcCache,
@@ -13,13 +16,6 @@ use crate::{
     sleeplock::{SleepLock, SleepLockGuard},
     spinlock::SpinLock,
 };
-
-const ROOTINO: usize = 1; // root i-number
-const NDIRECT: usize = 12;
-const NINDIRECT: usize = BSIZE / core::mem::size_of::<u32>();
-
-const MAXFILE: usize = NDIRECT + NINDIRECT;
-const FSMAGIC: u32 = 0x10203040;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -53,41 +49,6 @@ pub struct Stat {
 pub struct InodeKey {
     device: usize,
     index: usize,
-}
-
-#[repr(u16)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InodeKind {
-    Unused = 0,
-    Directory = 1,
-    File = 2,
-    Device = 3,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub struct Inode {
-    kind: InodeKind,
-    major: u16,
-    minor: u16,
-    nlink: u16,
-    size: u32,
-    addrs: [u32; NDIRECT],
-    chain: u32,
-}
-
-impl Inode {
-    pub const fn zeroed() -> Self {
-        Self {
-            kind: InodeKind::Unused,
-            major: 0,
-            minor: 0,
-            nlink: 0,
-            size: 0,
-            addrs: [0; _],
-            chain: 0,
-        }
-    }
 }
 
 #[derive(Debug)]
