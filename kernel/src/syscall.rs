@@ -287,7 +287,7 @@ fn sys_chdir() -> Result<u64, ()> {
 
         let mut cwd = context.cwd.replace(ManuallyDrop::new(inode_ref));
         if let Some(ref mut cwd) = cwd {
-            log::with(|| unsafe { ManuallyDrop::drop(cwd) });
+            unsafe { ManuallyDrop::drop(cwd) };
         }
 
         Ok(0)

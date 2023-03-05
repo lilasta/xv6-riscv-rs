@@ -62,9 +62,7 @@ impl File {
     pub fn stat(&self) -> Result<Stat, ()> {
         match self {
             Self::Pipe { .. } => Err(()),
-            Self::Inode { inode, .. } | Self::Device { inode, .. } => {
-                log::with(|| Ok(inode.lock().stat()))
-            }
+            Self::Inode { inode, .. } | Self::Device { inode, .. } => Ok(inode.lock().stat()),
         }
     }
 
@@ -81,13 +79,11 @@ impl File {
                     return Err(());
                 }
 
-                log::with(|| {
-                    let read = inode
-                        .lock()
-                        .copy_to::<u8>(true, addr, offset.load(Acquire), n)?;
-                    offset.fetch_add(read, Release);
-                    Ok(read)
-                })
+                let read = inode
+                    .lock()
+                    .copy_to::<u8>(true, addr, offset.load(Acquire), n)?;
+                offset.fetch_add(read, Release);
+                Ok(read)
             }
             Self::Device {
                 major, readable, ..

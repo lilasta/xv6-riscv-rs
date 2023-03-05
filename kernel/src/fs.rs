@@ -565,56 +565,54 @@ pub fn initialize(device: usize) {
 }
 
 pub fn create(path: &str, kind: InodeKind, major: u16, minor: u16) -> Result<InodeGuard, ()> {
-    log::with(|| {
-        let (dir_ref, name) = search_parent_inode(path).ok_or(())?;
-        let mut dir = dir_ref.lock();
+    let (dir_ref, name) = search_parent_inode(path).ok_or(())?;
+    let mut dir = dir_ref.lock();
 
-        match dir.lookup(name) {
-            Some((inode_ref, _)) => {
-                drop(dir);
-                let inode = inode_ref.lock();
-                if kind == InodeKind::File && (inode.is_file() || inode.is_device()) {
-                    Ok(inode)
-                } else {
-                    Err(())
-                }
-            }
-            None => {
-                let inode_number = unsafe { allocate_inode(&SUPERBLOCK, dir.device, kind)? };
-                let inode_ref = get(dir.device, inode_number).ok_or(())?;
-                let mut inode = inode_ref.lock();
-                inode.inode.major = major;
-                inode.inode.minor = minor;
-                inode.inode.nlink = 1;
-                inode.update();
-
-                let bad = |mut inode: InodeGuard| {
-                    inode.inode.nlink = 0;
-                    inode.update();
-                    Err(())
-                };
-
-                if kind == InodeKind::Directory {
-                    let this = inode.inode_number;
-                    let parent = dir.inode_number;
-                    if inode.link(".", this).is_err() || inode.link("..", parent).is_err() {
-                        return bad(inode);
-                    }
-                }
-
-                if dir.link(name, inode.inode_number).is_err() {
-                    return bad(inode);
-                }
-
-                if kind == InodeKind::Directory {
-                    dir.increment_link();
-                    dir.update();
-                }
-
+    match dir.lookup(name) {
+        Some((inode_ref, _)) => {
+            drop(dir);
+            let inode = inode_ref.lock();
+            if kind == InodeKind::File && (inode.is_file() || inode.is_device()) {
                 Ok(inode)
+            } else {
+                Err(())
             }
         }
-    })
+        None => {
+            let inode_number = unsafe { allocate_inode(&SUPERBLOCK, dir.device, kind)? };
+            let inode_ref = get(dir.device, inode_number).ok_or(())?;
+            let mut inode = inode_ref.lock();
+            inode.inode.major = major;
+            inode.inode.minor = minor;
+            inode.inode.nlink = 1;
+            inode.update();
+
+            let bad = |mut inode: InodeGuard| {
+                inode.inode.nlink = 0;
+                inode.update();
+                Err(())
+            };
+
+            if kind == InodeKind::Directory {
+                let this = inode.inode_number;
+                let parent = dir.inode_number;
+                if inode.link(".", this).is_err() || inode.link("..", parent).is_err() {
+                    return bad(inode);
+                }
+            }
+
+            if dir.link(name, inode.inode_number).is_err() {
+                return bad(inode);
+            }
+
+            if kind == InodeKind::Directory {
+                dir.increment_link();
+                dir.update();
+            }
+
+            Ok(inode)
+        }
+    }
 }
 
 pub fn link(new: &str, old: &str) -> Result<(), ()> {

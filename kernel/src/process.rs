@@ -322,7 +322,9 @@ pub unsafe fn exit(status: i32) {
     for opened in context.ofile.iter_mut() {
         opened.take();
     }
-    context.cwd.take();
+    if let Some(ref mut cwd) = context.cwd.take() {
+        log::with(|| unsafe { ManuallyDrop::drop(cwd) });
+    }
 
     let _guard = (*table::wait_lock()).lock();
     //table::table().remove_parent(process.pid as usize);
