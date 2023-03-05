@@ -34,14 +34,6 @@ impl<'a, T, const BSIZE: usize, const CSIZE: usize> Buffer<'a, T, BSIZE, CSIZE> 
     pub const fn block_number(this: &Self) -> usize {
         this.block_number
     }
-
-    pub fn pin(this: &Self) {
-        this.cache.pin(this.cache_index);
-    }
-
-    pub fn unpin(this: &Self) {
-        this.cache.unpin(this.cache_index);
-    }
 }
 
 impl<'a, T, const BSIZE: usize, const CSIZE: usize> Deref for Buffer<'a, T, BSIZE, CSIZE> {
@@ -220,4 +212,12 @@ pub unsafe fn flush<T: 'static>(mut buffer: Buffer<'static, T, BSIZE, NBUF>) {
         buffer.block_number,
         BSIZE,
     );
+}
+
+pub fn pin<T>(buffer: &Buffer<T, BSIZE, NBUF>) {
+    CACHE.pin(buffer.cache_index);
+}
+
+pub fn unpin<T>(buffer: &Buffer<T, BSIZE, NBUF>) {
+    CACHE.unpin(buffer.cache_index);
 }

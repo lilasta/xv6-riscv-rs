@@ -114,7 +114,7 @@ impl Log {
         let len = self.header.n as usize;
         let block = Buffer::block_number(buf) as u32;
         if !self.header.block[0..len].contains(&block) {
-            Buffer::pin(buf);
+            buffer::pin(buf);
             self.header.block[len] = block;
             self.header.n += 1;
         }
@@ -184,7 +184,7 @@ fn install_blocks(log: &mut SpinLockGuard<Log>, recovering: bool) {
             let to = buffer::with_write(device, inode_out, &*from).unwrap();
 
             if !recovering {
-                Buffer::unpin(&to);
+                buffer::unpin(&to);
             }
 
             buffer::flush(to);
