@@ -22,7 +22,7 @@ struct BufferKey {
     block: usize,
 }
 
-pub struct BufferGuard<'a, T, const BSIZE: usize, const CSIZE: usize> {
+pub struct Buffer<'a, T, const BSIZE: usize, const CSIZE: usize> {
     cache: &'a BufferCache<BSIZE, CSIZE>,
     buffer: SleepLockGuard<[u8; BSIZE]>,
     block_number: usize,
@@ -30,7 +30,7 @@ pub struct BufferGuard<'a, T, const BSIZE: usize, const CSIZE: usize> {
     phantom: PhantomData<T>,
 }
 
-impl<'a, T, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, T, BSIZE, CSIZE> {
+impl<'a, T, const BSIZE: usize, const CSIZE: usize> Buffer<'a, T, BSIZE, CSIZE> {
     pub const fn block_number(this: &Self) -> usize {
         this.block_number
     }
@@ -44,7 +44,7 @@ impl<'a, T, const BSIZE: usize, const CSIZE: usize> BufferGuard<'a, T, BSIZE, CS
     }
 }
 
-impl<'a, T, const BSIZE: usize, const CSIZE: usize> Deref for BufferGuard<'a, T, BSIZE, CSIZE> {
+impl<'a, T, const BSIZE: usize, const CSIZE: usize> Deref for Buffer<'a, T, BSIZE, CSIZE> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -52,7 +52,7 @@ impl<'a, T, const BSIZE: usize, const CSIZE: usize> Deref for BufferGuard<'a, T,
     }
 }
 
-impl<'a, T, const BSIZE: usize, const CSIZE: usize> DerefMut for BufferGuard<'a, T, BSIZE, CSIZE> {
+impl<'a, T, const BSIZE: usize, const CSIZE: usize> DerefMut for Buffer<'a, T, BSIZE, CSIZE> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe {
             self.buffer
@@ -64,7 +64,7 @@ impl<'a, T, const BSIZE: usize, const CSIZE: usize> DerefMut for BufferGuard<'a,
     }
 }
 
-impl<'a, T, const BSIZE: usize, const CSIZE: usize> Drop for BufferGuard<'a, T, BSIZE, CSIZE> {
+impl<'a, T, const BSIZE: usize, const CSIZE: usize> Drop for Buffer<'a, T, BSIZE, CSIZE> {
     fn drop(&mut self) {
         self.cache.release(self.cache_index);
     }
@@ -118,7 +118,7 @@ impl<const BSIZE: usize, const CSIZE: usize> BufferCache<BSIZE, CSIZE> {
         &'static self,
         device: usize,
         block: usize,
-    ) -> Option<BufferGuard<'static, T, BSIZE, CSIZE>> {
+    ) -> Option<Buffer<'static, T, BSIZE, CSIZE>> {
         const { check_convertibility::<T, BSIZE>() };
 
         let (index, mut buffer, is_uninit) = self.get(device, block)?;
@@ -127,7 +127,7 @@ impl<const BSIZE: usize, const CSIZE: usize> BufferCache<BSIZE, CSIZE> {
             unsafe { virtio::disk::read(buffer.as_mut_ptr().addr(), block, BSIZE) };
         }
 
-        Some(BufferGuard {
+        Some(Buffer {
             cache: self,
             buffer,
             block_number: block,
@@ -141,7 +141,7 @@ impl<const BSIZE: usize, const CSIZE: usize> BufferCache<BSIZE, CSIZE> {
         device: usize,
         block: usize,
         src: &T,
-    ) -> Option<BufferGuard<'static, T, BSIZE, CSIZE>> {
+    ) -> Option<Buffer<'static, T, BSIZE, CSIZE>> {
         const { check_convertibility::<T, BSIZE>() };
 
         let (index, mut buffer, _) = self.get(device, block)?;
@@ -150,7 +150,7 @@ impl<const BSIZE: usize, const CSIZE: usize> BufferCache<BSIZE, CSIZE> {
             buffer.as_mut_ptr().cast::<T>().copy_from(src, 1);
         }
 
-        Some(BufferGuard {
+        Some(Buffer {
             cache: self,
             buffer,
             block_number: block,
@@ -163,14 +163,14 @@ impl<const BSIZE: usize, const CSIZE: usize> BufferCache<BSIZE, CSIZE> {
         &'static self,
         device: usize,
         block: usize,
-    ) -> Option<BufferGuard<'static, T, BSIZE, CSIZE>> {
+    ) -> Option<Buffer<'static, T, BSIZE, CSIZE>> {
         const { check_convertibility::<T, BSIZE>() };
 
         let (index, mut buffer, _) = self.get(device, block)?;
 
         buffer.fill(0);
 
-        Some(BufferGuard {
+        Some(Buffer {
             cache: self,
             buffer,
             block_number: block,
@@ -195,10 +195,7 @@ impl<const BSIZE: usize, const CSIZE: usize> BufferCache<BSIZE, CSIZE> {
 
 static CACHE: BufferCache<BSIZE, NBUF> = BufferCache::new();
 
-pub unsafe fn with_read<T>(
-    device: usize,
-    block: usize,
-) -> Option<BufferGuard<'static, T, BSIZE, NBUF>> {
+pub unsafe fn with_read<T>(device: usize, block: usize) -> Option<Buffer<'static, T, BSIZE, NBUF>> {
     CACHE.with_read(device, block)
 }
 
@@ -206,18 +203,18 @@ pub fn with_write<T>(
     device: usize,
     block: usize,
     src: &T,
-) -> Option<BufferGuard<'static, T, BSIZE, NBUF>> {
+) -> Option<Buffer<'static, T, BSIZE, NBUF>> {
     CACHE.with_write(device, block, src)
 }
 
 pub unsafe fn with_clear<T>(
     device: usize,
     block: usize,
-) -> Option<BufferGuard<'static, T, BSIZE, NBUF>> {
+) -> Option<Buffer<'static, T, BSIZE, NBUF>> {
     CACHE.with_clear(device, block)
 }
 
-pub unsafe fn flush<T: 'static>(mut buffer: BufferGuard<'static, T, BSIZE, NBUF>) {
+pub unsafe fn flush<T: 'static>(mut buffer: Buffer<'static, T, BSIZE, NBUF>) {
     virtio::disk::write(
         buffer.buffer.as_mut_ptr().addr(),
         buffer.block_number,

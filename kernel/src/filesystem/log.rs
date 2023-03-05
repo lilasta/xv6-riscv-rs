@@ -21,7 +21,7 @@
 //   ...
 // Log appends are synchronous.
 
-use crate::filesystem::buffer::{self, BufferGuard, BSIZE};
+use crate::filesystem::buffer::{self, Buffer, BSIZE};
 use crate::filesystem::superblock::SuperBlock;
 use crate::{
     config::{LOGSIZE, MAXOPBLOCKS, NBUF},
@@ -106,15 +106,15 @@ impl Log {
         process::wakeup(core::ptr::addr_of!(**self).addr());
     }
 
-    fn write<T>(&mut self, buf: &BufferGuard<T, BSIZE, NBUF>) {
+    fn write<T>(&mut self, buf: &Buffer<T, BSIZE, NBUF>) {
         assert!((self.header.n as usize) < LOGSIZE);
         assert!((self.header.n as usize) < self.size - 1);
         assert!(self.outstanding > 0);
 
         let len = self.header.n as usize;
-        let block = BufferGuard::block_number(buf) as u32;
+        let block = Buffer::block_number(buf) as u32;
         if !self.header.block[0..len].contains(&block) {
-            BufferGuard::pin(buf);
+            Buffer::pin(buf);
             self.header.block[len] = block;
             self.header.n += 1;
         }
@@ -131,7 +131,7 @@ impl Logger {
         Self { log }
     }
 
-    pub fn write<T>(&self, buf: &BufferGuard<T, BSIZE, NBUF>) {
+    pub fn write<T>(&self, buf: &Buffer<T, BSIZE, NBUF>) {
         self.log.lock().write(buf);
     }
 }
@@ -184,7 +184,7 @@ fn install_blocks(log: &mut SpinLockGuard<Log>, recovering: bool) {
             let to = buffer::with_write(device, inode_out, &*from).unwrap();
 
             if !recovering {
-                BufferGuard::unpin(&to);
+                Buffer::unpin(&to);
             }
 
             buffer::flush(to);
