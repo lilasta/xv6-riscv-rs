@@ -8,13 +8,14 @@ use core::mem::MaybeUninit;
 use crate::allocator;
 use crate::bitmap::Bitmap;
 use crate::config::{NCPU, NPROC, ROOTDEV};
+use crate::filesystem::log;
 use crate::memory_layout::{kstack, kstack_index};
 use crate::process::process::ProcessContext;
 use crate::riscv::enable_interrupt;
 use crate::spinlock::{SpinLock, SpinLockGuard};
 use crate::trap::usertrapret;
 use crate::vm::PageTable;
-use crate::{cpu, fs, interrupt, log};
+use crate::{cpu, fs, interrupt};
 
 use crate::{
     memory_layout::{TRAMPOLINE, TRAPFRAME},

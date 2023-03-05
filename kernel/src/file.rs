@@ -1,10 +1,10 @@
 use core::sync::atomic::{AtomicUsize, Ordering::*};
 
 use crate::{
-    buffer::BSIZE,
     config::{MAXOPBLOCKS, NDEV},
+    filesystem::buffer::BSIZE,
+    filesystem::log,
     fs::{InodePin, Stat},
-    log,
     pipe::Pipe,
 };
 

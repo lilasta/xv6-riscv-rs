@@ -1,14 +1,14 @@
-use core::{
-    mem::{ManuallyDrop, MaybeUninit},
-    ops::{Deref, DerefMut},
-};
+use core::mem::{ManuallyDrop, MaybeUninit};
+use core::ops::{Deref, DerefMut};
 
+use crate::filesystem::superblock::SuperBlock;
+use crate::filesystem::{BITMAP_BITS, INODES_PER_BLOCK};
 use crate::{
     bitmap::Bitmap,
-    buffer::{self, BSIZE},
     cache::RcCache,
     config::{NINODE, ROOTDEV},
-    log::{self, Logger},
+    filesystem::buffer::{self, BSIZE},
+    filesystem::log::{self, Logger},
     process::{self, copyin_either, copyout_either},
     sleeplock::{SleepLock, SleepLockGuard},
     spinlock::SpinLock,
@@ -18,9 +18,7 @@ const ROOTINO: usize = 1; // root i-number
 const NDIRECT: usize = 12;
 const NINDIRECT: usize = BSIZE / core::mem::size_of::<u32>();
 
-const BITMAP_BITS: usize = BSIZE * (u8::BITS as usize);
 const MAXFILE: usize = NDIRECT + NINDIRECT;
-const INODES_PER_BLOCK: usize = BSIZE / core::mem::size_of::<Inode>();
 const FSMAGIC: u32 = 0x10203040;
 
 #[repr(C)]
@@ -556,42 +554,6 @@ impl<'log> Drop for InodeGuard<'log> {
     fn drop(&mut self) {
         unsafe { ManuallyDrop::drop(&mut self.entry) };
         INODE_ALLOC.release(self.cache_index, self.log);
-    }
-}
-
-#[repr(C)]
-#[derive(Clone)]
-pub struct SuperBlock {
-    pub magic: u32,      // Must be FSMAGIC
-    pub size: u32,       // Size of file system image (blocks)
-    pub nblocks: u32,    // Number of data blocks
-    pub ninodes: u32,    // Number of inodes.
-    pub nlog: u32,       // Number of log blocks
-    pub logstart: u32,   // Block number of first log block
-    pub inodestart: u32, // Block number of first inode block
-    pub bmapstart: u32,  // Block number of first free map block
-}
-
-impl SuperBlock {
-    pub const fn zeroed() -> Self {
-        Self {
-            magic: 0,
-            size: 0,
-            nblocks: 0,
-            ninodes: 0,
-            nlog: 0,
-            logstart: 0,
-            inodestart: 0,
-            bmapstart: 0,
-        }
-    }
-
-    pub const fn inode_block_at(&self, index: usize) -> usize {
-        self.inodestart as usize + index / INODES_PER_BLOCK
-    }
-
-    pub const fn bitmap_at(&self, index: usize) -> usize {
-        self.bmapstart as usize + index / BITMAP_BITS
     }
 }
 

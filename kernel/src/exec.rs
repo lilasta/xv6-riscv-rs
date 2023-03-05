@@ -4,8 +4,9 @@ use crate::vm::PageTable;
 use crate::{
     config::MAXARG,
     elf::{ELFHeader, ProgramHeader},
+    filesystem::log,
     fs::{self, InodeGuard},
-    log, process,
+    process,
     riscv::paging::{pg_roundup, PGSIZE, PTE},
 };
 

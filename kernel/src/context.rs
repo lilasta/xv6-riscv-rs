@@ -85,6 +85,6 @@ switch:
 
 extern "C" {
     /// コンテキストスイッチを行う。
-    /// 現在のレジスタの値を`old`に保存し、`new`のもので置き換える。
-    pub fn switch(old: *mut Context, new: *const Context);
+    /// 現在のレジスタの値を`prev`に保存し、`next`のもので置き換える。
+    pub fn switch(prev: *mut Context, next: *const Context);
 }

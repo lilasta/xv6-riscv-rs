@@ -21,10 +21,10 @@
 //   ...
 // Log appends are synchronous.
 
+use crate::filesystem::buffer::{self, BufferGuard, BSIZE};
+use crate::filesystem::superblock::SuperBlock;
 use crate::{
-    buffer::{self, BufferGuard, BSIZE},
     config::{LOGSIZE, MAXOPBLOCKS, NBUF},
-    fs::SuperBlock,
     process,
     spinlock::{SpinLock, SpinLockGuard},
 };
