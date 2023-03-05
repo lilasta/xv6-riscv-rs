@@ -106,15 +106,15 @@ impl Log {
         process::wakeup(core::ptr::addr_of!(**self).addr());
     }
 
-    fn write(&mut self, buf: &BufferGuard<BSIZE, NBUF>) {
+    fn write<T>(&mut self, buf: &BufferGuard<T, BSIZE, NBUF>) {
         assert!((self.header.n as usize) < LOGSIZE);
         assert!((self.header.n as usize) < self.size - 1);
         assert!(self.outstanding > 0);
 
         let len = self.header.n as usize;
-        let block = buf.block_number() as u32;
+        let block = BufferGuard::block_number(buf) as u32;
         if !self.header.block[0..len].contains(&block) {
-            buf.pin();
+            BufferGuard::pin(buf);
             self.header.block[len] = block;
             self.header.n += 1;
         }
@@ -131,7 +131,7 @@ impl Logger {
         Self { log }
     }
 
-    pub fn write(&self, buf: &BufferGuard<BSIZE, NBUF>) {
+    pub fn write<T>(&self, buf: &BufferGuard<T, BSIZE, NBUF>) {
         self.log.lock().write(buf);
     }
 }
@@ -149,35 +149,46 @@ pub fn start() -> Logger {
 }
 
 fn read_header(log: &mut SpinLockGuard<Log>) -> Option<()> {
-    let mut buffer = buffer::get(log.device, log.start)?;
-    unsafe {
-        log.header = buffer.read_with_unlock::<LogHeader, _>(log).clone();
-    }
+    let device = log.device;
+    let inode = log.start;
+
+    log.header = SpinLock::unlock_temporarily(log, move || unsafe {
+        let header = buffer::with_read::<LogHeader>(device, inode).unwrap();
+        (*header).clone()
+    });
+
     Some(())
 }
 
 fn write_header(log: &mut SpinLockGuard<Log>) -> Option<()> {
-    let mut buf = buffer::get(log.device, log.start)?;
-    unsafe {
-        let header = log.header.clone();
-        buf.write_with_unlock(&header, log);
-    }
+    let header = log.header.clone();
+    let device = log.device;
+    let inode = log.start;
+
+    SpinLock::unlock_temporarily(log, move || unsafe {
+        let buf = buffer::with_write(device, inode, &header).unwrap();
+        buffer::flush(buf);
+    });
+
     Some(())
 }
 
 fn install_blocks(log: &mut SpinLockGuard<Log>, recovering: bool) {
     for tail in 0..(log.header.n as usize) {
-        let mut from = buffer::get(log.device, log.start + tail + 1).unwrap();
-        let mut to = buffer::get(log.device, log.header.block[tail] as usize).unwrap();
+        let device = log.device;
+        let inode_in = log.start + tail + 1;
+        let inode_out = log.header.block[tail] as usize;
 
-        unsafe {
-            let from = from.read_with_unlock::<[u8; BSIZE], _>(log);
-            to.write_with_unlock(from, log);
-        }
+        SpinLock::unlock_temporarily(log, move || unsafe {
+            let from = buffer::with_read::<[u8; BSIZE]>(device, inode_in).unwrap();
+            let to = buffer::with_write(device, inode_out, &*from).unwrap();
 
-        if !recovering {
-            to.unpin();
-        }
+            if !recovering {
+                BufferGuard::unpin(&to);
+            }
+
+            buffer::flush(to);
+        });
     }
 
     log.header.n = 0;
@@ -185,13 +196,16 @@ fn install_blocks(log: &mut SpinLockGuard<Log>, recovering: bool) {
 
 fn write_log(log: &mut SpinLockGuard<Log>) {
     for tail in 0..(log.header.n as usize) {
-        let mut to = buffer::get(log.device, log.start + tail + 1).unwrap();
-        let mut from = buffer::get(log.device, log.header.block[tail] as usize).unwrap();
+        let device = log.device;
+        let inode_in = log.header.block[tail] as usize;
+        let inode_out = log.start + tail + 1;
 
-        unsafe {
-            let from = from.read_with_unlock::<[u8; BSIZE], _>(log);
-            to.write_with_unlock(from, log);
-        }
+        SpinLock::unlock_temporarily(log, move || unsafe {
+            let from = buffer::with_read::<[u8; BSIZE]>(device, inode_in).unwrap();
+            let to = buffer::with_write(device, inode_out, &*from).unwrap();
+
+            buffer::flush(to);
+        });
     }
 }
 

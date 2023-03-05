@@ -168,8 +168,11 @@ impl InodeEntry {
         let block_index = inode_start + self.inode_number / INODES_PER_BLOCK;
         let in_block_index = self.inode_number % INODES_PER_BLOCK;
 
-        let mut block = buffer::get(self.device, block_index).unwrap();
-        self.inode = unsafe { block.read_array::<Inode>()[in_block_index].clone() };
+        let block = unsafe {
+            buffer::with_read::<[Inode; INODES_PER_BLOCK]>(self.device, block_index).unwrap()
+        };
+
+        self.inode = block[in_block_index].clone();
 
         assert!(!matches!(self.inode.kind, InodeKind::Unused));
     }
@@ -192,13 +195,14 @@ impl InodeEntry {
                     unsafe { allocate_block(&SUPERBLOCK, self.device, log?)? as u32 };
             }
 
-            let mut buf = buffer::get(self.device, self.inode.chain as usize)?;
-            let addrs = unsafe { buf.read::<[u32; NINDIRECT]>() };
+            let mut addrs = unsafe {
+                buffer::with_read::<[u32; NINDIRECT]>(self.device, self.inode.chain as usize)?
+            };
             let addr = if addrs[index] == 0 {
                 let log = log?;
                 let allocated = unsafe { allocate_block(&SUPERBLOCK, self.device, log)? };
                 addrs[index] = allocated as u32;
-                log.write(&buf);
+                log.write(&addrs);
                 allocated
             } else {
                 addrs[index] as usize
@@ -234,12 +238,11 @@ impl InodeEntry {
 
             let block = self.offset_to_block(offset, None).ok_or(())?;
 
-            let mut buf = buffer::get(self.device, block).unwrap();
+            let offset_in_block = offset % BSIZE;
+            let len = (n - read).min(BSIZE - offset_in_block);
 
-            let offset_in_block = offset % buf.size();
-            let len = (n - read).min(buf.size() - offset_in_block);
-
-            let src = unsafe { &mut buf.read_array::<u8>()[offset_in_block..][..len] };
+            let src = unsafe { buffer::with_read::<[u8; BSIZE]>(self.device, block).unwrap() };
+            let src = &src[offset_in_block..][..len];
             let is_copied = unsafe { copyout_either(is_dst_user, dst + read, src) };
 
             if !is_copied {
@@ -331,15 +334,15 @@ impl InodeEntry {
 
             let block = self.offset_to_block(offset, Some(log)).ok_or(())?;
 
-            let mut buf = buffer::get(self.device, block).unwrap();
-            let offset_in_block = offset % buf.size();
+            let mut dst = unsafe { buffer::with_read::<[u8; BSIZE]>(self.device, block).unwrap() };
+            let offset_in_block = offset % BSIZE;
             let len = (write_size - wrote).min(BSIZE - offset_in_block);
             let is_copied = unsafe {
-                let dst = &mut buf.read_array::<u8>()[offset_in_block..][..len];
+                let dst = &mut dst[offset_in_block..][..len];
                 copyin_either(dst, is_src_user, src + wrote)
             };
             if is_copied {
-                log.write(&buf);
+                log.write(&dst);
             } else {
                 break;
             }
@@ -401,10 +404,11 @@ impl InodeEntry {
         let block_index = inode_start + self.inode_number / INODES_PER_BLOCK;
         let in_block_index = self.inode_number % INODES_PER_BLOCK;
 
-        let mut block = buffer::get(self.device, block_index).unwrap();
-        let inodes = unsafe { block.read_array::<Inode>() };
+        let mut inodes = unsafe {
+            buffer::with_read::<[Inode; INODES_PER_BLOCK]>(self.device, block_index).unwrap()
+        };
         inodes[in_block_index] = self.inode.clone();
-        log.write(&block);
+        log.write(&inodes);
     }
 
     pub fn truncate(&mut self, log: &Logger) {
@@ -416,9 +420,11 @@ impl InodeEntry {
         self.inode.addrs.fill(0);
 
         if self.inode.chain != 0 {
-            let mut buf = buffer::get(self.device, self.inode.chain as usize).unwrap();
-            let addrs = unsafe { buf.read::<[u32; NINDIRECT]>() };
-            for addr in addrs {
+            let addrs = unsafe {
+                buffer::with_read::<[u32; NINDIRECT]>(self.device, self.inode.chain as usize)
+                    .unwrap()
+            };
+            for addr in addrs.iter() {
                 if *addr != 0 {
                     unsafe { deallocate_block(&SUPERBLOCK, self.device, *addr as usize, log) };
                 }
@@ -559,12 +565,12 @@ impl<'log> Drop for InodeGuard<'log> {
 
 unsafe fn allocate_block(superblock: &SuperBlock, device: usize, log: &Logger) -> Option<usize> {
     for bi in (0..(superblock.size as usize)).step_by(BITMAP_BITS) {
-        let mut bitmap_buf = buffer::get(device, superblock.bitmap_at(bi)).unwrap();
+        let mut bitmap =
+            buffer::with_read::<Bitmap<{ BITMAP_BITS }>>(device, superblock.bitmap_at(bi)).unwrap();
 
-        let bitmap = unsafe { bitmap_buf.read::<Bitmap<{ BITMAP_BITS }>>() };
         match bitmap.allocate() {
             Some(index) if (bi + index) < superblock.size as usize => {
-                log.write(&bitmap_buf);
+                log.write(&bitmap);
 
                 let block = bi + index;
                 write_zeros_to_block(device, block, log);
@@ -583,13 +589,13 @@ unsafe fn allocate_block(superblock: &SuperBlock, device: usize, log: &Logger) -
 }
 
 unsafe fn deallocate_block(superblock: &SuperBlock, device: usize, block: usize, log: &Logger) {
-    let mut bitmap_buf = buffer::get(device, superblock.bitmap_at(block)).unwrap();
+    let mut bitmap =
+        buffer::with_read::<Bitmap<{ BITMAP_BITS }>>(device, superblock.bitmap_at(block)).unwrap();
 
-    let bitmap = unsafe { bitmap_buf.read::<Bitmap<{ BITMAP_BITS }>>() };
     bitmap.deallocate(block % BITMAP_BITS).unwrap();
     assert!(bitmap.get(block % BITMAP_BITS) == Some(false));
 
-    log.write(&bitmap_buf);
+    log.write(&bitmap);
 }
 
 fn allocate_inode(
@@ -602,13 +608,13 @@ fn allocate_inode(
         let block_index = superblock.inode_block_at(inum);
         let in_block_index = inum % INODES_PER_BLOCK;
 
-        let mut block = buffer::get(device, block_index).unwrap();
-        let inodes = unsafe { block.read_array::<Inode>() };
+        let mut inodes =
+            unsafe { buffer::with_read::<[Inode; INODES_PER_BLOCK]>(device, block_index).unwrap() };
 
         let inode = &mut inodes[in_block_index];
         if inode.kind == InodeKind::Unused {
             inode.kind = kind;
-            log.write(&block);
+            log.write(&inodes);
 
             return Ok(inum);
         }
@@ -690,16 +696,14 @@ static mut SUPERBLOCK: SuperBlock = SuperBlock::zeroed();
 static INODE_ALLOC: InodeCache<NINODE> = InodeCache::new();
 
 fn write_zeros_to_block(device: usize, block: usize, log: &Logger) {
-    let mut buf = buffer::get(device, block).unwrap();
-    buf.clear();
+    let buf = unsafe { buffer::with_clear::<()>(device, block).unwrap() };
     log.write(&buf);
 }
 
 pub fn initialize(device: usize) {
     fn read_superblock(device: usize) -> Option<SuperBlock> {
-        let mut buf = buffer::get(device, 1)?;
-        let val = unsafe { buf.read::<SuperBlock>().clone() };
-        Some(val)
+        let buf = unsafe { buffer::with_read::<SuperBlock>(device, 1)? };
+        Some((*buf).clone())
     }
 
     let superblock = read_superblock(device).unwrap();
