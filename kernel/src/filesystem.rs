@@ -2,9 +2,11 @@ use crate::filesystem::buffer::BSIZE;
 use crate::filesystem::inode::Inode;
 
 pub mod buffer;
+pub mod cache;
 pub mod directory_entry;
 pub mod inode;
 pub mod log;
+pub mod stat;
 pub mod superblock;
 
 pub const BITMAP_BITS: usize = BSIZE * (u8::BITS as usize);

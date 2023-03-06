@@ -1,12 +1,12 @@
 use core::mem::ManuallyDrop;
 use core::sync::atomic::{AtomicUsize, Ordering::*};
 
+use crate::filesystem::stat::Stat;
 use crate::fs::InodeReference;
 use crate::{
     config::{MAXOPBLOCKS, NDEV},
     filesystem::buffer::BSIZE,
     filesystem::log,
-    fs::Stat,
     pipe::Pipe,
 };
 

@@ -8,6 +8,7 @@ use crate::filesystem::buffer::{self, BSIZE};
 use crate::filesystem::directory_entry::DirectoryEntry;
 use crate::filesystem::inode::{Inode, InodeKind};
 use crate::filesystem::log::{self};
+use crate::filesystem::stat::Stat;
 use crate::filesystem::superblock::SuperBlock;
 use crate::filesystem::{
     BITMAP_BITS, FSMAGIC, INODES_PER_BLOCK, MAXFILE, NDIRECT, NINDIRECT, ROOTINO,
@@ -15,16 +16,6 @@ use crate::filesystem::{
 use crate::process::{self, copyin_either, copyout_either};
 use crate::sleeplock::{SleepLock, SleepLockGuard};
 use crate::spinlock::SpinLock;
-
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub struct Stat {
-    device: u32,
-    inode: u32,
-    kind: InodeKind,
-    nlink: u16,
-    size: usize,
-}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct InodeKey {
